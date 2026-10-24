@@ -62,10 +62,13 @@ routes(/v1/*) ──> ProviderSet{ asr, pa, tts } ──> 调用链: 主 provide
 |---|---|---|---|---|
 | `mock` | ✅(假数据) | ✅ | ✅ | 确定性、离线、无模型；供 E2E / 无密钥开发 |
 | `azure` | ✅ | ✅ | ✅(en-US) | Azure Speech SDK（ASR + Pronunciation Assessment + Neural TTS）|
-| `local` | ❌(词级) | ❌ | ❌ | faster-whisper 词级置信度 + 文本比对 + 停顿分析；TTS 用 edge-tts |
+| `local` | ❌(词级) | ❌ | ❌ | faster-whisper 词级置信度 + 文本比对 + 停顿分析（TTS 用 edge-tts，需外网）|
+| `piper` | — | — | — | **本地 TTS**：Piper VITS ONNX（CPU RTF≈0.036，见 §13）|
+| `gop` | ✅ | ✅ | ❌(由本地 F0+DTW 补) | **本地 PA**：wav2vec2 音素 CTC ONNX + CTC 强制对齐 + GOP（见 §13，**质量结论：不可用于错音本**）|
 
 **红线：绝不允许拿 ASR 置信度冒充音素级发音分。** `local` 只产出 `granularity="word"`、
 每个词的 `phonemes` 为空数组，并强制带 `phoneme_level_unavailable` warning。
+`gop` 是**真正基于音素后验**的评分，但它的质检结论见 §13.4（相关性不足，默认不启用）。
 
 ### 3.1 降级优先于报错
 
@@ -84,9 +87,12 @@ routes(/v1/*) ──> ProviderSet{ asr, pa, tts } ──> 调用链: 主 provide
 | mode | asr | pa | tts | llm |
 |---|---|---|---|---|
 | `mock` | mock | mock | mock | template |
-| `local` | local | local | local(edge-tts) | key 有则用，否则 template |
+| `local` | local(whisper) | **local**(词级；GOP 需显式 `VOICE_PA_PROVIDER=gop`) | **piper** | key 有则用，否则 template |
 | `cloud` | azure | azure | azure | key 有则用，否则 template |
-| `hybrid` | azure（无 key 则 local）| 同左 | azure（无 key 则 mock）| 同左 |
+| `hybrid` | azure（无 key 则 local）| 同左（无 key 则词级 local）| 同左（无 key 则 piper）| 同左 |
+
+> GOP 音素级评测经实测**质量不达标**（§13.4），因此**不做静默默认**：要实验请显式
+> `VOICE_PA_PROVIDER=gop`（PA 链会先试 gop、失败再落回词级 local）。
 
 可用 `VOICE_ASR_PROVIDER` / `VOICE_PA_PROVIDER` / `VOICE_TTS_PROVIDER` / `VOICE_LLM_PROVIDER` 单独覆盖。
 
@@ -154,14 +160,19 @@ Pronunciation Assessment 参数（task-1 要求）：`granularity=Phoneme`、`en
 
 `xfyun` 在契约能力矩阵里预留，V1 不实现（选择它会得到 `no_provider` 并由兜底链接管）。
 
-### local provider（本地兜底）
+### local provider（词级兜底）
+
+`local` = faster-whisper 词级 ASR/PA（TTS 走 edge-tts，需要外网；离线部署请用 §13 的 `piper`/`gop`）。
 
 ```bash
-uv sync --extra local          # faster-whisper + edge-tts
-export PROVIDER_MODE=local WHISPER_MODEL=tiny
+export PROVIDER_MODE=local
+export WHISPER_MODEL_PATH=/models/local/whisper/small.en   # 必须指向本地 CTranslate2 模型目录
 ```
-模型在**第一次真正调用**时才加载（`app/providers/local.py:_load_whisper`），缓存到 `MODEL_CACHE_DIR`。
-测试不下载大模型：pytest 用 monkeypatch 替换 `transcribe_words` 验证词级打分逻辑本身。
+模型在**第一次真正调用**时才加载；**绝不会**用 `WhisperModel("tiny")` 去 HuggingFace 下载（本机 HF 不可达）。
+测试不下载大模型：pytest 用 monkeypatch 替换 `transcribe_words`/`WhisperModel`。
+
+---
+
 
 ---
 
@@ -374,7 +385,7 @@ app/
   degrade.py      最终兜底（永不失败）
   providers/      base / mock / azure / local / registry
 scripts/warmup.py 批量预热 CLI
-tests/            463 个用例（契约字段、mock 全链路、合成信号语调、降级、缓存/预热/并发、音素归一化、跨 provider key、反馈质量、TTS 格式与 /v1/tts 缓存、对话 prompt/健壮性）
+tests/            494 个用例（契约字段、mock 全链路、合成信号语调、降级、缓存/预热/并发、音素归一化、跨 provider key、反馈质量、TTS 格式与 /v1/tts 缓存、对话 prompt/健壮性）
 ```
 
 示范音频写入 `$DATA_DIR/cache/audio/<sha1(text|voice|rate)>.<ext>`（v1.0 的 `$DATA_DIR/audio/` 仍可读，
@@ -390,7 +401,7 @@ tests/            463 个用例（契约字段、mock 全链路、合成信号�
 ## 10. 测试
 
 ```bash
-.venv/bin/python -m pytest  # 463 passed（离线；真实 Azure 用例需 voice/.env 的 key，可用 VOICE_SKIP_REAL_AZURE=1 跳过）
+.venv/bin/python -m pytest  # 494 passed（离线；真实 Azure 用例需 voice/.env 的 key，可用 VOICE_SKIP_REAL_AZURE=1 跳过）
 ```
 
 覆盖：
@@ -398,6 +409,7 @@ tests/            463 个用例（契约字段、mock 全链路、合成信号�
 - mock 全链路 + 参考音频落盘与 `Cache-Control`；
 - 合成信号验证 F0/DTW/worst_regions（见 §6）；
 - TTS 输出格式（见 §5/§8.5）：setter 调用 + 真实字节容器/采样率断言（含真机 Azure）、`/v1/tts` miss→hit、fmt 参与 key、v2 旧缓存不命中；
+- 本地 provider（见 §13）：Piper 合成/RTF、espeak 音素化与 CVC 对齐、GOP 打分公式、local 模式启动惰性（不加载 onnxruntime/piper/whisper）；
 - 对话质量（见 §7）：prompt 的年龄/连续性/纠错分级约束、history 截断到 8、非法 JSON 重试一次后诚实降级（`degraded_llm=true`）、suggested_replies 兜底、儿童安全过滤；
 - 反馈质量（见 §7.1）：没听到语音时不含表扬词、Omission 练习词相关、actual 缺失不编造；
 - 音素符号归一化（见 §12）：变体逐项覆盖、幂等、nbest 顺序/分数不变、未知符号原样返回、issues 同步归一化；
@@ -511,6 +523,93 @@ CANONICAL_MAP = {
 
 > 边界：本模块**不改语料、不改 `focus_phonemes`**（那是 corpus-dev 的线）。它只保证"voice 输出的音素符号是规范化的、可预测的"。
 > 如果 corpus-dev 想把语料标注也对齐到同一空间，直接复用这张表（`canonicalize_all`）即可，不要另建一套。
+
+## 13. 本地化：Piper TTS / faster-whisper ASR / GOP 发音评测（task-20）
+
+目标：在**没有任何外网依赖**（HF 不可达、无 GPU）的情况下，voice 自己能合成示范音、自己做 ASR 与发音评测；
+Azure 仍可选（`hybrid` 模式优先云、失败落本地）。
+
+### 13.1 模型来源清单（全部 ModelScope，已实测下载可用）
+
+| 用途 | ModelScope 仓库 | 文件 | 去向 |
+|---|---|---|---|
+| TTS 音色 | `rhasspy/piper-voices`（官方合集）| `en/en_US/lessac/medium/*`（63MB）、`en/en_US/amy/low/*`（63MB）、`voices.json` | `.local-models/piper/` |
+| TTS 音色（备选）| `Trelis/piper-en-us-ryan-medium` | `model.onnx`（63MB）+ `model.onnx.json` | 同上 |
+| ASR | `pengzhendong/faster-whisper-small.en`（另有 `tiny`/`base`/`medium`/`large-v3`）| `model.bin`（484MB）+ `tokenizer.json` + `vocabulary.txt` | `.local-models/whisper/small.en/` |
+| 音素 CTC（GOP）| `onnx-community/wav2vec2-lv-60-espeak-cv-ft-ONNX` | `onnx/model_int8.onnx`（318MB）+ `vocab.json` + `preprocessor_config.json` | `.local-models/gop/` |
+
+下载（**必须隔离 HOME**，否则 ModelScope SDK 写 `~/.modelscope` 会报只读文件系统）：
+
+```bash
+export HOME=$PWD/.isolated-home MODELSCOPE_CACHE=$PWD/.ms-cache
+.venv/bin/python -c "from modelscope import snapshot_download as d; \
+  d('rhasspy/piper-voices', allow_patterns=['en/en_US/lessac/medium/*','en/en_US/amy/low/*','voices.json'], cache_dir='.ms-cache')"
+# faster-whisper-small.en / wav2vec2-lv-60-espeak-cv-ft-ONNX 同理
+```
+
+模型统一放在 `LOCAL_MODELS_DIR`（默认 `<voice>/.local-models`；容器里建议 `/models/local`），
+**不进 git**（`.gitignore` 已排除 `.local-models/`、`.ms-cache/`、`.isolated-home/`）。
+
+### 13.2 环境变量
+
+| 变量 | 默认 | 说明 |
+|---|---|---|
+| `LOCAL_MODELS_DIR` | `<MODEL_CACHE_DIR>/local` 或 `<voice>/.local-models` | 本地模型根目录 |
+| `PIPER_VOICE` | `en_US-lessac-medium` | 默认音色名（对应 `<name>.onnx`）|
+| `PIPER_VOICE_DIR` | `$LOCAL_MODELS_DIR/piper` | 音色目录 |
+| `WHISPER_MODEL` / `WHISPER_MODEL_PATH` | `small.en` / 空 | whisper 名字 / 直接指定本地模型目录 |
+| `WHISPER_CPU_THREADS` | `4` | CPU 线程数 |
+| `GOP_MODEL_PATH` | 空 | 直接指定 GOP `model_int8.onnx`（或含 `vocab.json` 的目录）|
+
+依赖：本地能力需要 `requirements-local.txt`（piper-tts / onnxruntime / faster-whisper，约 +300MB；
+**不需要 torch/transformers**），与基础 `requirements.txt` 分开安装。下载模型另外需要 `modelscope`。
+
+### 13.3 实测数据（本机 CPU：i9-9900K 10 核 / 无 GPU / 无 ffmpeg）
+
+**A. 本地 TTS（Piper `en_US-lessac-medium`，22.05kHz WAV）vs Azure 同句**（60 字符英文）：
+| | wall | audio | **RTF** | 输出 |
+|---|---|---|---|---|
+| Piper（稳态，模型已加载）| **153ms** | 4.24s | **0.036** | WAV 22.05kHz |
+| Azure（同句 3 次均值）| 2115ms | 5.50s | 0.385 | MP3 24kHz |
+| 比值 | **14×** 更快 | | | |
+
+- Piper 首次调用（含模型加载）约 0.2–1.6s，之后稳态 113–177ms；CPU 时间 ≈0.18×音频时长（onnxruntime 多线程，wall 远小于 CPU）。
+- 与任务背景里的 Azure `RTF=9.84`（短句固定延迟占主导）相比，本地 RTF 0.036 **远低于 0.3 的目标**。
+- `rate="slow"` 用 `length_scale=1.35` 拉长音素，给孩子的示范可放慢。
+
+**B. 本地 ASR（faster-whisper small.en，int8，CPU）**：真实儿童录音 40 条 →
+WER **mean 0.295 / median 0.171**，RTF mean **0.371**（max 1.2）；词级时间戳正常。
+其中 29/40 条 WER≤0.5；WER=1.0 的几条是环境噪声大/几乎无声的录音。
+
+**C. 本地评测（GOP）**：RTF **0.131**（630ms/条，6s 音频），音素级输出落在 canonical-v1 空间。
+
+### 13.4 GOP 的质量结论：**不可用（不能替代 Azure 做薄弱音素判定）**
+
+对照实验（`scripts/gop_eval.py`，只读 `web/data/` 与 `app.db`，全量 40 条真实录音，不挑样本）：
+
+| 指标 | 数值 |
+|---|---|
+| 样本 | 40 条 attempt（39 条成功配对），**634** 个音素配对 |
+| Pearson r | **0.350** |
+| Spearman ρ | **0.360**（阈值 0.4）|
+| 每句"最差 5 个音素"重合 | **1.85/5**（n=34，随机期望≈1.4）|
+| 按音素符号聚合（30 个符号）| r=0.245, ρ=0.195（**不能**排出"哪些音最弱"）|
+| 本地分 vs Azure 分 | 58.4±40.8 vs 79.4±27.0 |
+
+判定：**ρ < 0.4 → 不可用**。原因分析（我们做了 4 种打分公式的对照，r 都落在 0.23–0.38，
+说明不是公式没调好）：
+1. **模型不是为打分训练的**：`wav2vec2-lv-60-espeak-cv-ft` 是 60 语言 espeak 音素的**识别**模型，
+   词表 392 个符号、后验分布很宽；它不是英语专用、也不是发音错误导向的模型（对比：Azure 是专门的 PA 模型）。
+2. **帧级对齐很粗**：强制对齐后很多音素只占 1 帧（20ms），单帧后验噪声大；儿童语音的停顿/拖音让对齐更容易错。
+3. **儿童语音 + 录音质量**：40 条里有 11 条 ASR WER>0.5（环境噪声/几乎没声），任何后验方法都会退化。
+4. **Azure 分数高度偏斜**（mean 79、大量 100），可区分的方差本来就小。
+
+**结论与建议**：`gop` 保留为**可选、默认不启用**的 provider（代码、对齐、打分、canonical-v1 集成都完成并有测试；
+启用方式：`VOICE_PA_PROVIDER=gop`），但**不要**用它写 `phoneme_mastery`/`srs_cards`。
+`PROVIDER_MODE=local` 的默认 PA 仍是**词级** local（可靠），不会静默换成 GOP。若确实要本地音素评测，正确方向是：
+(a) 换**英语专用、为发音评分训练**的音素模型（如 Kaldi/GOP 的 librispeech chain、或英语专用 wav2vec2 音素模型 + 词典强制对齐），
+(b) 用**时长/能量先验**改进对齐，(c) 用真实的"人工标注错误音素"做校准，而不是拿 Azure 分数当唯一真值。
+在那之前，`local` 模式下 PA 会自动回退到词级（`gop` 失败/关闭时），或直接用 `hybrid` 走 Azure。
 
 ## 13. 已知限制 / 遗留
 

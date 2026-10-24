@@ -40,9 +40,9 @@ def test_invalid_mode_falls_back_to_mock(monkeypatch):
     "mode,expected",
     [
         ("mock", ("mock", "mock", "mock")),
-        ("local", ("local", "local", "local")),
+        ("local", ("local", "local", "piper")),  # task-20：全本地；GOP 需 VOICE_PA_PROVIDER=gop 显式启用
         ("cloud", ("azure", "azure", "azure")),
-        ("hybrid", ("local", "local", "mock")),  # 无 azure key -> 本地兜底
+        ("hybrid", ("local", "local", "piper")),  # 无 azure key -> 本地兜底（PA 用词级，GOP 显式启用）
     ],
 )
 def test_mode_provider_matrix(monkeypatch, mode, expected):
@@ -68,9 +68,11 @@ def test_local_mode_capabilities_and_lazy_model_load(client, monkeypatch):
     _with_env(monkeypatch, PROVIDER_MODE="local")
     health = client.get("/v1/health").json()
     assert health["providers"]["pa"] == "local"
-    assert health["capabilities"]["phoneme_level"] is False, "local provider 只有词级分数"
+    assert health["providers"]["tts"] == "piper"
+    assert health["capabilities"]["phoneme_level"] is False, "默认 local PA 是词级（GOP 不可用，见 README §13.4）"
     assert health["capabilities"]["intonation_curve"] is True
     assert "faster_whisper" not in sys.modules, "没有真正评测前不允许加载本地模型"
+    assert "onnxruntime" not in sys.modules, "Piper/GOP 的 onnxruntime 必须惰性导入"
 
 
 def test_local_pa_declares_phoneme_level_unavailable(monkeypatch):

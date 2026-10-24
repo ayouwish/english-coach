@@ -109,6 +109,13 @@ CANONICAL_MAP: dict[str, str] = {
     "ʊə": "ʊə",
     "ɪə": "ɪə",
     "eə": "eə",
+    "iə": "ɪə",   # espeak 偶尔把 NEAR 写成 iə
+    # GA 卷舌单元音（Azure 常作为单 token 输出，如 ɑɹ/ɔɹ/ɪɹ）
+    "ɑɹ": "ɑ",
+    "ɔɹ": "ɔ",
+    "ɪɹ": "ɪə",
+    "ɛɹ": "eə",
+    "ʊɹ": "ʊə",
     # ---- 成音节辅音 ----
     "n̩": "n",
     "l̩": "l",
@@ -159,13 +166,15 @@ def strip_marks(symbol: str) -> str:
     return "".join(ch for ch in symbol if ch not in _DIACRITICS).strip()
 
 
-def canonicalize_phoneme(symbol: str | None) -> str:
+def canonicalize_phoneme(symbol: str | None, record_unknown: bool = True) -> str:
     """把一个 IPA 变体规范到 canonical-v1 空间。
 
     - 表内命中 -> 规范符号
     - 本身就是规范符号 -> 原样返回
     - 去掉附加符后命中 -> 规范化（例如 `n̩ -> n`、`æː -> æ`）
     - 都不命中 -> **原样返回**（不丢信息），并记录到 `seen_unknown_phonemes()`
+
+    ``record_unknown=False`` 用于批量扫模型词表这类"预期会有大量外语符号"的场景，避免日志噪音。
     """
     if symbol is None:
         return ""
@@ -187,7 +196,8 @@ def canonicalize_phoneme(symbol: str | None) -> str:
         if cleaned in CANONICAL_PHONEMES:
             return cleaned
 
-    _note_unknown(raw)
+    if record_unknown:
+        _note_unknown(raw)
     return raw  # 未在表中：原样返回，不猜测、不丢信息
 
 

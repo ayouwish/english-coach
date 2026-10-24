@@ -1,0 +1,16 @@
+# 本地化运行时依赖（task-20：Piper TTS / faster-whisper ASR / GOP ONNX 推理）
+# 与基础 requirements.txt 分开：只在需要本地语音能力时才装（约 +300MB 镜像体积）。
+#
+#   uv pip install --python .venv/bin/python --index-url https://mirrors.aliyun.com/pypi/simple/ \
+#       -r requirements-local.txt
+#
+# 模型文件不放仓库（见 README §13）：从 ModelScope 下载到 LOCAL_MODELS_DIR。
+
+# 本地 TTS：Piper（VITS ONNX，自带 onnxruntime）
+piper-tts==1.8.0
+# ONNX 推理（Piper 会带；GOP 直接依赖）
+onnxruntime==1.31.0
+# 本地 ASR：faster-whisper（CTranslate2，不需要 torch）
+faster-whisper==1.2.1
+# 仅"下载模型"时需要（运行时不需要；HF 不可达时用 ModelScope）
+modelscope==1.40.2

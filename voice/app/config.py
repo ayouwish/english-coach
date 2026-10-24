@@ -196,13 +196,16 @@ def _resolve_providers(mode: str) -> tuple[str, str, str, str]:
     if mode == "mock":
         return "mock", "mock", "mock", "template"
     if mode == "local":
-        return "local", "local", "local", "template"
+        # 全本地：faster-whisper 词级 ASR + Piper 合成（都不依赖外网）。
+        # PA 默认用**词级** local（可靠）；GOP 音素级评测经实测与 Azure 相关性不足（README §13.4），
+        # 需要实验时用 VOICE_PA_PROVIDER=gop 显式打开，绝不做静默默认。
+        return "local", "local", "piper", "template"
     if mode == "cloud":
         return "azure", "azure", "azure", "template"
     # hybrid: 云为主 + 本地兜底（无 key 时自动退到本地/离线实现）
     if azure_ready:
         return "azure", "azure", "azure", "template"
-    return "local", "local", "mock", "template"
+    return "local", "local", "piper", "template"
 
 
 @dataclass(frozen=True)
@@ -228,9 +231,16 @@ class Settings:
     llm_timeout_s: float = 30.0
     llm_enabled: bool = False
 
-    whisper_model: str = "tiny"
+    # 本地模型（ModelScope 镜像下载，绝不访问 HuggingFace）
+    whisper_model: str = "small.en"
+    whisper_model_path: str | None = None
     whisper_device: str = "cpu"
     whisper_compute_type: str = "int8"
+    whisper_cpu_threads: int = 4
+    piper_voice: str = "en_US-lessac-medium"
+    piper_voice_dir: str | None = None
+    gop_model_path: str | None = None
+    local_models_dir_path: str | None = None
     edge_tts_voice: str = "en-US-JennyNeural"
 
     default_tts_voice: str = "en-US-JennyNeural"
@@ -255,6 +265,20 @@ class Settings:
         path = self.data_dir / "audio"
         path.mkdir(parents=True, exist_ok=True)
         return path
+
+    @property
+    def local_models_dir(self) -> Path:
+        """本地模型目录（不进 git）。优先级：LOCAL_MODELS_DIR > MODEL_CACHE_DIR/local > <voice>/.local-models。
+
+        部署（容器）时把 `LOCAL_MODELS_DIR=/models/local`，模型挂载进命名卷即可；
+        本机开发默认用 `voice/.local-models`（已在 .gitignore 中）。
+        """
+        if self.local_models_dir_path:
+            return Path(self.local_models_dir_path).expanduser()
+        for candidate in (self.model_cache_dir / "local", VOICE_DIR / ".local-models"):
+            if candidate.is_dir():
+                return candidate
+        return VOICE_DIR / ".local-models"
 
     @property
     def cache_dir(self) -> Path:
@@ -316,9 +340,15 @@ def get_settings() -> Settings:
         llm_model=model,
         llm_timeout_s=_env_float("LLM_TIMEOUT_S", 30.0),
         llm_enabled=llm_enabled,
-        whisper_model=_env("WHISPER_MODEL", "tiny") or "tiny",
+        whisper_model=_env("WHISPER_MODEL", "small.en") or "small.en",
+        whisper_model_path=_env("WHISPER_MODEL_PATH"),
         whisper_device=_env("WHISPER_DEVICE", "cpu") or "cpu",
         whisper_compute_type=_env("WHISPER_COMPUTE_TYPE", "int8") or "int8",
+        whisper_cpu_threads=_env_int("WHISPER_CPU_THREADS", 4),
+        piper_voice=_env("PIPER_VOICE", "en_US-lessac-medium") or "en_US-lessac-medium",
+        piper_voice_dir=_env("PIPER_VOICE_DIR"),
+        gop_model_path=_env("GOP_MODEL_PATH"),
+        local_models_dir_path=_env("LOCAL_MODELS_DIR"),
         edge_tts_voice=_env("EDGE_TTS_VOICE", "en-US-JennyNeural") or "en-US-JennyNeural",
         default_tts_voice=_env("DEFAULT_TTS_VOICE", "en-US-JennyNeural") or "en-US-JennyNeural",
         max_tts_chars=_env_int("MAX_TTS_CHARS", 2000),

@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import asyncio
 import threading
+from pathlib import Path
 
 import numpy as np
 
@@ -37,9 +38,38 @@ PAUSE_MS = 450
 MISSING_PAUSE_MS = 120
 
 
+def resolve_whisper_dir(settings=None) -> str:
+    """找到本地 faster-whisper（CTranslate2 格式）模型目录。
+
+    **绝不访问 HuggingFace**（本机 HF 完全不可达）：只认本地路径，模型从 ModelScope 下载，例如
+    `snapshot_download("pengzhendong/faster-whisper-small.en", cache_dir=MODELSCOPE_CACHE)`。
+    查找顺序：WHISPER_MODEL_PATH → <MODEL_CACHE_DIR>/local/whisper/<name> →
+    <voice>/.local-models/whisper/<name> → ModelScope 快照布局。
+    """
+    settings = settings or get_settings()
+    candidates: list[Path] = []
+    if settings.whisper_model_path:
+        candidates.append(Path(settings.whisper_model_path).expanduser())
+    name = settings.whisper_model
+    candidates += [
+        settings.local_models_dir / "whisper" / name,
+        settings.model_cache_dir / "local" / "whisper" / name,
+    ]
+    for candidate in candidates:
+        if candidate.is_dir() and (candidate / "model.bin").is_file():
+            return str(candidate)
+    raise ProviderUnavailable(
+        f"找不到本地 faster-whisper 模型 {name!r}（需要 model.bin）。"
+        "请从 ModelScope 下载（如 pengzhendong/faster-whisper-small.en）并用 WHISPER_MODEL_PATH 指定；"
+        "本服务不会访问 HuggingFace。",
+        provider="local",
+    )
+
+
 def _load_whisper():
     settings = get_settings()
-    key = f"{settings.whisper_model}|{settings.whisper_device}|{settings.whisper_compute_type}"
+    model_dir = resolve_whisper_dir(settings)
+    key = f"{model_dir}|{settings.whisper_device}|{settings.whisper_compute_type}|{settings.whisper_cpu_threads}"
     with _MODEL_LOCK:
         if key in _MODEL_CACHE:
             return _MODEL_CACHE[key]
@@ -47,18 +77,18 @@ def _load_whisper():
             from faster_whisper import WhisperModel  # 惰性导入
         except Exception as exc:  # pragma: no cover - 依赖未安装
             raise ProviderUnavailable(
-                "faster-whisper is not installed; run `uv sync --extra local`",
+                "faster-whisper is not installed; run `uv pip install faster-whisper`",
                 provider="local",
                 detail=str(exc),
             ) from exc
         try:
             model = WhisperModel(
-                settings.whisper_model,
+                model_dir,
                 device=settings.whisper_device,
                 compute_type=settings.whisper_compute_type,
-                download_root=str(settings.model_cache_dir),
+                cpu_threads=max(1, int(settings.whisper_cpu_threads)),
             )
-        except Exception as exc:  # pragma: no cover - 模型下载/加载失败
+        except Exception as exc:  # pragma: no cover - 模型加载失败
             raise ProviderError(f"failed to load faster-whisper model: {exc}", provider="local") from exc
         _MODEL_CACHE[key] = model
         return model
@@ -93,6 +123,7 @@ def transcribe_words(clip: AudioClip, language: str = "en") -> tuple[str, list[W
                     )
                 )
         text = " ".join(p for p in pieces if p).strip()
+        text = " ".join(text.split())  # whisper 的词间空格可能重复，压成单空格
         meta = {
             "model": get_settings().whisper_model,
             "language_probability": float(getattr(info, "language_probability", 0.0) or 0.0),

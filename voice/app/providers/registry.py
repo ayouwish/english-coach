@@ -36,6 +36,10 @@ def _make(kind: str, name: str):
             from .azure import AzurePA
 
             return AzurePA()
+        if name == "gop":
+            from .gop import GOPPA  # 惰性导入：只有真的用本地评测才需要 onnxruntime + 模型
+
+            return GOPPA()
     elif kind == "tts":
         if name == "mock":
             return MockTTS()
@@ -47,6 +51,10 @@ def _make(kind: str, name: str):
             from .azure import AzureTTS
 
             return AzureTTS()
+        if name == "piper":
+            from .piper import PiperTTS  # 惰性导入：只有真的用本地合成才需要 onnxruntime + 音色
+
+            return PiperTTS()
     raise ProviderUnavailable(f"unknown {kind} provider: {name!r}", provider=name)
 
 
@@ -77,10 +85,15 @@ class ProviderSet:
 
 
 def _chain(kind: str, primary: str, settings: Settings) -> list:
-    """调用链：primary -> 本地兜底（local/hybrid 模式）-> mock（永远最后，保证离线也能出结果）。"""
+    """调用链：primary -> 本地兜底（local/hybrid 模式）-> mock（永远最后，保证离线也能出结果）。
+
+    local/hybrid 模式下，TTS 兜底到 Piper（离线合成）、PA 兜底到 GOP（音素级）再 local（词级）、
+    ASR 兜底到 faster-whisper。edge-tts（"local" TTS）依赖外网，不放进自动兜底链。
+    """
+    fallbacks = {"tts": ["piper"], "pa": ["gop", "local"], "asr": ["local"]}.get(kind, ["local"])
     candidates = [primary]
     if settings.mode in ("local", "hybrid"):
-        candidates.append("local")
+        candidates.extend(fallbacks)
     candidates.append("mock")
     order: list[str] = []
     for name in candidates:
