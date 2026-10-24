@@ -1,0 +1,94 @@
+# english-coach · Caddyfile —— 唯一对外入口（TLS 终止 + 反向代理到 web:3000）
+#
+# ┌─────────────────────────────────────────────────────────────────────────────┐
+# │ 为什么这里必须有 TLS（不是"最好有"）                                          │
+# │                                                                             │
+# │ 浏览器只在 **secure context** 里暴露 navigator.mediaDevices.getUserMedia。    │
+# │ secure context 的定义只有两种：                                              │
+# │   1) https:// 开头的源；                                                     │
+# │   2) http://localhost 或 http://127.0.0.1（浏览器对"本机"的特例）。           │
+# │ 除此之外——包括 http://192.168.1.23、http://coach.lan、http://公网域名 ——      │
+# │ getUserMedia 直接是 undefined，点"开始录音"不会有权限弹窗，只会在控制台报    │
+# │ "Cannot read properties of undefined"。这个 App 的核心功能（录音评测）       │
+# │ 在局域网 http 下 100% 不可用，且没有任何前端代码能绕过。                       │
+# │                                                                             │
+# │ 其它顺带的好处：MediaRecorder 在非安全上下文同样被限制；                        │
+# │ 另外 Service Worker、Web Crypto 的部分能力也要求 secure context。              │
+# └─────────────────────────────────────────────────────────────────────────────┘
+#
+# 站点地址由 .env 的 SITE_ADDRESS 决定，证书模式由 TLS_CERT_MODE 决定：
+#
+#   (a) 本机/局域网自签（推荐家庭用法）
+#       SITE_ADDRESS=localhost                → 只在本机可用（浏览器特例，其实不需要证书）
+#       SITE_ADDRESS=192.168.1.23             → 局域网按 IP 访问（Caddy internal CA 给 IP 签证书）
+#       SITE_ADDRESS=coach.lan                → 局域网按名字访问（客户端需能解析该名字，见 docs）
+#       TLS_CERT_MODE=internal                → 用 Caddy 内置 CA 签发；客户端需导入 root.crt
+#
+#   (b) 公网域名（要对外时）
+#       SITE_ADDRESS=coach.example.com
+#       TLS_CERT_MODE=you@example.com         → 走 Let's Encrypt/ZeroSSL，自动续期（需要 80/443 可达）
+#
+# 校验：docker compose exec caddy caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile
+
+{
+	# 管理 API 只监听容器内回环，不对外
+	admin 127.0.0.1:2019
+	# 本地/内网站点不需要 OCSP stapling 与遥测
+	servers {
+		protocols h1 h2 h3
+	}
+}
+
+# ── 主站点 ────────────────────────────────────────────────────────────────────
+{$SITE_ADDRESS:localhost} {
+	# internal → Caddy 自签根 CA；填邮箱 → ACME 自动申请公网证书
+	tls {$TLS_CERT_MODE:internal}
+
+	encode zstd gzip
+
+	# 探活：不改写、不缓存，方便手机/其它电脑验证 caddy→web 是否通
+	# （两个 handle 互斥，顺序即优先级；这是 Caddyfile 里唯一可靠的"互斥路由"写法）
+	handle /healthz {
+		respond "ok" 200
+	}
+
+	# 反向代理到 Next.js。浏览器只跟 web 说话，不直接访问 voice；
+	# /voice/* 由 Next.js rewrites 转给 http://voice:8100/*（见 docs/api-contract.md §0）
+	handle {
+		reverse_proxy web:3000 {
+			header_up X-Real-IP {remote_host}
+			header_up X-Forwarded-Proto {scheme}
+			transport http {
+				read_timeout 90s
+				write_timeout 90s
+			}
+		}
+	}
+
+	header {
+		X-Content-Type-Options "nosniff"
+		Referrer-Policy "same-origin"
+		# 麦克风权限只给同源页面
+		Permissions-Policy "microphone=(self), camera=(), geolocation=()"
+		-Server
+	}
+
+	# 公网域名（路径 C）时才取消下面这行的注释。
+	# 自签 internal CA 场景**千万不要开**：HSTS 一旦进过浏览器，证书不受信时会直接硬失败，
+	# 浏览器不再给"继续访问"的选项，只能去 chrome://net-internals/#hsts 手动删域名。
+	# header Strict-Transport-Security "max-age=31536000; includeSubDomains"
+
+	# 音频/示范音允许缓存（契约 §7：public, max-age=604800 由 voice 发出，这里不覆盖）
+	log {
+		output stdout
+		format console
+		level INFO
+	}
+}
+
+# ── 兜底：用 IP 或别的名字走 http 访问时，强制跳到 HTTPS ──────────────────────────
+# 没有这条时，家人手输 http://192.168.1.23 会得到一个 404/无响应，而不是被推到 https，
+# 而 http 下麦克风是不可用的 —— 直接跳转让"打不开录音"这个坑少一个。
+:80 {
+	redir https://{host}{uri} permanent
+}

@@ -1,0 +1,6 @@
+# pnpm 10+ 的配置都在这里（package.json 里的 "pnpm" 字段已不再被读取）
+storeDir: ../../.cache/pnpm-store
+onlyBuiltDependencies:
+  - better-sqlite3
+  - esbuild
+  - unrs-resolver

@@ -1,0 +1,135 @@
+@import "tailwindcss";
+
+:root {
+  --ec-bg: #f5f7ff;
+  --ec-card: #ffffff;
+  --ec-ink: #1b1f3b;
+  --ec-muted: #6b7290;
+  --ec-primary: #5b5bd6;
+  --ec-primary-soft: #ecebff;
+  --ec-good: #16a34a;
+  --ec-warn: #f59e0b;
+  --ec-bad: #ef4444;
+}
+
+html,
+body {
+  padding: 0;
+  margin: 0;
+  background: var(--ec-bg);
+  color: var(--ec-ink);
+  /* 系统字体栈：禁止 next/font/google（构建期需联网） */
+  font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto,
+    "Helvetica Neue", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+}
+
+/* ── 儿童模式：大按钮大字（由 body[data-child="true"] 触发）──────────────── */
+body[data-child="true"] {
+  font-size: 19px;
+  --ec-ink: #14213d;
+}
+body[data-child="true"] button,
+body[data-child="true"] .ec-btn {
+  min-height: 3.5rem;
+  font-size: 1.2rem;
+  border-radius: 1.25rem;
+  padding-left: 1.5rem;
+  padding-right: 1.5rem;
+}
+body[data-child="true"] .ec-card {
+  border-radius: 1.75rem;
+  padding: 1.5rem;
+}
+body[data-child="true"] .ec-hide-child {
+  display: none !important;
+}
+
+.ec-card {
+  background: var(--ec-card);
+  border-radius: 1.25rem;
+  padding: 1.25rem;
+  box-shadow: 0 8px 24px rgba(27, 31, 59, 0.06);
+}
+
+.ec-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  border-radius: 0.9rem;
+  padding: 0.6rem 1.1rem;
+  font-weight: 600;
+  border: 1px solid transparent;
+  cursor: pointer;
+  transition: transform 0.12s ease, box-shadow 0.12s ease, background 0.12s ease;
+}
+.ec-btn:active {
+  transform: scale(0.97);
+}
+.ec-btn-primary {
+  background: var(--ec-primary);
+  color: white;
+  box-shadow: 0 6px 16px rgba(91, 91, 214, 0.28);
+}
+.ec-btn-ghost {
+  background: white;
+  border-color: #d9dcf0;
+  color: var(--ec-ink);
+}
+.ec-btn-warn {
+  background: #fff3d6;
+  border-color: #f5c26b;
+  color: #7a4d00;
+}
+.ec-btn[disabled] {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+/* 鼓励动效（纯 CSS，无需动画库） */
+@keyframes ec-pop {
+  0% { transform: scale(0.85); opacity: 0; }
+  60% { transform: scale(1.04); opacity: 1; }
+  100% { transform: scale(1); opacity: 1; }
+}
+.ec-pop { animation: ec-pop 0.35s ease-out; }
+
+@keyframes ec-float {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(-6px); }
+}
+.ec-float { animation: ec-float 1.8s ease-in-out infinite; }
+
+@keyframes ec-star {
+  0% { transform: scale(0.4) rotate(-20deg); opacity: 0; }
+  40% { transform: scale(1.2) rotate(10deg); opacity: 1; }
+  100% { transform: scale(1) rotate(0); opacity: 0.95; }
+}
+.ec-star { animation: ec-star 0.6s ease-out; }
+
+@keyframes ec-pulse-ring {
+  0% { box-shadow: 0 0 0 0 rgba(239, 68, 68, 0.5); }
+  70% { box-shadow: 0 0 0 18px rgba(239, 68, 68, 0); }
+  100% { box-shadow: 0 0 0 0 rgba(239, 68, 68, 0); }
+}
+.ec-recording { animation: ec-pulse-ring 1.4s infinite; }
+
+/* 单词热力图 */
+.ec-word {
+  display: inline-block;
+  padding: 0.25rem 0.5rem;
+  margin: 0.15rem;
+  border-radius: 0.6rem;
+  font-weight: 600;
+  border: 1px solid rgba(0, 0, 0, 0.06);
+}
+.ec-word small {
+  display: block;
+  font-size: 0.65rem;
+  font-weight: 500;
+  opacity: 0.75;
+}
+body[data-child="true"] .ec-word {
+  font-size: 1.15rem;
+  padding: 0.4rem 0.7rem;
+}

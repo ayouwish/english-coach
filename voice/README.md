@@ -1,0 +1,504 @@
+# english-coach · voice（AI 网关）
+
+FastAPI 服务，监听 `:8100`，路径前缀 `/v1`。浏览器**不**直接访问本服务：
+`web(Next.js :3000)` 通过 `VOICE_SERVICE_URL`（compose 内 `http://voice:8100`）调用，
+音频播放走 web 的反向代理 `/voice/*` → `http://voice:8100/*`。
+
+契约唯一事实来源：[`../docs/api-contract.md`](../docs/api-contract.md)（**冻结，不得单方面改字段**）。
+
+---
+
+## 1. 快速开始（mock 模式，零密钥、零模型、离线）
+
+```bash
+cd voice
+uv sync                                   # 安装基础依赖（不含 azure / faster-whisper）
+PROVIDER_MODE=mock uv run uvicorn app.main:app --host 0.0.0.0 --port 8100
+```
+
+默认就是 `PROVIDER_MODE=mock`，**环境里没有任何 API key 也能全链路跑通**：
+
+```bash
+curl -s localhost:8100/v1/health
+curl -s -X POST localhost:8100/v1/tts -H 'Content-Type: application/json' \
+     -d '{"text":"think, thank, three","rate":"slow"}' -o demo.wav
+curl -s -X POST localhost:8100/v1/asr -F "audio=@demo.wav" -F "language=en"
+curl -s -X POST localhost:8100/v1/pronounce \
+     -F "audio=@demo.wav" -F "reference_text=I think the weather is really nice today." \
+     -F "learner_age_band=child"
+```
+
+> 音频解码用 **PyAV（`av`）**：wheel 自带 FFmpeg 库，**本机不需要安装系统 ffmpeg**，也不调用 ffmpeg 命令行。
+> Python ≥ 3.10（开发/CI 用 3.11）。
+
+---
+
+## 2. 端点（严格按契约）
+
+| # | 端点 | 说明 |
+|---|---|---|
+| 1 | `GET /v1/health` | 无需鉴权（compose healthcheck 用） |
+| 2 | `POST /v1/asr` | multipart：`audio` / `language` / `prompt` |
+| 3 | `POST /v1/pronounce` | ★ 核心：音素级发音评测 + 语调对比 + 示范音频 |
+| 4 | `POST /v1/tts` | JSON；返回二进制音频 + `X-TTS-Provider` / `X-Audio-Duration-Ms` |
+| 5 | `POST /v1/feedback` | 评测 JSON → 中文"人话"反馈（≤2 条建议） |
+| 6 | `POST /v1/dialogue` | 日常对话单轮推进（纠错 + 建议应答） |
+| 7 | `GET /v1/audio/{audio_id}` | 示范音频，只读，`Cache-Control: public, max-age=604800` |
+| 8 | `POST /v1/warmup` | v1.1：批量预热参考音 + 参考 F0 缓存（见 §8） |
+
+统一错误格式：`{"error":{"code","message","detail"}}`，错误码为契约 §8 的固定集合。
+
+---
+
+## 3. Provider 架构
+
+```
+routes(/v1/*) ──> ProviderSet{ asr, pa, tts } ──> 调用链: 主 provider -> [local] -> mock -> 内置降级
+                     └─ intonation(本地, 与 provider 无关)
+                     └─ LLMClient(OpenAI 兼容) -> 失败则 hint_key 模板
+```
+
+| provider | 音素级 | NBest | Prosody | 实现 |
+|---|---|---|---|---|
+| `mock` | ✅(假数据) | ✅ | ✅ | 确定性、离线、无模型；供 E2E / 无密钥开发 |
+| `azure` | ✅ | ✅ | ✅(en-US) | Azure Speech SDK（ASR + Pronunciation Assessment + Neural TTS）|
+| `local` | ❌(词级) | ❌ | ❌ | faster-whisper 词级置信度 + 文本比对 + 停顿分析；TTS 用 edge-tts |
+
+**红线：绝不允许拿 ASR 置信度冒充音素级发音分。** `local` 只产出 `granularity="word"`、
+每个词的 `phonemes` 为空数组，并强制带 `phoneme_level_unavailable` warning。
+
+### 3.1 降级优先于报错
+
+- provider 抛错/超时（契约 §9 的 25s/50s/15s/30s/30s）→ 自动尝试链上的下一个；仍失败则用**内置降级实现**
+  （`app/degrade.py`：不依赖任何模型/网络，永不失败），HTTP **200** + `warnings:["provider_fallback"]`，
+  `provider_meta.primary_error` 保留首个错误原因。
+- LLM 无 key / 超时 / 返回非 JSON → `/v1/feedback`、`/v1/dialogue` 返回模板结果，`provider` 字段为 `"template"`，HTTP 仍 200。
+- 只有"完全无法产出"才报错：例如音频无法解码 → `422 unsupported_audio`；
+  所有 ASR provider 都挂（连 mock 都失败）→ `502 provider_error`。
+- 语调模块任何异常都只导致 `intonation.available=false` + `intonation_unavailable` warning，绝不 500。
+
+### 3.2 Provider 选择
+
+`PROVIDER_MODE`（默认 `mock`）：
+
+| mode | asr | pa | tts | llm |
+|---|---|---|---|---|
+| `mock` | mock | mock | mock | template |
+| `local` | local | local | local(edge-tts) | key 有则用，否则 template |
+| `cloud` | azure | azure | azure | key 有则用，否则 template |
+| `hybrid` | azure（无 key 则 local）| 同左 | azure（无 key 则 mock）| 同左 |
+
+可用 `VOICE_ASR_PROVIDER` / `VOICE_PA_PROVIDER` / `VOICE_TTS_PROVIDER` / `VOICE_LLM_PROVIDER` 单独覆盖。
+
+---
+
+## 4. 环境变量清单
+
+**通用**
+
+| 变量 | 默认 | 说明 |
+|---|---|---|
+| `PROVIDER_MODE` | `mock` | `mock` \| `local` \| `cloud` \| `hybrid` |
+| `VOICE_HOST` / `VOICE_PORT` | `0.0.0.0` / `8100` | |
+| `DATA_DIR` | `./data`（容器 `/data`）| 音频落盘根目录，实际写入 `$DATA_DIR/audio/`；目录不存在会自动创建 |
+| `MODEL_CACHE_DIR` | `/models`（不可写时退回 `<voice>/.model-cache`）| faster-whisper 等模型下载缓存 |
+| `DEFAULT_TTS_VOICE` | `en-US-JennyNeural` | |
+| `MAX_TTS_CHARS` | `2000` | 超限 → `413 payload_too_large` |
+| `MAX_UPLOAD_BYTES` | `26214400` | 上传体积上限 → `413` |
+| `VOICE_MAX_AUDIO_SECONDS` | `120` | 超长音频 → `413 audio_too_long` |
+| `VOICE_GPU` | `false` | 上报到 `capabilities.gpu` |
+| `CACHE_ENABLED` | `true` | 关掉后 `provider_meta.cache` 全为 `disabled`，不写缓存（v1.0 行为）|
+| `CACHE_MAX_BYTES` | `524288000`（500MB）| 缓存字节上限，超出按 LRU 淘汰 |
+| `CACHE_MAX_ENTRIES` | `2000` | 缓存文件条数上限（audio + f0 合计）|
+| `WARMUP_MAX_ITEMS` | `500` | 单次 `/v1/warmup` 的 items 上限，超过 413 |
+| `WARMUP_CONCURRENCY` | `2` | 预热默认并发（请求里可用 `concurrency` 覆盖，1–8）|
+
+**分项 provider 覆盖**：`VOICE_ASR_PROVIDER`、`VOICE_PA_PROVIDER`、`VOICE_TTS_PROVIDER`、`VOICE_LLM_PROVIDER`
+
+**Azure（可选）**：`AZURE_SPEECH_KEY`、`AZURE_SPEECH_REGION`、`AZURE_SPEECH_ENDPOINT`、`AZURE_TTS_VOICE`
+
+**LLM（OpenAI 兼容：DeepSeek / Ollama / vLLM…）**：
+`LLM_BASE_URL`（如 `https://api.deepseek.com/v1`）、`LLM_API_KEY`、`LLM_MODEL`、`LLM_TIMEOUT_S`；
+Ollama 别名 `OLLAMA_BASE_URL`（`http://localhost:11434` 会自动补 `/v1`）、`OLLAMA_MODEL`。
+没有任何 key 时自动降级为模板反馈（`provider="template"`）。
+
+**本地兜底**：`WHISPER_MODEL`（`tiny`）、`WHISPER_DEVICE`（`cpu`）、`WHISPER_COMPUTE_TYPE`（`int8`）、`EDGE_TTS_VOICE`
+
+模板见 [`.env.example`](.env.example)。
+
+---
+
+## 5. 切换到 Azure（云 provider）
+
+```bash
+uv sync --extra azure          # 安装 azure-cognitiveservices-speech（惰性导入，不装也不影响 mock）
+export AZURE_SPEECH_KEY=xxxx
+export AZURE_SPEECH_REGION=eastasia
+export PROVIDER_MODE=cloud     # 或 hybrid：云为主 + 本地/离线兜底
+uv run uvicorn app.main:app --host 0.0.0.0 --port 8100
+```
+
+> 从 mock 切到 `cloud`/`hybrid` 后**不需要**清缓存：key 里含 `tts_provider`（契约 v1.2），
+> mock 时代预热的条目不会被 Azure 命中；但建议按 §8.2 用 azure 重新预热一遍，让示范音一次生成到位。
+
+> **TTS 输出格式（v1.3 修复）**：`mp3` → `Audio24Khz96KBitRateMonoMp3`，`wav` → `Riff24Khz16BitMonoPcm`，
+> 必须用 `config.set_speech_synthesis_output_format(枚举)` 设置。Azure SDK 的 `SpeechConfig`
+> **没有** `speech_synthesis_output_format` 属性——历史上给它赋值不报错但静默失效，
+> 结果无论请求 mp3 还是 wav 都返回默认 16kHz PCM（听起来发闷，且 `content_type` 与实际字节不符）。
+> 现在若 setter 缺失会直接报错；返回字节还会用 PyAV 校验真实容器/采样率，不符则打 ERROR 日志。
+
+Pronunciation Assessment 参数（task-1 要求）：`granularity=Phoneme`、`enable_miscue=True`、
+`enable_prosody_assessment()`、`phoneme_alphabet="IPA"`、`nbest_phoneme_count=5`、`HundredMark`。
+`mode=unscripted`（参考文本为空）时不跑 PA（Azure PA 必须有参考文本），只出 ASR 文本 + 本地语调，
+`pron/accuracy/completeness` 为 `null`（**不给假分数**）。
+
+`xfyun` 在契约能力矩阵里预留，V1 不实现（选择它会得到 `no_provider` 并由兜底链接管）。
+
+### local provider（本地兜底）
+
+```bash
+uv sync --extra local          # faster-whisper + edge-tts
+export PROVIDER_MODE=local WHISPER_MODEL=tiny
+```
+模型在**第一次真正调用**时才加载（`app/providers/local.py:_load_whisper`），缓存到 `MODEL_CACHE_DIR`。
+测试不下载大模型：pytest 用 monkeypatch 替换 `transcribe_words` 验证词级打分逻辑本身。
+
+---
+
+## 6. 语调模块（与 provider 无关，离线可用）
+
+`app/intonation.py`，任何模式（含 mock）下都会返回 `intonation`：
+
+1. **F0 提取**：`praat-parselmouth`（自相关法），`to_pitch(time_step=0.02)`，清音帧为 `null`；
+2. **半音归一化**：各自减去自身浊音段 F0 均值再取 `12*log2` → 消除男女/儿童音高与整体音区差异；
+3. **DTW 对齐**：自研 DP（无外部依赖），局部代价 `|Δsemitones|`，一方清音记固定代价；
+   `dtw_distance = 累计代价 / 路径长度`（半音，越小越接近）；
+4. **对齐输出**：把用户曲线按 DTW 路径映射到参考时间轴 → `user_f0` / `reference_f0` **同时间轴、同长度**、
+   20ms 步长、≤600 点（超长按契约等间隔抽稀）；半音域会还原成 Hz 输出；
+5. **worst_regions**：对 `|用户-参考|` 平滑后找超阈值区间，按参考/用户斜率分类为
+   `expected_rise_but_flat` / `expected_fall_but_flat` / `wrong_direction` / `stress_misplaced` /
+   `monotone_overall` / `unexpected_pause`，并用词级时间轴填 `text`，最多 3 条。
+
+参考曲线来自 TTS 生成的示范音频（`mock` 模式用一个**真的有基频**的音调合成器，
+见 `app/synth.py`，所以离线也能演示语调对比）。`scores.prosody`：provider 给了就用 provider 的，
+否则用 `100 - 90*dtw_distance` 折算；语调不可用时为 `null` + `prosody_unavailable`。
+
+**合成信号验证**（`tests/test_intonation.py`）：正弦扫频验证 F0 跟踪精度（中段误差 <8%）、
+静音判为清音、同曲线 DTW=0、整体升八度后距离不变（半音归一化生效）、
+"参考上扬 + 用户平"命中 `expected_rise_but_flat`、"反向"命中 `wrong_direction`、
+用户中间 400ms 静音命中 `unexpected_pause`、真实波形级（扫频 vs 定频）同样命中上扬未实现。
+
+### 6.1 什么时候 `intonation.available == false`（造测试音频必读）
+
+F0 用 praat 自相关法，搜索区间 **60–500 Hz**，输出网格 20ms（首帧约在 30ms），
+最少需要 **3 个浊音帧（≈60ms）** 才够做 DTW。实测边界：
+
+| 用户音频 | 结果 |
+|---|---|
+| 纯正弦 120 / 180 / 440 / 900 Hz（≥150ms）| ✅ available=true（基频高于 500Hz 时会锁定其分谐波）|
+| 滑动基频 + 谐波 + 包络的类浊音（如 `web/scripts/smoke.mjs` 的 `wavBlob()`）| ✅ available=true，147 点曲线 |
+| 静音 / 直流 / 白噪声 / 非周期脉冲串 | ❌ available=false + `intonation_unavailable` |
+| 基频低于搜索下限（如 30Hz）| ❌ 同上 |
+| 时长 ≲50ms（只有 1 个浊音帧）| ❌ 同上 |
+
+降级时 `user_f0`/`reference_f0`/`dtw_distance` 为 `null`、`worst_regions=[]`、
+`scores.prosody=null`，并带 `intonation_unavailable` + `prosody_unavailable` warning
+（HTTP 仍 200，发音分照常返回）。**造测试音频请用 ≥0.5s 的类浊音信号。**
+
+---
+
+## 7. LLM 层与模板降级
+
+`app/llm.py`：OpenAI 兼容 `POST {LLM_BASE_URL}/chat/completions`（`response_format=json_object`），
+任何异常（连接失败、超时、非 JSON）都返回失败态，由调用方降级。
+
+- `/v1/feedback`：LLM 输出 `summary/praise/points/closing`；`points` 在 prompt 和
+  `sanitize_feedback()` 双重截断到 **≤2 条**；`learner.age_band=="child"` 时把 IPA 符号替换成
+  "th 音 / 短 i 音"这类描述（`strip_ipa` / `child_title`），并保证普通英文单词不被改坏。
+- 模板反馈（`app/feedback_templates.py`）：按 `hint_key` 查 17 条中文教学提示表，
+  `severity` 缺失时按 `score`/`error_type` 推导，离线可用，`provider="template"`。
+- `/v1/dialogue`：LLM 走场景 `role_prompt`；降级用内置场景话术 + 规则纠错
+  （`I want` → 礼貌、`I is` → be 动词、三单 -s …），`suggested_replies` 保证 2–3 条，
+  `turn_index>=6` 时 `done=true`；不安全内容 → `flag="unsafe_filtered"` 且 `reply` 被替换。
+
+---
+
+### 7.1 反馈质量硬约束（用户实况驱动）
+
+真实使用中踩过三个"不报错但误导孩子"的坑，现在都钉成了测试：
+
+1. **整句没被录进来时不许表扬**。触发条件（`is_no_speech_payload`）：`recognized_text` 去掉标点后没有任何英文词
+   （实况里的 `"."`），或四个分项全 0 且 issues/words 几乎全是 Omission（含分数缺失但每个词都 Omission），
+   或全 0 分且 `warnings` 同时带 `low_snr` + `asr_mismatch`。
+   该分支：**不含任何表扬词**（`PRAISE_MARKERS` 黑名单：棒/说出来了/坚持读完/读得…），
+   改说"我好像没听到你的声音"，并给**三条可执行排查**（靠近麦克风、说大声一点、先点「听示范」听节奏），
+   **不做逐词指责**（没听到 vs 漏一个词是两件事）。这一支在 `/v1/feedback` 路由上**直接绕过 LLM**——
+   LLM 输出不可控，可能把"真棒"又带回来。
+2. **练习词必须与目标词相关**（不许张冠李戴）：
+   - `Omission` / `Insertion`：用**该词本身**（`Good` 漏读就给 `Good`，不再给通用表的 `think/weather/really/today`）；
+   - `UnexpectedBreak` / `MissingBreak`：用停顿处的那个词；
+   - `Mispronunciation` 的音素在 `PHONEME_HINT` 里没有专用条目时（例如 `today /eɪ/` 曾被按拼写猜成"词尾音"），
+     改用中性卡片，练习词从**参考句中真正含这个音素**的词里挑（`_sentence_words_with_phoneme`）。
+3. **`actual == null` 不许编造**"你读成了 X"：改为"这个音还不够清楚"；只有真的给了 `actual` 才写"读成了 s"。
+
+## 8. 预热与缓存（契约 v1.1 §12）
+
+跟读语料的示范音频与参考 F0 都是 `(text, voice, rate)` 的纯函数：预生成一次即可永久复用。
+缓存让**第二次起的跟读不再调用云 TTS、也不再跑 praat**（归一化与 DTW 与用户音频相关，仍然每次都算）。
+
+### 8.1 缓存约定
+
+| 内容 | 路径 | 键（契约 v1.3 §12.2） |
+|---|---|---|
+| 参考音频 | `DATA_DIR/cache/audio/<hash>.<ext>` | `sha1("v3" + "\x1f" + tts_provider + "\x1f" + fmt + "\x1f" + text + "\x1f" + voice + "\x1f" + rate)` |
+| 参考 F0（归一化**前**） | `DATA_DIR/cache/f0/<hash>.json` | 同一个 hash（参考音固定 `fmt="wav"`）|
+
+- **`fmt` 必须参与 key**（`mp3` 与 `wav` 是不同产物：容器/编码/码率都不同）。参考音（`pronounce`/`warmup`）固定用
+  `fmt="wav"`；`/v1/tts` 用请求里的 `format`。因此**同一句话的 wav 与 mp3 各缓存一份**，
+  「只听示范」请求 mp3 时不会命中预热好的 wav 参考音（这是诚实行为，见 §8.5）。
+- **`KEY_VERSION` 已升到 `"v3"`**：v2 时代的缓存全部失效（那里存有 Azure 格式设置静默失效产生的
+  16kHz 坏音频），升级后**必须重新预热一次**。
+- **`tts_provider` 必须参与 key**（取值与 `/v1/health` 的 `providers.tts` 同口径：`mock` / `local` / `azure`）。
+  这不是洁癖：`azure_tts_voice` / `edge_tts_voice` / `default_tts_voice` 的默认值**是同一个字符串**
+  （`en-US-JennyNeural`），而 web 练习时不传 `tts_voice`。若 key 不含 provider，
+  "先 mock 预热、后切 Azure"就会命中 mock 的缓存 —— 用户把**合成蜂鸣**当成母语者示范听，
+  而且**真实语音的 F0 被拿去和合成扫频曲线做 DTW**，语调反馈静默变成垃圾（发音分却一切正常，极难排查）。
+- 能进缓存的音频/曲线一定是**主 provider 产出的**（兜底音不落缓存），所以"key 里的 provider == 实际生产者"是硬不变量。
+- 版本前缀 `"v2"` 参与 hash：规则再变时旧缓存自动失效（缓存可再生，重新预热即可，不要为了复用而省略前缀）。
+- 对外 id 仍是 `ref_<hash 前12位>.<ext>`，`reference_audio_url` 形态与 v1.0 完全一致（`/v1/audio/*` 优先从缓存目录取，其次回落旧的 `DATA_DIR/audio/`）。
+- **校验后使用**：JSON 解析失败、点数 <2 或 >600、时间轴非递增、值类型错误、全是清音 —— 一律视为**未命中并重新生成**；
+  坏缓存绝不会被拿去算分。自己生成的数据不合法时也一律不落盘。
+- **LRU 淘汰**：默认 500MB / 2000 条（`CACHE_MAX_BYTES` / `CACHE_MAX_ENTRIES`），按 mtime 从旧到新删。
+- **失败不落缓存**：TTS 全挂时用的本地兜底音不会写进缓存，下次仍会尝试云 TTS（否则会把"降级音"永久固化）。
+- **并发单飞**：同一 key 的并发请求只会生成一次（预热与跟读共用同一把 SingleFlight），不会重复烧云 TTS；
+  单飞也是 provider 维度的（不同 provider 的同文本不会互相顶替）。
+
+> **升级到 v1.3 后需要重新预热一次**：key 由 `(v2, tts_provider, text, voice, rate)` 变为
+> `(v3, tts_provider, fmt, text, voice, rate)`，旧条目（含 16kHz 坏音频）**不会再被命中**
+> （不会出错，只是算 miss 并重新生成）。想立刻回收空间就 `rm -rf "$DATA_DIR/cache"`，然后按 §8.2 重跑一次预热即可。
+
+`/v1/pronounce` 的 `provider_meta` 会带缓存状态（契约 §12.5，可选字段）：
+
+```json
+"provider_meta": { "cache": { "reference_audio": "hit", "reference_f0": "hit" } }
+```
+
+取值 `hit` / `miss` / `disabled`（`with_intonation=false` 或 `CACHE_ENABLED=false` 时为 `disabled`）。
+另有一种半命中：音频命中但 F0 缺失时只补算 F0，**不会重新调 TTS**。
+
+### 8.2 预热 CLI
+
+```bash
+cd voice
+# 纯文本清单（每行一句，# 开头为注释）
+.venv/bin/python scripts/warmup.py --text-file corpus/sentences.txt --concurrency 2
+
+# JSON 清单：["句子", ...] 或 [{"text","voice","rate"}, ...] 或 {"items":[...]}
+.venv/bin/python scripts/warmup.py --items corpus/warmup.json
+
+# 打已在运行的服务（缺省是在进程内直接预热，不需要起服务）
+.venv/bin/python scripts/warmup.py --items corpus/warmup.json --url http://127.0.0.1:8100
+```
+
+输出统计：`requested / generated / cached / failed / skipped_duplicates / elapsed_ms / cache{audio_entries,f0_entries,bytes}`；
+`failed` 非空时退出码为 1（CI 可用来卡门禁）。
+
+**建议：每次语料变化后跑一次**（新增/修改句子、换 `voice` 或 `rate` 都要重跑）。增量即可：
+已缓存的条目会算 `cached`，重复条目算 `skipped_duplicates`，只有变化的部分才真正生成。
+
+### 8.5 「只听示范」也走缓存（`/v1/tts`）
+
+`/v1/tts` 与 `pronounce`/`warmup` 共用同一套内容寻址缓存（key 公式见 §8.1），命中时**完全不调用云 TTS**：
+
+- 响应头 `X-Cache: hit | miss | disabled`（`disabled` = 带 `ssml` 或 `CACHE_ENABLED=false`）；
+- 契约要求的 `X-TTS-Provider` / `X-Audio-Duration-Ms` **命中时也始终带**；
+- 额外带 `X-Audio-Codec` / `X-Audio-Sample-Rate` / `X-Audio-Container`（解码真实字节得出，
+  历史上"标 mp3 实际是 16kHz PCM"就是靠这个维度发现的）；
+- 带 `ssml` 的请求无法用 `text` 做 key → 跳过缓存；降级音/兜底音绝不写缓存；
+- 同一 key 的并发请求复用 `SingleFlight`，只真正合成一次。
+
+> 注意格式维度：预热产物是 `wav`（参考音分析用）。若前端「只听示范」请求 `mp3`，
+> 第一次仍会真合成一次（之后命中自己的 mp3 缓存）。想彻底零调用，可让前端在「只听示范」时
+> 直接用 `pronounce` 返回的 `reference_audio_url`（已预热的 wav），或按 §8.2 预热时同时覆盖需要的格式。
+
+### 8.3 `POST /v1/warmup`
+
+```bash
+curl -s -X POST localhost:8100/v1/warmup -H 'Content-Type: application/json' \
+  -d '{"items":[{"text":"I think the weather is really nice today.","voice":null,"rate":"normal"}],"concurrency":2}'
+```
+
+- `items` 1–500 条（>500 → 413）；`text` 空串或 >2000 → 400；`rate` 仅 `slow|normal`；`concurrency` 1–8（默认 2）。
+- `requested = generated + cached + failed + skipped_duplicates`（自洽，脚本可直接校验）。
+- **幂等**：同参数第二次调用 `generated=0`、全部 `cached`。
+- 单条失败只进 `failed`（`{text, voice, rate, error}`），HTTP 仍 200。
+
+## 9. 目录与落盘
+
+```
+app/
+  main.py         FastAPI 入口 + 统一错误处理
+  api.py          7 个端点
+  config.py       环境变量 -> Settings（含 provider 推导）
+  errors.py       错误码/HTTP 状态映射
+  execution.py    provider 超时 + 兜底链执行
+  audio_io.py     PyAV 解码 -> 16k mono float32；PCM16 WAV 编码
+  synth.py        离线"有声调"语音合成（mock TTS，供语调对比）
+  store.py        示范音频落盘（ref_<sha1前12位>.<ext>）与只读访问
+  intonation.py   F0 / 半音归一化 / DTW / worst_regions
+  phonemes.py     音素符号归一化（canonical-v1 单一映射表 + 未命中可观测）
+  hints.py        error_type / severity / hint_key 映射（表键已规范化）
+  text.py         分词、发音词典、词级时间轴估计、序列比对
+  feedback_templates.py  模板反馈 + 儿童模式 IPA 处理
+  dialogue.py     对话降级话术与校验
+  llm.py          OpenAI 兼容客户端
+  cache.py        参考音/F0 内容寻址缓存（校验 + LRU + 单飞）
+  warmup.py       参考音/F0 的生成复用 + 批量预热编排
+  degrade.py      最终兜底（永不失败）
+  providers/      base / mock / azure / local / registry
+scripts/warmup.py 批量预热 CLI
+tests/            437 个用例（契约字段、mock 全链路、合成信号语调、降级、缓存/预热/并发、音素归一化、跨 provider key、反馈质量、TTS 格式与 /v1/tts 缓存）
+```
+
+示范音频写入 `$DATA_DIR/cache/audio/<sha1(text|voice|rate)>.<ext>`（v1.0 的 `$DATA_DIR/audio/` 仍可读，
+作为兜底/兼容路径），只存本地不入库，响应 URL 为 `/voice/v1/audio/<id>`（web 反代的同源相对路径）。
+
+> ⚠️ **`voice/data/` 是真实运行数据目录**：300 句语料的参考音 + 参考 F0 缓存、音频 store，线上实例正在用。
+> **任何清理动作都不要对 `data/` 这类相对路径执行 `rm -rf`**（一次误删 = 300 句重新预热：3 分钟 + 真实云 TTS 费用；
+> 而且不会报错，只是下一次跟读变慢）。做验证/自测请显式指定独立的**绝对**临时目录
+> （`DATA_DIR=$(mktemp -d)` 或 `voice/.verify-tmp-*/`），并且只删自己刚建的那个路径。
+
+---
+
+## 10. 测试
+
+```bash
+.venv/bin/python -m pytest  # 437 passed（离线；真实 Azure 用例需 voice/.env 的 key，可用 VOICE_SKIP_REAL_AZURE=1 跳过）
+```
+
+覆盖：
+- 契约字段逐个校验（health/asr/pronounce/tts/feedback/dialogue/audio 的 key 集合、枚举、范围、排序）；
+- mock 全链路 + 参考音频落盘与 `Cache-Control`；
+- 合成信号验证 F0/DTW/worst_regions（见 §6）；
+- TTS 输出格式（见 §5/§8.5）：setter 调用 + 真实字节容器/采样率断言（含真机 Azure）、`/v1/tts` miss→hit、fmt 参与 key、v2 旧缓存不命中；
+- 反馈质量（见 §7.1）：没听到语音时不含表扬词、Omission 练习词相关、actual 缺失不编造；
+- 音素符号归一化（见 §12）：变体逐项覆盖、幂等、nbest 顺序/分数不变、未知符号原样返回、issues 同步归一化；
+- 缓存 key 的 provider 维度：同文本不同 provider 的 key 不同、切换 provider 必须 miss、v1.1 旧条目永不命中（见 §8.1）；
+- 降级：provider 抛错 / 超时 / 全链失败 / LLM 不可达 / 无 Azure key 的 cloud 模式，
+  全部断言 **HTTP 200 + warnings**（不是 500）；
+- 惰性导入：mock 模式下 `sys.modules` 里不允许出现 `azure` / `faster_whisper` / `edge_tts`。
+
+---
+
+## 11. Docker
+
+`deploy/docker-compose.yml` 的 voice 服务用 `build: {context: ../voice, dockerfile: Dockerfile}`：
+
+```bash
+docker build -t english-coach-voice ./voice
+docker run --rm -p 8100:8100 \
+  -v voice-models:/models -v "$PWD/../data:/data" \
+  -e PROVIDER_MODE=mock english-coach-voice
+```
+
+- 基础镜像 `python:3.11-slim`，`uv pip install --system -r requirements.txt`（`requirements.txt` 由
+  `uv export --frozen --no-dev` 生成，已 pin；等价的 `pip install -r requirements.txt` 也可用）。
+- **不安装系统 ffmpeg**：`av` / `praat-parselmouth` / `numpy` 在 PyPI 上都有 cp311 manylinux wheel
+  （`av-18.1.0-cp311-abi3-manylinux_2_28_x86_64.whl`、`praat_parselmouth-0.4.7-cp311-cp311-manylinux2014_x86_64.*.whl`），
+  PyAV wheel 自带 FFmpeg 库。Dockerfile 里保留了"若某架构缺 wheel"时安装 FFmpeg 开发库的注释行。
+- 默认 `PROVIDER_MODE=mock`、`DATA_DIR=/data`、`MODEL_CACHE_DIR=/models`；镜像内 `mkdir -p /data/audio /models`，
+  代码也会自行创建缺失目录，因此可以安全挂命名卷 / 绑定挂载。
+- `EXPOSE 8100`，`HEALTHCHECK` 用 python 请求 `http://127.0.0.1:8100/v1/health`（slim 镜像没有 curl）。
+
+> 本机 docker 拉不到镜像，`docker build` 未能实测；已验证的是：Dockerfile 语法、所有 `COPY` 源路径存在、
+> 依赖在 linux/cp311 上有预编译 wheel、以及容器内同款启动命令在本机 3.11 环境下可直接跑通。
+
+---
+
+## 12. 音素符号空间（v1.2 接缝 · `canonical-v1`）
+
+### 12.1 为什么需要
+
+`focus_phonemes` 是 `srs_cards(kind=phoneme)` 的 key，也是 web 侧 `hintKeyForPhoneme()` 的依据。
+语料标注用**英式 RP 符号**（`ɒ ɑː ɔː ɜː iː uː əʊ ʊə eə ɪə`），而全链路目标是 **en-US**；
+云 provider（Azure）的 IPA 输出很可能用另一套写法（`ɹ ɛ ɝ ɚ`）。
+
+如果不归一化：云端返回 `ɑ` 而语料写 `ɒ` 时，**同一个发音错误会生成两张卡**，
+`phoneme_mastery` 的长期追踪会在部分音素上静默断链——不报错，只是几个月后曲线变得没有意义。
+所以 voice 侧对外（`/v1/pronounce` 响应）只输出**一套规范符号**，把"接缝"收在一个地方。
+
+### 12.2 规范空间（canonical-v1）
+
+| 类别 | 规范符号 |
+|---|---|
+| 辅音 | `p b t d k ɡ f v θ ð s z ʃ ʒ h m n ŋ l r j w tʃ dʒ`（`ɡ` 是 U+0261，不是 ASCII `g`）|
+| 单元音 | `i ɪ e æ ʌ ə ɜ ɑ ɔ ʊ u` |
+| 双元音 | `eɪ aɪ ɔɪ əʊ aʊ`（另保留语料在用的 `ʊə ɪə eə`）|
+
+对照样例（`app/phonemes.py` 的 `CANONICAL_MAP`）：
+
+| 输入（变体） | 输出（规范） | 说明 |
+|---|---|---|
+| `ɹ` `ɻ` | `r` | GA 的 r |
+| `ʤ` `d͡ʒ` | `dʒ` | 塞擦音两种写法 |
+| `ʧ` `t͡ʃ` | `tʃ` | 同上 |
+| `g` | `ɡ` | ASCII g 统一成 IPA ɡ |
+| `ɛ` | `e` | |
+| `ɝ` / `ɚ` | `ɜ` / `ə` | GA 卷舌元音 |
+| `ɐ` / `ᵻ` | `ʌ` / `ɪ` | |
+| `iː` `uː` `ɔː` `ɜː` `ɑː` | `i` `u` `ɔ` `ɜ` `ɑ` | **长度符统一去掉**，避免一个冒号裂成两张卡 |
+| `ɒ` | `ɑ` | **cot–caught 合并**（见下）|
+| `oʊ` / `ou` | `əʊ` | 字形对齐语料，不代表音值判断 |
+| `n̩` `l̩` | `n` `l` | 成音节辅音 |
+
+**已知取舍**（都写在 `app/phonemes.py` 的模块 docstring 里）：
+1. `ɒ → ɑ`：6–9 岁阶段区分 cot/caught 不是教学目标，而"一个音只能有一张卡"是硬要求；
+   若要恢复 ɒ/ɑ 两分，**只改这一张表**即可。
+2. `oʊ → əʊ`：纯粹为了与语料已有 key 对齐（GA 实际音值接近 [oʊ]）。
+3. 长度符一律去掉：RP `iː` 与 GA `i` 归为同一个 key。
+4. `ɝ/ɚ` 与 `ɜ/ə` 合并，r 色彩由独立的 `r` 音素承担。
+
+### 12.3 对外保证（可依赖的行为）
+
+- `words[].phonemes[].phoneme`、`nbest[].phoneme`、`issues[].phoneme/expected/actual` 全部落在规范空间；
+- **`nbest` 的长度、顺序、分数一律不变**（只改符号；两个变体折叠成同一符号时**不去重**，否则会改变 nbest 语义）；
+- **未在表中的符号原样返回**（不丢信息、不猜测），同时打一条 `unmapped phoneme symbol 'xx'` WARNING 并记入
+  `app.phonemes.seen_unknown_phonemes()`；
+- 归一化**幂等**（`f(f(x)) == f(x)`），且规范符号不会被二次映射（import 时断言）；
+- `issues[].hint_key` 会按规范符号重算，所以同一个错误在不同 provider 下映射到同一条教学提示；
+- `/v1/pronounce` 的 `provider_meta.phoneme_space` 会返回 `"canonical-v1"`，便于审计与联调对齐；
+- **合并的副作用（需要知情）**：当 `expected` 与 `actual` 恰好都被折叠到同一个符号时（例如参考 `ɒ`、实际 `ɑː`），
+  `issues[].actual` 会与 `expected` 相同——该条的"替代关系"信息被合并掉了，但 **mastery key 是正确的**
+  （这正是本次要保护的东西）。若要保留这层区分，把 `"ɒ": "ɑ"` 从 `CANONICAL_MAP` 删掉即可，
+  代价是语料里的 `ɒ` 与云端 `ɑ` 会变成两张卡（需与 corpus-dev 一起决定）。
+- 长度 ≤3 且像音素的字符串才会被当符号处理（`"fluent"` / `"1125ms pause"` 这类描述性文本原样保留，不污染日志）。
+
+### 12.4 Azure 联调时：只改一张表
+
+1. 打开 `voice/app/phonemes.py`，找到 `CANONICAL_MAP`；
+2. 把实测到的写法加进去（**值必须是 `CANONICAL_PHONEMES` 里的符号**，写错 import 时立刻报错）：
+
+```python
+CANONICAL_MAP = {
+    ...
+    # --- Azure Speech IPA 实测补充（2026-xx-xx 联调）---
+    "a": "æ",      # Azure 用 a 表示 TRAP 元音
+    "ɜ˞": "ɜ",     # 带卷舌附加符的写法
+}
+```
+
+3. 排查遗漏：起服务后跑几句，日志里会出现 `unmapped phoneme symbol 'xx'`；
+   或在 python 里 `from app.phonemes import seen_unknown_phonemes; seen_unknown_phonemes()` 取全集；
+4. 改完只需要重跑测试（`tests/test_phonemes.py` 会逐项校验表的不变量），**其它代码一律不用动**。
+
+> 边界：本模块**不改语料、不改 `focus_phonemes`**（那是 corpus-dev 的线）。它只保证"voice 输出的音素符号是规范化的、可预测的"。
+> 如果 corpus-dev 想把语料标注也对齐到同一空间，直接复用这张表（`canonicalize_all`）即可，不要另建一套。
+
+## 13. 已知限制 / 遗留
+
+1. `azure` 代码路径**未做真机联调**（本机无 Azure 订阅、无 key）：SDK 调用逻辑按官方 API 编写并全部惰性导入，
+   但首次接入云环境时需要按实际返回核对一次 phoneme/nbest 字段。
+2. `local` provider 的模型仅在真正调用时加载；pytest 用 monkeypatch 覆盖，未做 tiny 模型的端到端推理验证。
+3. provider 超时用线程池 `future.result(timeout)` 实现：超时后请求立即降级，但被丢弃的线程会自然结束（V1 可接受）。
+4. `stress_misplaced` 目前是"斜率差异较大"的启发式，未做重音（能量/时长）建模。
+5. `unscripted` 模式下 `pron/accuracy/completeness` 为 `null`（无参考文本，不臆造分数）。

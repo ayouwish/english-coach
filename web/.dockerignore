@@ -1,0 +1,12 @@
+node_modules
+.next
+.git
+data
+*.log
+.env
+.env.local
+.npmrc
+Dockerfile
+.dockerignore
+README.md
+tsconfig.tsbuildinfo

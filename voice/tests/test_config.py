@@ -1,0 +1,102 @@
+"""配置解析：PROVIDER_MODE -> provider 组合，以及无密钥时的 cloud/local 行为。"""
+
+from __future__ import annotations
+
+import sys
+
+import pytest
+
+from app.cache import reset_cache
+from app.config import Settings, get_settings, reset_settings_cache
+from app.providers.registry import build_providers, reset_providers
+from tests.conftest import post_pronounce
+
+
+def _with_env(monkeypatch, **env):
+    for key, value in env.items():
+        monkeypatch.setenv(key, value)
+    reset_settings_cache()
+    reset_providers()
+    reset_cache()
+
+
+def test_default_mode_is_mock(monkeypatch):
+    for key in ("PROVIDER_MODE", "VOICE_PA_PROVIDER", "VOICE_ASR_PROVIDER", "VOICE_TTS_PROVIDER"):
+        monkeypatch.delenv(key, raising=False)
+    reset_settings_cache()
+    settings = get_settings()
+    assert settings.mode == "mock"
+    assert (settings.asr_provider, settings.pa_provider, settings.tts_provider) == ("mock", "mock", "mock")
+    assert settings.llm_provider == "template"
+    assert settings.llm_enabled is False
+
+
+def test_invalid_mode_falls_back_to_mock(monkeypatch):
+    _with_env(monkeypatch, PROVIDER_MODE="turbo")
+    assert get_settings().mode == "mock"
+
+
+@pytest.mark.parametrize(
+    "mode,expected",
+    [
+        ("mock", ("mock", "mock", "mock")),
+        ("local", ("local", "local", "local")),
+        ("cloud", ("azure", "azure", "azure")),
+        ("hybrid", ("local", "local", "mock")),  # 无 azure key -> 本地兜底
+    ],
+)
+def test_mode_provider_matrix(monkeypatch, mode, expected):
+    _with_env(monkeypatch, PROVIDER_MODE=mode)
+    settings = get_settings()
+    assert (settings.asr_provider, settings.pa_provider, settings.tts_provider) == expected
+
+
+def test_cloud_mode_without_azure_key_degrades_to_mock(client, monkeypatch, sweep):
+    """环境里没有 AZURE_SPEECH_KEY：cloud 模式也必须 200（链尾 mock 兜底）+ provider_fallback。"""
+    monkeypatch.delenv("AZURE_SPEECH_KEY", raising=False)
+    _with_env(monkeypatch, PROVIDER_MODE="cloud")
+    health = client.get("/v1/health").json()
+    assert health["providers"]["pa"] == "azure"  # 如实上报配置
+    response = post_pronounce(client, sweep, "I think the weather is really nice today.")
+    assert response.status_code == 200
+    body = response.json()
+    assert "provider_fallback" in body["warnings"]
+    assert body["provider"] == "mock"
+
+
+def test_local_mode_capabilities_and_lazy_model_load(client, monkeypatch):
+    _with_env(monkeypatch, PROVIDER_MODE="local")
+    health = client.get("/v1/health").json()
+    assert health["providers"]["pa"] == "local"
+    assert health["capabilities"]["phoneme_level"] is False, "local provider 只有词级分数"
+    assert health["capabilities"]["intonation_curve"] is True
+    assert "faster_whisper" not in sys.modules, "没有真正评测前不允许加载本地模型"
+
+
+def test_local_pa_declares_phoneme_level_unavailable(monkeypatch):
+    from app.providers.local import LocalPA
+
+    assert LocalPA.capabilities.phoneme_level is False
+    assert LocalPA.capabilities.prosody is False
+    assert LocalPA.capabilities.nbest_phonemes is False
+
+
+def test_settings_data_and_model_dirs_are_writable(monkeypatch, tmp_path):
+    _with_env(monkeypatch, DATA_DIR=str(tmp_path / "d"), MODEL_CACHE_DIR=str(tmp_path / "m"))
+    settings = Settings.__dataclass_fields__  # noqa: F841  (smoke: dataclass intact)
+    settings = get_settings()
+    assert settings.audio_dir.exists()
+    assert settings.model_cache_dir.exists()
+
+
+def test_capabilities_shape_for_mock():
+    reset_settings_cache()
+    reset_providers()
+    providers = build_providers()
+    assert providers.capabilities == {
+        "phoneme_level": True,
+        "prosody": True,
+        "intonation_curve": True,
+        "nbest_phonemes": True,
+        "ssml": False,
+    }
