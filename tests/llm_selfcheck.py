@@ -140,10 +140,13 @@ def main() -> int:
     print(f"    Sam: {SCENARIO['opening_line']}")
     used_providers: list[str] = []
     for idx, user_text in enumerate(TURNS):
+        # ⚠️ 契约里没有"本轮这句话"单独字段：调用方必须把它追加进 history
+        # （web 侧就是这么做的）。漏了这一步，模型看到的最后一轮还是上一轮，
+        # 表现就是"慢一拍"——第一版脚本就踩了这个坑。
         payload = {
             "scenario": SCENARIO,
             "learner": LEARNER,
-            "history": history,
+            "history": [*history, {"role": "user", "text": user_text}],
             "correction_level": "gentle",
             "turn_index": idx,
         }
