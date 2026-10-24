@@ -9,6 +9,7 @@ import { parseJsonArray, parseJsonObject } from "@/lib/http";
 import { isSpeechMissing } from "@/lib/speech-detection";
 import { getCapabilities } from "@/lib/voice";
 import { getDailyUsage } from "@/lib/usage";
+import { resolveFocus, isMinimalPairSentence } from "@/lib/focus";
 import type { Intonation, PronounceIssue, PronounceResult, SentenceItem } from "@/lib/types";
 import { PracticeClient } from "./PracticeClient";
 
@@ -44,7 +45,11 @@ function wordsFromPhonemeScores(attemptId: string): PronounceResult["words"] {
   });
 }
 
-export default async function PracticePage() {
+export default async function PracticePage({
+  searchParams,
+}: {
+  searchParams: Promise<{ focus?: string }>;
+}) {
   await ensureBootstrap();
   const user = await getCurrentUser();
   if (!user) redirect("/login");
@@ -88,7 +93,38 @@ export default async function PracticePage() {
     snapshot !== null &&
     isSpeechMissing({ recognized_text: snapshot.recognized_text, warnings: snapshot.warnings });
 
-  const items: SentenceItem[] = rows.map((r) => ({
+  // 强化练习（task-16 C）：?focus=<ipa|儿童标签> 时把句子过滤到该音素相关句，最小对立对优先
+  const sp = await searchParams;
+  const focus = resolveFocus(sp?.focus);
+  let practiceRows = rows;
+  if (focus.ipa) {
+    const matched = rows.filter((r) => {
+      try {
+        return (JSON.parse(r.focusPhonemes) as string[]).includes(focus.ipa as string);
+      } catch {
+        return false;
+      }
+    });
+    if (matched.length > 0) {
+      practiceRows = matched.sort((a, b) => {
+        const pa = isMinimalPairSentence(JSON.parse(a.tags) as string[]) ? 0 : 1;
+        const pb = isMinimalPairSentence(JSON.parse(b.tags) as string[]) ? 0 : 1;
+        return pa !== pb ? pa - pb : a.sortOrder - b.sortOrder;
+      });
+    }
+  }
+  const focusState = focus.ipa
+    ? {
+        active: true,
+        // 儿童只下发儿童标签（不含 IPA）
+        label: user.isChild ? (focus.articulation?.childLabel ?? focus.label ?? "") : (focus.label ?? ""),
+        count: practiceRows.length,
+        matched: practiceRows.length !== rows.length,
+        defaultLevel: practiceRows[0]?.level ?? user.cefrLevel,
+      }
+    : undefined;
+
+  const items: SentenceItem[] = practiceRows.map((r) => ({
     id: r.id,
     text: r.text,
     translation_zh: r.translationZh,
@@ -108,6 +144,7 @@ export default async function PracticePage() {
         voiceReachable={caps.reachable}
         voiceMode={caps.mode}
         initialUsage={usage}
+        focus={focusState}
       />
 
       {snapshot && lastNoSpeech ? (

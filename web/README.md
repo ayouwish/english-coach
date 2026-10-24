@@ -73,6 +73,7 @@ pnpm db:seed -- --reset-passwords        # 强制把密码重置回上表
 | `pnpm check:child-ipa` | 儿童 IPA 泄漏守卫：把儿童账号的 4 个 API 响应 + 7 个页面 HTML（含 RSC 负载）**整体序列化后扫描** 18 个特征字形 |
 | `pnpm check:practice-ui` | 跟读 UI 断言：雷达图 null 轴、词级长度编码排序、整句没听到的判定 + `/practice` HTML（正常态 vs 没听到态） |
 | `pnpm check:warmup` | 参考音预热：`/api/warmup` 打通 voice §12，第二次调用应命中缓存（证明"点示范音秒出"） |
+| `pnpm check:diagnosis` | 发音诊断：`/api/diagnosis` 分档/排序/零 IPA、`/practice?focus=` 过滤与 banner、`/report` 口型微课与儿童零 IPA |
 
 ## 4. 自测（无浏览器环境下的验收方式）
 
@@ -236,6 +237,24 @@ GET/PATCH /api/settings       偏好设置（儿童不能自行改时长/自由�
   命中时**不展示逐词 0 分热力图**（那会让人以为是自己读错了），改为明确提示
   「这次好像没听到你的声音 —— 离麦克风近一点、说大声一点，再试一次」+ 卡片内直接放重录按钮；
   页面加载时若"上一次"就是这种情况，也会在服务端直接给出同一条提示。
+
+## 6.3 发音诊断 → 口型动画微课 → 强化练习（task-16）
+
+- **诊断 API** `GET /api/diagnosis`：从 `phoneme_mastery` 聚合（**样本 ≥2 才计入**），分档
+  `weak(<65) / watch(65–80) / ok(≥80)`，每条含近 3 次趋势方向、关联错误词（该音素得分最低的词）、
+  可练句数与一句结论。排序：weak 优先 → 同档按均分升序（ok 按降序）。
+  **儿童请求整包零 IPA**（按角色剥离 + `childSafeDeep` 兜底），并用 `childLabel` 作为强化练习 token。
+- **`/report` 诊断页**：薄弱音素卡片 = 参数化**口型动画微课** + 口型要点 + 常见错误（仅成人）+
+  示范音/例词点读（走 `/api/tts`）+ 最小对立对对比 + 「去练这 N 句」。ok 档折叠在 `<details>` 里。
+- **`ArticulationDemo`（`src/lib/articulation-svg.ts` + 组件）**：按 `articulation.ts` 的
+  10 个参数（tongueHigh/tongueBack/lipOpen/lipRound/airflow/constriction/…）生成侧面剖面 SVG：
+  头部轮廓、上下唇、上下齿、舌（path 按参数变形）、硬腭/软腭、鼻腔（鼻音高亮）、声门（浊音脉动）、
+  气流（`stroke-dasharray` 动画，强弱∝airflow；擦音有摩擦标记；塞音/鼻音画闭锁，塞音另有爆破）、
+  阻碍点标记；**循环教学动作**（舌头在中性↔目标位置之间循环，可暂停）；**对比模式**并排画两个音并高亮差异点。
+  性能/无障碍：`<title>/<desc>`、只在可见时动画、`prefers-reduced-motion` 降级静态帧、SSR 首屏即静态目标帧。
+- **强化练习队列**：`/practice?focus=<ipa|儿童标签>`（服务端 `resolveFocus` 两种写法都认）——
+  句子按 `focus_phonemes` 过滤、**最小对立对优先**，顶部 banner 说明来源并提供「退出聚焦」；
+  **无 focus 参数时行为与原来完全一致**（回归断言在 `check:diagnosis` 里）。
 
 ## 7. 儿童模式（`age_band=child`）
 

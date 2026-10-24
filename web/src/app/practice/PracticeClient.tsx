@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Recorder } from "@/components/Recorder";
 import { RecordedAudio } from "@/components/RecordedAudio";
@@ -26,6 +27,8 @@ interface Props {
   voiceReachable: boolean;
   voiceMode: string;
   initialUsage: AttemptApiResponse["usage"];
+  /** 强化练习模式（来自 /report 的「去练这 N 句」） */
+  focus?: { active: boolean; label: string; count: number; matched: boolean; defaultLevel: string };
 }
 
 export function PracticeClient({
@@ -36,8 +39,9 @@ export function PracticeClient({
   voiceReachable,
   voiceMode,
   initialUsage,
+  focus,
 }: Props) {
-  const [level, setLevel] = useState<string>(userLevel || "A1");
+  const [level, setLevel] = useState<string>(focus?.defaultLevel ?? (userLevel || "A1"));
   const [selectedId, setSelectedId] = useState<string>(sentences[0]?.id ?? "");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -236,6 +240,27 @@ export function PracticeClient({
 
   return (
     <div className="flex flex-col gap-5">
+      {focus?.active ? (
+        <section
+          className="ec-card border-2 border-[var(--ec-primary)]"
+          data-testid="focus-banner"
+        >
+          <h2 className="text-lg font-extrabold">🎯 强化练习：来自你的发音诊断</h2>
+          <p className="mt-1 text-sm">
+            正在集中练 <strong>{focus.label}</strong> · 已筛选出 {focus.count} 句
+            {focus.matched ? "（相关的句子，最小对立对优先）" : "（没有找到含该音素的句子，先自由练习）"}
+          </p>
+          <div className="mt-2 flex flex-wrap gap-2">
+            <Link href="/practice" className="ec-btn ec-btn-ghost" data-testid="exit-focus">
+              ↩︎ 退出聚焦
+            </Link>
+            <Link href="/report" className="ec-btn ec-btn-ghost">
+              📊 回诊断看进展
+            </Link>
+          </div>
+        </section>
+      ) : null}
+
       <section className="ec-card">
         <div className="flex flex-wrap items-center justify-between gap-2">
           <h1 className="text-xl font-extrabold">

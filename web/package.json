@@ -18,7 +18,8 @@
     "check:phoneme-hints": "node scripts/check-phoneme-hints.mjs",
     "check:child-ipa": "node scripts/check-child-ipa.mjs",
     "check:practice-ui": "node scripts/check-practice-ui.mjs",
-    "check:warmup": "node scripts/check-warmup.mjs"
+    "check:warmup": "node scripts/check-warmup.mjs",
+    "check:diagnosis": "node scripts/check-diagnosis.mjs"
   },
   "dependencies": {
     "bcryptjs": "^3.0.2",

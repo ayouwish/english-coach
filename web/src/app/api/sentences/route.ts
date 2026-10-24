@@ -4,12 +4,23 @@ import { HttpError, requireUser } from "@/lib/auth";
 import {
   createCustomSentence,
   createCustomSentencesBatch,
-  listVisibleSentences,
+  listVisibleSentenceRows,
+  toSentenceView,
   type Level,
 } from "@/lib/corpus";
+import { resolveFocus, isMinimalPairSentence } from "@/lib/focus";
 import { jsonOk, route } from "@/lib/http";
 
 export const dynamic = "force-dynamic";
+
+function safeArr(raw: string): string[] {
+  try {
+    const v = JSON.parse(raw);
+    return Array.isArray(v) ? v : [];
+  } catch {
+    return [];
+  }
+}
 
 /**
  * GET /api/sentences —— 跟读语料。
@@ -20,12 +31,34 @@ export const GET = route(async (req: NextRequest) => {
   await ensureBootstrap();
   const user = await requireUser();
   const level = req.nextUrl.searchParams.get("level");
-  const rows = await listVisibleSentences(user, { level: level ? level.toUpperCase() : null });
+  const focusRaw = req.nextUrl.searchParams.get("focus");
+  const focus = resolveFocus(focusRaw);
+  // 用原始行过滤（儿童视图的 focus_phonemes 会被剥离，不能拿来过滤）
+  let rows = await listVisibleSentenceRows(user, { level: level ? level.toUpperCase() : null });
   const mineOnly = req.nextUrl.searchParams.get("mine") === "1";
-  const list = mineOnly ? rows.filter((r) => r.mine) : rows;
+  if (mineOnly) rows = rows.filter((r) => r.ownerUserId === user.id);
+
+  // 强化练习队列（task-16 C）：只留 focus_phonemes 含该音素的句子，最小对立对优先
+  if (focus.ipa) {
+    rows = rows
+      .filter((r) => {
+        try {
+          return (JSON.parse(r.focusPhonemes) as string[]).includes(focus.ipa as string);
+        } catch {
+          return false;
+        }
+      })
+      .sort((a, b) => {
+        const pa = isMinimalPairSentence(safeArr(a.tags)) ? 0 : 1;
+        const pb = isMinimalPairSentence(safeArr(b.tags)) ? 0 : 1;
+        return pa !== pb ? pa - pb : a.sortOrder - b.sortOrder;
+      });
+  }
+  const list = rows.map((r) => toSentenceView(r, user));
 
   return jsonOk({
     level: level ?? null,
+    focus: focus.ipa ? { active: true, label: focus.label, phoneme: user.isChild ? null : focus.ipa } : { active: false },
     count: list.length,
     user_level: user.cefrLevel,
     official_count: list.filter((r) => r.owner_user_id === null).length,

@@ -9,7 +9,7 @@
  *
  * 覆盖（task-11 要求）：
  *   API：/api/review、/api/attempts、/api/blind-tests、/api/parent/summary（应 403）
- *   页面：/practice、/review、/、/blindtest、/blindtest/report（额外：/chat、/settings）
+ *   页面：/practice、/review、/、/blindtest、/blindtest/report、/report（额外：/chat、/settings）
  *
  * 用法：BASE_URL=http://127.0.0.1:3010 node scripts/check-child-ipa.mjs
  */
@@ -127,7 +127,7 @@ await checkApi(cookie, "/api/blind-tests");
 await checkApi(cookie, "/api/parent/summary", { expectStatus: 403 });
 
 console.log("\n── 页面 HTML（含 RSC flight 负载）──");
-for (const p of ["/practice", "/review", "/", "/blindtest", "/blindtest/report"]) {
+for (const p of ["/practice", "/review", "/", "/blindtest", "/blindtest/report", "/report"]) {
   await checkPage(cookie, p);
 }
 console.log("\n── 额外覆盖（同样对儿童可访问）──");

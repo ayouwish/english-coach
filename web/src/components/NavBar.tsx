@@ -7,6 +7,7 @@ const BASE_LINKS = [
   { href: "/chat", label: "💬 对话训练" },
   { href: "/review", label: "📒 错音本" },
   { href: "/blindtest", label: "🎯 盲测周报" },
+  { href: "/report", label: "🔍 发音诊断" },
   { href: "/settings", label: "⚙️ 设置" },
 ];
 

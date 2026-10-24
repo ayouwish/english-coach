@@ -63,14 +63,22 @@ export function toSentenceView(
   };
 }
 
+/** 可见语料的**原始行**（含完整 focus_phonemes，即使请求者是儿童）——仅供服务端过滤用 */
+export async function listVisibleSentenceRows(
+  user: SessionUser,
+  opts: { level?: string | null } = {},
+) {
+  const db = getDb();
+  const visible = await visibleSentencesWhere(user);
+  const where = opts.level ? and(visible, eq(sentences.level, opts.level)) : visible;
+  return db.select().from(sentences).where(where).orderBy(asc(sentences.sortOrder));
+}
+
 export async function listVisibleSentences(
   user: SessionUser,
   opts: { level?: string | null } = {},
 ): Promise<SentenceView[]> {
-  const db = getDb();
-  const visible = await visibleSentencesWhere(user);
-  const where = opts.level ? and(visible, eq(sentences.level, opts.level)) : visible;
-  const rows = await db.select().from(sentences).where(where).orderBy(asc(sentences.sortOrder));
+  const rows = await listVisibleSentenceRows(user, opts);
   return rows.map((r) => toSentenceView(r, user));
 }
 
