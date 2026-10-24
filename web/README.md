@@ -74,6 +74,7 @@ pnpm db:seed -- --reset-passwords        # 强制把密码重置回上表
 | `pnpm check:practice-ui` | 跟读 UI 断言：雷达图 null 轴、词级长度编码排序、整句没听到的判定 + `/practice` HTML（正常态 vs 没听到态） |
 | `pnpm check:warmup` | 参考音预热：`/api/warmup` 打通 voice §12，第二次调用应命中缓存（证明"点示范音秒出"） |
 | `pnpm check:diagnosis` | 发音诊断：`/api/diagnosis` 分档/排序/零 IPA、`/practice?focus=` 过滤与 banner、`/report` 口型微课与儿童零 IPA |
+| `pnpm check:chat-speech` | 对话朗读：`/api/tts` 同句两次耗时对比（缓存）、`/chat` 里自动朗读开关/重播按钮的 aria 断言、儿童 slow / 成人 normal |
 
 ## 4. 自测（无浏览器环境下的验收方式）
 
@@ -255,6 +256,27 @@ GET/PATCH /api/settings       偏好设置（儿童不能自行改时长/自由�
 - **强化练习队列**：`/practice?focus=<ipa|儿童标签>`（服务端 `resolveFocus` 两种写法都认）——
   句子按 `focus_phonemes` 过滤、**最小对立对优先**，顶部 banner 说明来源并提供「退出聚焦」；
   **无 focus 参数时行为与原来完全一致**（回归断言在 `check:diagnosis` 里）。
+
+## 6.4 对话朗读（task-18）
+
+- **每条 AI 回复自动朗读**：`ChatClient` 在拿到回复后用 `void readAssistant(index, reply)` 异步补声音 ——
+  **文字先渲染**（`setMessages` 在前，TTS 在后），TTS 慢/失败都不影响消息出现。
+  开场白同样朗读（点场景那次点击本身就是用户手势，最容易被自动播放策略放行）。
+- **不重叠 / 可停止**：`speak()` 内部先 `stopSpeech()` 再播；新一轮用户发言、关闭开关、切场景
+  （`clearSpeechCache()`）、组件卸载（`disposeSpeech()`）都会停止并 `revokeObjectURL`。
+- **语速/格式**：儿童 `slow`、成人 `normal`。**聊天朗读用 `format: "mp3"`**（回复每次都是新文本 → 必 cache miss，
+  此时体积小/传输快：实测同一句 wav 195666B vs mp3 56160B ≈ 1/3）；**练习页的「听示范」保持 wav**
+  （与参考音分析共用预热缓存，是 0 等待的）。
+- **"正在说话"状态（TTS 真的会慢）**：真实合成延迟在 1–11s 剧烈波动，所以消息旁会依次显示
+  `🔊 正在准备语音…` → `🔊 正在说话…`；**不阻塞下一轮输入**（回复文字到达即可继续打字/说话，音频后到）。
+  超过 **6s** 未返回就放弃等待，该条的重播按钮变成显眼的 **`🔊 重试播放`** 并提示「语音合成太慢，先不等了」。
+- **可排查性**：`/api/tts` 透传 `x-tts-provider` / `x-audio-duration-ms`，前端记在 `console.info("[chat-speech] provider=… duration=…")`。
+- **object URL 缓存**：key = `(语速, 文本)`，同一条消息重播**不再请求** `/api/tts`。
+- **自动播放被拦截的兜底**：`play()` 抛 `NotAllowedError` 时显示「🔇 浏览器拦截了自动播放 —— 点这里开启朗读」，
+  用户点一次即恢复（浏览器要求一次用户手势）。
+- **儿童语音输入默认展开**（`showMic` 初始 `isChild`）。
+- `/chat` 还服务端渲染「最近一次对话（只读）」，每条助手消息带 `aria-label` 的重播按钮
+  —— 这样无浏览器环境也能对 `aria-label` 做 HTML 断言。
 
 ## 7. 儿童模式（`age_band=child`）
 

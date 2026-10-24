@@ -19,7 +19,8 @@
     "check:child-ipa": "node scripts/check-child-ipa.mjs",
     "check:practice-ui": "node scripts/check-practice-ui.mjs",
     "check:warmup": "node scripts/check-warmup.mjs",
-    "check:diagnosis": "node scripts/check-diagnosis.mjs"
+    "check:diagnosis": "node scripts/check-diagnosis.mjs",
+    "check:chat-speech": "node scripts/check-chat-speech.mjs"
   },
   "dependencies": {
     "bcryptjs": "^3.0.2",

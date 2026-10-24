@@ -10,7 +10,7 @@ export async function POST(req: NextRequest) {
   try {
     const user = await requireUser();
     const body = (await req.json().catch(() => null)) as
-      | { text?: string; rate?: "slow" | "normal"; voice?: string }
+      | { text?: string; rate?: "slow" | "normal"; voice?: string; format?: "wav" | "mp3" }
       | null;
     const text = (body?.text ?? "").trim();
     if (!text) throw new HttpError(400, "bad_request", "缺少 text");
@@ -19,7 +19,11 @@ export async function POST(req: NextRequest) {
     const prefs = await getPrefs(user.id);
     const rate = body?.rate ?? (user.isChild ? "slow" : prefs.ttsRate);
 
-    const audio = await callTts({ text, rate, voice: body?.voice ?? prefs.ttsVoice ?? null });
+    // 默认 wav：**与参考音分析共用同一份预热缓存**（练习页的「听示范」因此零等待）。
+    // 但对话回复是每次全新文本（必 miss），此时 mp3 体积小、传输快（实测 693ms vs wav 1407ms），
+    // 所以聊天页可以显式传 format: "mp3"。
+    const format = body?.format === "mp3" ? "mp3" : "wav";
+    const audio = await callTts({ text, rate, voice: body?.voice ?? prefs.ttsVoice ?? null, format });
     return new NextResponse(audio.body, {
       status: 200,
       headers: {

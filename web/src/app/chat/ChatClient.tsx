@@ -2,6 +2,8 @@
 
 import { useEffect, useRef, useState } from "react";
 import { Recorder } from "@/components/Recorder";
+import { ReplayButton } from "@/components/ReplayButton";
+import { clearSpeechCache, disposeSpeech, speak, stopSpeech, type SpeechRate } from "@/lib/speech-player";
 import type { DialogueCorrection } from "@/lib/types";
 
 interface ScenarioItem {
@@ -71,14 +73,76 @@ export function ChatClient({
   const [degradedLlm, setDegradedLlm] = useState(false);
   const [usage, setUsage] = useState(initialUsage);
   const [done, setDone] = useState(false);
-  const [showMic, setShowMic] = useState(false);
+  // 儿童默认展开语音输入：孩子不用找按钮（task-18 #10）
+  const [showMic, setShowMic] = useState(isChild);
   const listEndRef = useRef<HTMLDivElement | null>(null);
+
+  // ── 语音朗读（task-18）────────────────────────────────────────────────────
+  const [autoRead, setAutoRead] = useState(true); // 儿童/成人默认都开，可手动关
+  const [speechBlocked, setSpeechBlocked] = useState(false);
+  /** 正在准备/正在说话（TTS 合成可能要 1–11s，必须让用户看到进度） */
+  const [speechStatus, setSpeechStatus] = useState<{ index: number; phase: "preparing" | "speaking" } | null>(
+    null,
+  );
+  /** 这一条 TTS 超时/失败 → 把重播按钮变成显眼的「重试播放」 */
+  const [slowIndex, setSlowIndex] = useState<number | null>(null);
+  const lastSpokenRef = useRef<{ index: number; text: string } | null>(null);
+  const speechRate: SpeechRate = isChild ? "slow" : "normal";
+
+  /** 朗读某条 assistant 消息：先渲染文字，这里只负责"异步补上声音" */
+  async function readAssistant(index: number, text: string) {
+    lastSpokenRef.current = { index, text };
+    if (!autoRead) return;
+    // 文字已经渲染；这里只是异步补声音。用户可以立刻继续打字/说话，不阻塞下一轮。
+    setSpeechStatus({ index, phase: "preparing" });
+    setSlowIndex(null);
+    const outcome = await speak(text, speechRate, {
+      format: "mp3", // 聊天回复每次都是新文本（必 miss）→ mp3 更小更快；练习页示范音仍走 wav 共用预热缓存
+      timeoutMs: 6000, // 超过 6s 直接放弃等待，交给「重试播放」
+      onMeta: (m) =>
+        console.info(`[chat-speech] provider=${m.provider ?? "-"} duration=${m.durationMs ?? "-"} format=${m.format}`),
+      onEnd: () => {
+        setSpeechStatus((cur) => (cur?.index === index ? null : cur));
+      },
+    });
+    if (outcome === "played") {
+      setSpeechStatus({ index, phase: "speaking" });
+      return;
+    }
+    setSpeechStatus(null);
+    if (outcome === "blocked") setSpeechBlocked(true);
+    if (outcome === "timeout" || outcome === "failed") setSlowIndex(index);
+  }
+
+  /** 用户点一次解锁自动播放（浏览器要求用户手势） */
+  async function unlockSpeech() {
+    setSpeechBlocked(false);
+    setAutoRead(true);
+    const last = lastSpokenRef.current;
+    if (last) await readAssistant(last.index, last.text);
+  }
+
+  // 卸载：停止播放 + 释放所有 object URL
+  useEffect(() => {
+    return () => disposeSpeech();
+  }, []);
+
+  /** 统一"停掉声音 + 清状态"（切场景、关闭开关、新一轮发言都走这里） */
+  function silence() {
+    stopSpeech();
+    setSpeechStatus(null);
+    setSlowIndex(null);
+  }
 
   useEffect(() => {
     listEndRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
   }, [messages]);
 
   async function start(scenario: ScenarioItem) {
+    // 切场景：停掉正在播的、清空 object URL 缓存（任务要求 #13）
+    clearSpeechCache();
+    setSpeechBlocked(false);
+    silence();
     setBusy(true);
     setError(null);
     setLimitMessage(null);
@@ -113,6 +177,9 @@ export function ChatClient({
       setSuggestions([]);
       setDone(false);
       setDegraded(false);
+      // 开场白也朗读（这次点击本身就是用户手势，最容易通过自动播放策略）
+      const opening = data.messages?.[0]?.text ?? scenario.opening_line;
+      void readAssistant(0, opening);
     } catch (err) {
       setError((err as Error).message);
     } finally {
@@ -122,9 +189,12 @@ export function ChatClient({
 
   async function send(text: string) {
     if (!sessionId || !text.trim()) return;
+    // 新的一轮开始：先停止上一条朗读，避免与"正在等的回复"叠音（不阻塞输入）
+    silence();
     setBusy(true);
     setError(null);
     setInput("");
+    const assistantIndex = messages.length + 1; // 用户消息后的那条
     setMessages((prev) => [...prev, { role: "user", text }]);
     try {
       const res = await fetch(`/api/chat/sessions/${sessionId}/turn`, {
@@ -156,6 +226,8 @@ export function ChatClient({
       setDegraded(Boolean(data.degraded));
       setDegradedLlm(data.degraded_llm === true);
       setUsage((u) => ({ ...u, minutes: Math.round((u.minutes + 0.5) * 10) / 10 }));
+      // 文字已经渲染（上面的 setMessages），这里再异步补声音，绝不阻塞消息出现
+      void readAssistant(assistantIndex, data.reply);
     } catch (err) {
       setError((err as Error).message);
     } finally {
@@ -199,6 +271,39 @@ export function ChatClient({
           {voiceReachable ? "" : " · 语音识别未就绪，仍可直接打字"}
           {isChild ? " · 儿童安全模式：服务端强制过滤不当内容" : ""}
         </p>
+        <div className="mt-3 flex flex-wrap items-center gap-2">
+          <button
+            type="button"
+            data-testid="autoread-toggle"
+            aria-pressed={autoRead}
+            aria-label={autoRead ? "关闭自动朗读" : "开启自动朗读"}
+            onClick={() => {
+              const next = !autoRead;
+              setAutoRead(next);
+              if (!next) silence();
+            }}
+            className={`ec-btn ${autoRead ? "ec-btn-primary" : "ec-btn-ghost"}`}
+          >
+            {autoRead ? "🔊 自动朗读：开" : "🔇 自动朗读：关"}
+          </button>
+          <span className="text-xs text-[var(--ec-muted)]">
+            每条回复会自动读出来（{isChild ? "慢速" : "正常语速"}）。语音合成最长可能要几秒，
+            期间消息旁会显示「正在准备语音…」，等不及也可以点消息里的「🔊 重播 / 重试播放」。
+          </span>
+        </div>
+
+        {speechBlocked ? (
+          <button
+            type="button"
+            data-testid="speech-unlock"
+            aria-label="点这里开启朗读"
+            onClick={unlockSpeech}
+            className="ec-pop mt-2 block w-full rounded-xl bg-[#fff3d6] p-3 text-left text-sm"
+          >
+            🔇 浏览器拦截了自动播放 —— <strong>点这里开启朗读</strong>（只需点一次）
+          </button>
+        ) : null}
+
         {limitMessage ? (
           <p className="ec-pop mt-3 rounded-xl bg-[#fff3d6] p-3 text-sm" data-testid="limit-banner">
             🌙 {limitMessage}
@@ -267,6 +372,26 @@ export function ChatClient({
                 ) : null}
                 {m.flag === "unsafe_filtered" ? (
                   <p className="mt-1 text-xs">（内容已按儿童安全规则替换）</p>
+                ) : null}
+                {m.role === "assistant" ? (
+                  <div className="mt-2 flex flex-wrap items-center gap-2">
+                    <ReplayButton
+                      text={m.text}
+                      rate={speechRate}
+                      forcePlaying={speechStatus?.index === i && speechStatus.phase === "speaking"}
+                      highlight={slowIndex === i}
+                    />
+                    {speechStatus?.index === i ? (
+                      <span className="text-xs text-[var(--ec-muted)]" data-testid="speech-status">
+                        {speechStatus.phase === "preparing" ? "🔊 正在准备语音…" : "🔊 正在说话…"}
+                      </span>
+                    ) : null}
+                    {slowIndex === i ? (
+                      <span className="text-xs text-[#b45309]" data-testid="speech-slow">
+                        语音合成太慢，先不等了 —— 点「🔊 重试播放」
+                      </span>
+                    ) : null}
+                  </div>
                 ) : null}
               </div>
             ))}
