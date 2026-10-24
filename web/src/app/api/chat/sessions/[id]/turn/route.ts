@@ -150,6 +150,7 @@ export const POST = route(async (req: NextRequest, ctx: { params: Promise<{ id: 
   return jsonOk({
     session_id: id,
     provider: reply.provider,
+    degraded_llm: reply.degraded_llm === true,
     degraded,
     capabilities: caps.capabilities,
     reply: reply.reply,

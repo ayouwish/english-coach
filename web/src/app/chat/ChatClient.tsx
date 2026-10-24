@@ -39,6 +39,7 @@ interface TurnResponse {
   flag: string;
   done: boolean;
   degraded?: boolean;
+  degraded_llm?: boolean;
   error?: { message?: string };
 }
 
@@ -66,6 +67,8 @@ export function ChatClient({
   const [limitMessage, setLimitMessage] = useState<string | null>(null);
   const [suggestions, setSuggestions] = useState<string[]>([]);
   const [degraded, setDegraded] = useState(false);
+  // v1.4 §6：本条回复是否由「固定话术」生成（未接入大模型）
+  const [degradedLlm, setDegradedLlm] = useState(false);
   const [usage, setUsage] = useState(initialUsage);
   const [done, setDone] = useState(false);
   const [showMic, setShowMic] = useState(false);
@@ -151,6 +154,7 @@ export function ChatClient({
       setSuggestions(data.suggested_replies ?? []);
       setDone(Boolean(data.done));
       setDegraded(Boolean(data.degraded));
+      setDegradedLlm(data.degraded_llm === true);
       setUsage((u) => ({ ...u, minutes: Math.round((u.minutes + 0.5) * 10) / 10 }));
     } catch (err) {
       setError((err as Error).message);
@@ -275,7 +279,17 @@ export function ChatClient({
             </div>
           ) : (
             <>
-              {suggestions.length > 0 ? (
+              {degradedLlm ? (
+        <p
+          className="rounded-xl bg-[#fff3d6] px-3 py-2 text-xs text-[#7a4d00]"
+          data-testid="degraded-llm-banner"
+        >
+          ⚠️ 当前回复来自<strong>内置话术</strong>（还没接入大模型），它会按剧本往下走、
+          不会真的回应你说的话。配好 `LLM_API_KEY` 并重启 voice 后即可变成智能对话。
+        </p>
+      ) : null}
+
+      {suggestions.length > 0 ? (
                 <div className="mt-3 flex flex-wrap gap-2" data-testid="suggested-replies">
                   {suggestions.map((s) => (
                     <button

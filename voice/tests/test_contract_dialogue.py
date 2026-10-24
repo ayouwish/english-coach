@@ -15,6 +15,7 @@ SCENARIO = {
 LEARNER = {"age_band": "child", "level": "A2", "native_language": "zh", "child_safe": True}
 DIALOGUE_KEYS = {
     "provider",
+    "degraded_llm",  # 契约 v1.4 新增（可选、向后兼容）：本条回复是不是"没接大模型"
     "reply",
     "reply_zh",
     "correction",
@@ -45,6 +46,7 @@ def test_dialogue_template_fallback_contract(client):
     body = response.json()
     assert set(body) == DIALOGUE_KEYS
     assert body["provider"] == "template"
+    assert body["degraded_llm"] is True, "没配 LLM 时必须如实告诉前端" 
     assert body["reply"] and body["reply_zh"]
     assert set(body["correction"]) == CORRECTION_KEYS
     assert body["correction"]["type"] in ("grammar", "vocabulary", "politeness", "pronunciation", "none")

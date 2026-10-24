@@ -155,6 +155,8 @@ export interface DialogueCorrection {
 
 export interface DialogueResult {
   provider: string;
+  /** true = 本条不是大模型生成的（voice 侧降级为固定话术）；见契约 v1.4 §6 */
+  degraded_llm?: boolean;
   reply: string;
   reply_zh: string | null;
   correction: DialogueCorrection;

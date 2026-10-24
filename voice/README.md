@@ -217,9 +217,26 @@ F0 用 praat 自相关法，搜索区间 **60–500 Hz**，输出网格 20ms（�
   "th 音 / 短 i 音"这类描述（`strip_ipa` / `child_title`），并保证普通英文单词不被改坏。
 - 模板反馈（`app/feedback_templates.py`）：按 `hint_key` 查 17 条中文教学提示表，
   `severity` 缺失时按 `score`/`error_type` 推导，离线可用，`provider="template"`。
-- `/v1/dialogue`：LLM 走场景 `role_prompt`；降级用内置场景话术 + 规则纠错
-  （`I want` → 礼貌、`I is` → be 动词、三单 -s …），`suggested_replies` 保证 2–3 条，
-  `turn_index>=6` 时 `done=true`；不安全内容 → `flag="unsafe_filtered"` 且 `reply` 被替换。
+- `/v1/dialogue`（task-17 重写）：LLM 走场景 `role_prompt`；prompt 内置**年龄适配**
+  （`age_band=child` → A1 词、≤12 词、一次一个简单问题；teen/adult 按 CEFR）、
+  **连续性**（必须回应学习者上一句，禁止 "Tell me more / That sounds good" 这类万能句）、
+  **不重复问**（history 里的问题列进 `ALREADY_ASKED`）、**纠错分级**（gentle 只纠影响理解的基础错 /
+  standard 有错纠 1 处 / none 恒不纠；纠正必须真的改变内容，否则视为无错）、**儿童安全**与
+  两段 few-shot JSON 示例。history 只带最近 8 条；JSON 非法或缺 `reply` 时**严格重试一次**再降级。
+  降级用内置场景话术 + 规则纠错（`I want` → 礼貌、`I is` → be 动词、三单 -s …），
+  `suggested_replies` 保证 2–3 条且每条 ≤6 词、互不相同；`turn_index>=6` 时 `done=true`；
+  不安全内容 → `flag="unsafe_filtered"` 且 `reply`/建议被替换。
+- **`degraded_llm`（契约 v1.4 新增，可选字段）**：`/v1/dialogue` 响应里的布尔值，
+  `true` = 本条不是大模型生成的（模板降级）。前端据此提示"当前为离线对话"，
+  别让用户把固定台词当成"智能对话"。`provider` 字段同时保持诚实（降级时是 `"template"`）。
+
+  ```json
+  { "provider": "template", "degraded_llm": true, "reply": "…", "reply_zh": "…", "correction": {…},
+    "suggested_replies": ["…", "…"], "target_words": ["…"], "flag": "ok", "done": false }
+  ```
+
+  配置方式（`voice/.env`）：`LLM_BASE_URL`（如 `https://api.deepseek.com/v1` 或 `http://localhost:11434/v1`）、
+  `LLM_API_KEY`、`LLM_MODEL`。没配时 `/v1/health` 的 `providers.llm` 是 `template`，对话走降级且 `degraded_llm=true`。
 
 ---
 
@@ -357,7 +374,7 @@ app/
   degrade.py      最终兜底（永不失败）
   providers/      base / mock / azure / local / registry
 scripts/warmup.py 批量预热 CLI
-tests/            437 个用例（契约字段、mock 全链路、合成信号语调、降级、缓存/预热/并发、音素归一化、跨 provider key、反馈质量、TTS 格式与 /v1/tts 缓存）
+tests/            463 个用例（契约字段、mock 全链路、合成信号语调、降级、缓存/预热/并发、音素归一化、跨 provider key、反馈质量、TTS 格式与 /v1/tts 缓存、对话 prompt/健壮性）
 ```
 
 示范音频写入 `$DATA_DIR/cache/audio/<sha1(text|voice|rate)>.<ext>`（v1.0 的 `$DATA_DIR/audio/` 仍可读，
@@ -373,7 +390,7 @@ tests/            437 个用例（契约字段、mock 全链路、合成信号�
 ## 10. 测试
 
 ```bash
-.venv/bin/python -m pytest  # 437 passed（离线；真实 Azure 用例需 voice/.env 的 key，可用 VOICE_SKIP_REAL_AZURE=1 跳过）
+.venv/bin/python -m pytest  # 463 passed（离线；真实 Azure 用例需 voice/.env 的 key，可用 VOICE_SKIP_REAL_AZURE=1 跳过）
 ```
 
 覆盖：
@@ -381,6 +398,7 @@ tests/            437 个用例（契约字段、mock 全链路、合成信号�
 - mock 全链路 + 参考音频落盘与 `Cache-Control`；
 - 合成信号验证 F0/DTW/worst_regions（见 §6）；
 - TTS 输出格式（见 §5/§8.5）：setter 调用 + 真实字节容器/采样率断言（含真机 Azure）、`/v1/tts` miss→hit、fmt 参与 key、v2 旧缓存不命中；
+- 对话质量（见 §7）：prompt 的年龄/连续性/纠错分级约束、history 截断到 8、非法 JSON 重试一次后诚实降级（`degraded_llm=true`）、suggested_replies 兜底、儿童安全过滤；
 - 反馈质量（见 §7.1）：没听到语音时不含表扬词、Omission 练习词相关、actual 缺失不编造；
 - 音素符号归一化（见 §12）：变体逐项覆盖、幂等、nbest 顺序/分数不变、未知符号原样返回、issues 同步归一化；
 - 缓存 key 的 provider 维度：同文本不同 provider 的 key 不同、切换 provider 必须 miss、v1.1 旧条目永不命中（见 §8.1）；

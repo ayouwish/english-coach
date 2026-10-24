@@ -6,6 +6,7 @@ import { HttpError, requireUser } from "@/lib/auth";
 import { jsonOk, route } from "@/lib/http";
 import { assertWithinDailyLimit } from "@/lib/limits";
 import { ageOf, isScenarioAllowedFor } from "@/lib/chat";
+import { openingZh } from "@/lib/opening-zh";
 
 export const dynamic = "force-dynamic";
 
@@ -50,7 +51,7 @@ export const POST = route(async (req: NextRequest) => {
     chatSessionId: sessionId,
     role: "assistant",
     text: scenario.openingLine,
-    textZh: null,
+    textZh: openingZh(scenario.id),
     correctionJson: null,
     flag: "ok",
     audioPath: null,

@@ -1,4 +1,4 @@
-# 接口契约 v1.3（FROZEN · 2026-10-23）
+# 接口契约 v1.4（FROZEN · 2026-10-24）
 
 > **本文件是唯一事实来源（single source of truth）。**
 
@@ -10,6 +10,7 @@
 | 2026-10-22 | v1.1 | 新增 `POST /v1/warmup`（§12）、`provider_meta.cache`；数据库新增盲测表与 `attempts.is_blind` / `sentences.owner_user_id`（§13） | **向后兼容**：新端点、新字段均可选，v1.0 的客户端不受影响 |
 | 2026-10-23 | v1.2 | **修正 §12.2 缓存 key**：加入 TTS provider 身份与 `"v2"` 版本前缀，避免跨 provider 命中错误缓存 | **缓存失效**（可再生，重新预热即可）；**接口形状不变**，客户端无感 |
 | 2026-10-23 | v1.3 | §12.2 缓存 key 再加 `fmt` 分量并升到 `"v3"`：TTS 格式设置修复后音频从 16kHz 变 24kHz，且 mp3/wav 是不同产物；`/v1/tts` 接入同一套缓存 | **缓存失效一次**（重新预热即可）；`/v1/tts` 响应新增 `X-Cache` 与 `X-Audio-Codec/Sample-Rate/Container` 观测头 |
+| 2026-10-24 | v1.4 | §6 `/v1/dialogue` 响应新增**可选**字段 `degraded_llm`（`true` = 本条不是大模型生成，走了模板降级）；修正 prompt 质量约束（年龄适配/连续性/纠错分级） | **向后兼容**：新字段可选，v1.3 客户端无感 |
 > `web/` 与 `voice/` 两个模块并行开发，任何一方需要改本契约，必须先通知 Lead 并同步改本文件。
 > 冻结范围：路径、请求字段名、响应字段名、枚举值、错误码。
 > 未冻结范围：各 provider 内部实现、日志格式、额外字段（允许追加 `provider_meta` 等可选字段，不得删除或改名已有字段）。
@@ -288,6 +289,7 @@
 ```json
 {
   "provider": "deepseek",
+  "degraded_llm": false,
   "reply": "Sure! Hot or iced?",
   "reply_zh": "好的！热的还是冰的？",
   "correction": {
@@ -309,6 +311,9 @@
 - `correction_level` ∈ `"gentle"`(默认，只纠1处且语气轻) `| "standard"` `| "none"`(纯聊天不纠错)。
 - `suggested_replies`：2–3 条**学习者当前水平能说出口**的应答，点击即用（儿童模式必备，降低开口门槛）。
 - `flag` ∈ `"ok" | "unsafe_filtered" | "off_topic"`；`unsafe_filtered` 时 `reply` 必须已被替换为安全内容。
+- **`degraded_llm`**（v1.4 新增，可选布尔）：`true` 表示**本条回复不是大模型生成的**（LLM 未配置 / 超时 / 输出非法 JSON 重试后仍失败 → 走 `template` 固定话术）。
+  - 前端**必须**在 `degraded_llm=true` 时给出提示（例如"离线对话：当前未接入大模型"），否则用户会把按轮次念的固定台词误认为智能对话——这种误解不会报错，只会让产品显得很笨。
+  - 与 `provider` 的关系：降级时 `provider="template"` 且 `degraded_llm=true`；正常时 `provider` 是实际模型（`deepseek` / `openai_compatible` / `ollama` …）且 `degraded_llm=false`。**两者不得互相矛盾。**
 - `done` 为 `true` 表示本场景该收尾了（`turn_index >= 6` 或 LLM 判定）。
 
 ---

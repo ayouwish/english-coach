@@ -21,7 +21,7 @@ from .cache import (
 )
 from .config import get_settings
 from .degrade import degraded_assessment, degraded_tts
-from .dialogue import DIALOGUE_SYSTEM_PROMPT, build_dialogue_user_prompt, sanitize_dialogue, template_dialogue
+from .dialogue import complete_dialogue
 from .errors import BadRequest, PayloadTooLarge
 from .feedback_templates import (
     CHILD_EXTRA_RULE,
@@ -410,18 +410,10 @@ async def dialogue(payload: DialogueRequest) -> dict:
     body = payload.model_dump()
     if body.get("correction_level") not in (None, "", "gentle", "standard", "none"):
         raise BadRequest(f"correction_level invalid: {body.get('correction_level')!r}")
-    llm = LLMClient()
-    if llm.available:
-        outcome = llm.chat_json(
-            DIALOGUE_SYSTEM_PROMPT,
-            build_dialogue_user_prompt(body),
-            timeout_s=execution.TIMEOUTS["dialogue"],
-        )
-        if outcome.ok and outcome.data:
-            cleaned = sanitize_dialogue(outcome.data, body)
-            if cleaned.get("reply"):
-                return {"provider": outcome.provider, **cleaned}
-    return template_dialogue(body)
+    # complete_dialogue 内部：LLM 优先 -> JSON 失败严格重试一次 -> 降级模板；
+    # 返回体始终带 provider 与 degraded_llm（降级不伪装成大模型）。
+    # httpx 是阻塞调用，放线程池避免卡住事件循环。
+    return await run_in_threadpool(complete_dialogue, LLMClient(), body, execution.TIMEOUTS["dialogue"])
 
 
 # --------------------------------------------------------------------------------------
