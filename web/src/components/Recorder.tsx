@@ -56,6 +56,8 @@ export function Recorder({
   const streamRef = useRef<MediaStream | null>(null);
   const chunksRef = useRef<BlobPart[]>([]);
   const startedAtRef = useRef<number>(0);
+  /** 正在取消：onstop 里据此丢弃录音（不调 onRecorded、不提交、不产生云端调用） */
+  const cancelledRef = useRef(false);
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const unmountedRef = useRef(false);
 
@@ -97,8 +99,15 @@ export function Recorder({
         setSeconds(0);
         setIsRecording(false);
         recorderRef.current = null;
-        // ★ 立刻释放麦克风：让音频输出（示范音/回放）恢复正常
+        // ★ 立刻释放麦克风：让音频输出（示范音/回放）恢复正常 —— 取消路径同样必须走到这里
         releaseStream();
+        // 取消：彻底丢弃，不触发 onRecorded（也就不会提交/评测/花钱）
+        if (cancelledRef.current) {
+          cancelledRef.current = false;
+          chunksRef.current = [];
+          setError(null);
+          return;
+        }
         // 太短多半是误触（点了开始又立刻点停止）：直接拦掉，别浪费一次云端评测
         if (durationMs < MIN_RECORD_MS) {
           setError(
@@ -151,6 +160,23 @@ export function Recorder({
     if (recorderRef.current?.state === "recording") recorderRef.current.stop();
   }, []);
 
+  /** 取消录音：停止 → 丢弃 → 释放麦克风（不调 onRecorded） */
+  const cancel = useCallback(() => {
+    cancelledRef.current = true;
+    stopTimer();
+    setSeconds(0);
+    setError(null);
+    chunksRef.current = [];
+    const rec = recorderRef.current;
+    if (rec && rec.state === "recording") {
+      rec.stop(); // onstop 里会 releaseStream() 并因 cancelledRef 直接 return
+    } else {
+      // 极端情况（还没进入 recording 就被取消）：直接释放设备
+      setIsRecording(false);
+      releaseStream();
+    }
+  }, [releaseStream, stopTimer]);
+
   // 卸载：确保设备一定被释放（否则会一直占着音频输出）
   useEffect(() => {
     unmountedRef.current = false;
@@ -177,9 +203,20 @@ export function Recorder({
     <div className="flex flex-col gap-3">
       <div className="flex flex-wrap items-center gap-3">
         {isRecording ? (
-          <button type="button" className="ec-btn ec-recording bg-[#ef4444] text-white" onClick={stop}>
-            ⏹️ {isChild ? "说完啦" : "停止录音"} {seconds}s
-          </button>
+          <>
+            <button type="button" className="ec-btn ec-recording bg-[#ef4444] text-white" onClick={stop}>
+              ⏹️ {isChild ? "说完啦" : "停止录音"} {seconds}s
+            </button>
+            <button
+              type="button"
+              data-testid="record-cancel"
+              aria-label={isChild ? "不要了，取消这次录音" : "取消这次录音"}
+              onClick={cancel}
+              className="ec-btn ec-btn-ghost"
+            >
+              ✖️ {isChild ? "不要了" : "取消"}
+            </button>
+          </>
         ) : (
           <button
             type="button"

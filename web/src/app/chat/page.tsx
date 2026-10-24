@@ -2,7 +2,7 @@ import { redirect } from "next/navigation";
 import { asc, desc, eq } from "drizzle-orm";
 import { ensureBootstrap, getDb } from "@/db";
 import { chatMessages, chatScenarios, chatSessions } from "@/db/schema";
-import { ReplayButton } from "@/components/ReplayButton";
+import { ttsUrl } from "@/lib/tts-url";
 import { getCurrentUser } from "@/lib/auth";
 import { getCapabilities } from "@/lib/voice";
 import { getDailyUsage } from "@/lib/usage";
@@ -97,9 +97,14 @@ export default async function ChatPage() {
                 <p className="font-medium">{m.text}</p>
                 {m.textZh ? <p className="mt-0.5 text-xs opacity-80">{m.textZh}</p> : null}
                 {m.role === "assistant" ? (
-                  <div className="mt-2">
-                    <ReplayButton text={m.text} rate={speechRate} />
-                  </div>
+                  <audio
+                    controls
+                    preload="none"
+                    src={ttsUrl(m.text, speechRate, "mp3")}
+                    data-testid="tts-audio"
+                    aria-label={`朗读这句话：${m.text}`}
+                    className="mt-2 h-9 w-full max-w-[280px]"
+                  />
                 ) : null}
               </div>
             ))}

@@ -272,8 +272,16 @@ GET/PATCH /api/settings       偏好设置（儿童不能自行改时长/自由�
   超过 **6s** 未返回就放弃等待，该条的重播按钮变成显眼的 **`🔊 重试播放`** 并提示「语音合成太慢，先不等了」。
 - **可排查性**：`/api/tts` 透传 `x-tts-provider` / `x-audio-duration-ms`，前端记在 `console.info("[chat-speech] provider=… duration=…")`。
 - **object URL 缓存**：key = `(语速, 文本)`，同一条消息重播**不再请求** `/api/tts`。
-- **自动播放被拦截的兜底**：`play()` 抛 `NotAllowedError` 时显示「🔇 浏览器拦截了自动播放 —— 点这里开启朗读」，
-  用户点一次即恢复（浏览器要求一次用户手势）。
+- **原生播放器是主路径（task-19 修复"没声音"）**：每条 assistant 消息渲染
+  `<audio controls preload="none" src="/api/tts?text=…&rate=…&format=mp3">` —— 播放器的 ▶ 是**真实用户手势，永远能播**；
+  自动朗读只是驱动这个元素 `el.play()`。**不再用 6s `AbortController` 掐断请求**（Azure 合成新文本 1–11s，
+  掐断就等于"点了没声音"），改为 6s 提示「语音还在生成」、20s 提示「可能生成失败，点播放器重试」；
+  `<audio onError>` → 「⚠️ 语音未加载（点播放器 ▶ 重试）」。被拦截时另有「点这里开启朗读」。
+- **用户自己的语音可回放（task-19）**：语音输入时保留录音 object URL，渲染在该条 user 消息下
+  `<audio controls data-testid="user-audio">`；卸载/切场景 `URL.revokeObjectURL`。
+- **录音可取消（task-19）**：录音态多了「✖️ 取消」（儿童「✖️ 不要了」，带 `aria-label`）——
+  停止并**彻底丢弃**（不调 `onRecorded`、不提交、不产生云端调用），且**同样释放麦克风**
+  （走 `recorder.stop()` → `onstop` → `releaseStream()`；极端情况直接 `releaseStream()`）。
 - **儿童语音输入默认展开**（`showMic` 初始 `isChild`）。
 - `/chat` 还服务端渲染「最近一次对话（只读）」，每条助手消息带 `aria-label` 的重播按钮
   —— 这样无浏览器环境也能对 `aria-label` 做 HTML 断言。
