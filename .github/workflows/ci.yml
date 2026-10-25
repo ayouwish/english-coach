@@ -1,0 +1,131 @@
+name: CI
+
+# ⚠️ 说明：本 workflow 的**每条命令都在开发机上验证过**（见 README「测试与守卫」），
+# 但 workflow 文件本身未在真实 GitHub runner 上执行过。端到端那一步尤其依赖
+# 两个服务同时起起来，环境差异较大，因此暂时设为容错（失败不影响整体结论），
+# 等第一次真实跑通后再收紧。
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  voice:
+    name: voice 单元测试
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: voice/requirements.txt
+      - name: 安装依赖
+        run: pip install -r voice/requirements.txt
+      - name: pytest
+        working-directory: voice
+        # conftest 会把 ENV_FILE 指向一个不存在的文件，测试不依赖任何真实密钥
+        run: python -m pytest -q
+
+  web:
+    name: web 类型检查 / Lint / 构建
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: pnpm
+          cache-dependency-path: web/pnpm-lock.yaml
+      - name: 安装依赖
+        working-directory: web
+        run: pnpm install --frozen-lockfile
+      - name: 类型检查
+        working-directory: web
+        run: pnpm exec tsc --noEmit
+      - name: Lint
+        working-directory: web
+        run: pnpm lint
+      - name: 构建
+        working-directory: web
+        env:
+          VOICE_SERVICE_URL: http://127.0.0.1:8100
+        run: pnpm build
+
+  e2e-mock:
+    name: 端到端（mock 模式，无需密钥）
+    needs: [voice, web]
+    runs-on: ubuntu-latest
+    # 依赖两个服务同时可用 + 原生音频库；首次在真实 runner 上跑通前不阻断
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: voice/requirements.txt
+      - run: pip install -r voice/requirements.txt
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: pnpm
+          cache-dependency-path: web/pnpm-lock.yaml
+      - working-directory: web
+        run: pnpm install --frozen-lockfile
+
+      - name: 启动 voice（mock 模式，零密钥）
+        working-directory: voice
+        env:
+          PROVIDER_MODE: mock
+          DATA_DIR: ${{ github.workspace }}/voice/data
+        run: |
+          nohup python -m uvicorn app.main:app --host 127.0.0.1 --port 8100 --log-level warning &
+          for i in $(seq 1 60); do
+            curl -sf -o /dev/null http://127.0.0.1:8100/v1/health && break
+            sleep 1
+          done
+          curl -sf http://127.0.0.1:8100/v1/health
+
+      - name: 构建并启动 web
+        working-directory: web
+        env:
+          VOICE_SERVICE_URL: http://127.0.0.1:8100
+        run: |
+          pnpm build
+          nohup pnpm start > /tmp/web.log 2>&1 &
+          for i in $(seq 1 60); do
+            curl -sf -o /dev/null http://127.0.0.1:3000/api/health && break
+            sleep 1
+          done
+          curl -sf http://127.0.0.1:3000/api/health
+
+      - name: 契约一致性校验
+        run: node tests/contract_check.mjs
+
+      - name: 端到端流程
+        run: node tests/e2e_full.mjs
+
+      - name: 儿童 IPA 守卫
+        working-directory: web
+        env:
+          BASE_URL: http://127.0.0.1:3000
+        run: pnpm check:child-ipa
+
+      - name: 音素提示表守卫
+        working-directory: web
+        run: pnpm check:phoneme-hints
+
+      - name: 失败时输出 web 日志
+        if: failure()
+        run: tail -100 /tmp/web.log || true

@@ -49,6 +49,8 @@ WARNINGS: tuple[str, ...] = (
     "too_short",
     "asr_mismatch",
     "provider_fallback",
+    # 四项能力分全 0（Azure 表示"这次无法评估"）已按契约改成 null；见 api.py 的 pronounce 处理
+    "scores_unavailable",
 )
 
 # IPA -> hint_key（键会被规范化到 canonical-v1，例如 ɹ 与 r 折叠成同一个键）

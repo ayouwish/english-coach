@@ -255,6 +255,19 @@ async def pronounce(
     provider_meta["cache"] = cache_states  # 契约 §12.5（可选新增字段，v1.0 客户端不读）
     provider_meta["phoneme_space"] = PHONEME_SPACE_ID  # v1.2：音素符号空间版本（便于审计/联调）
 
+    # 契约 §4：`scores.*` **不可得时必须返回 `null`，不能是 0**（0 会被读成"读得一无是处"）。
+    # Azure 在"听不到有效语音"时（没说话 / 说的不是这句 / 明显非语音）会把四项能力分全填 0 ——
+    # 那并不是"得了 0 分"，而是"这次没法评"。所以四项全 0 时统一改成 null，并补一条
+    # `scores_unavailable` 警告，让前端能提示"这次没听清，再来一次"，而不是给个 0 分打击孩子。
+    # 注意：prosody 由我们自研的 F0+DTW 模块独立计算，不参与这条判定，保持原值。
+    scores_payload = result.scores.to_contract()
+    ability_keys = ("pron", "accuracy", "fluency", "completeness")
+    ability_values = [scores_payload.get(k) for k in ability_keys]
+    if any(v is not None for v in ability_values) and all(v == 0 for v in ability_values if v is not None):
+        for key in ability_keys:
+            scores_payload[key] = None
+        warnings.append("scores_unavailable")
+
     return {
         "provider": provider_name,
         "granularity": result.granularity,
@@ -262,7 +275,7 @@ async def pronounce(
         "reference_text": result.reference_text,
         "recognized_text": result.recognized_text,
         "duration_ms": result.duration_ms,
-        "scores": result.scores.to_contract(),
+        "scores": scores_payload,
         "words": [word.to_contract() for word in result.words],
         "issues": [issue.to_contract() for issue in result.issues],
         "intonation": intonation.to_contract(),

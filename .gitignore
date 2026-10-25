@@ -32,3 +32,8 @@ data/
 # 操作系统的杂物
 .DS_Store
 Thumbs.db
+# 部署/调试脚本产生的临时文件（不要进仓库）
+.rss.log
+.tone.wav
+deploy/.*.log
+deploy/.*.wav

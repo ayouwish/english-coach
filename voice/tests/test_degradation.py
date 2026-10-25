@@ -14,7 +14,7 @@ from app.audio_io import decode_audio
 from app.config import reset_settings_cache
 from app.execution import run_chain
 from app.llm import LLMOutcome
-from app.providers.base import Capabilities
+from app.providers.base import Capabilities, PAScores
 from app.providers.mock import MockPA
 from app.providers.registry import ProviderSet, build_providers, reset_providers
 from tests.conftest import post_pronounce
@@ -277,3 +277,40 @@ def test_run_chain_collects_errors_and_reports_fallback():
 def test_timeouts_match_contract(kind):
     expected = {"asr": 25.0, "pronounce": 50.0, "tts": 15.0, "feedback": 30.0, "dialogue": 30.0}
     assert execution.TIMEOUTS[kind] == expected[kind]
+
+
+# --------------------------------------------------------------------------------------
+# 契约 §4：scores.* 不可得必须是 null，不能是 0
+# --------------------------------------------------------------------------------------
+class ZeroScorePA:
+    """模拟 Azure 在"听不到有效语音"时的行为：四项能力分全填 0。
+
+    0 会被读成"读得一无是处"，而真实含义是"这次没法评"，所以必须转成 null。
+    """
+
+    name = "zero_pa"
+    capabilities = Capabilities(phoneme_level=True)
+
+    def __init__(self):
+        self._inner = MockPA()
+
+    def assess(self, *args, **kwargs):
+        result = self._inner.assess(*args, **kwargs)
+        result.scores = PAScores(pron=0.0, accuracy=0.0, fluency=0.0, completeness=0.0, prosody=None)
+        return result
+
+
+def test_all_zero_ability_scores_become_null(client, monkeypatch, sweep):
+    fake = ZeroScorePA()
+    _patch_providers(monkeypatch, pa=fake, pa_chain=[fake])
+    body = post_pronounce(client, sweep, "I think the weather is really nice today.").json()
+
+    for key in ("pron", "accuracy", "fluency", "completeness"):
+        assert body["scores"][key] is None, f"scores.{key} 为 0 时必须返回 null（契约 §4）"
+    assert "scores_unavailable" in body["warnings"], "必须告知前端这次没评出来"
+
+
+def test_nonzero_scores_are_not_nulled(client, monkeypatch, sweep):
+    """反向断言：正常分数不能被这条规则误清空。"""
+    body = post_pronounce(client, sweep, "I think the weather is really nice today.").json()
+    assert body["scores"]["pron"] is not None
