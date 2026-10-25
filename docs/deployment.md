@@ -1,10 +1,29 @@
 # english-coach 部署手册
 
-> 版本 v1.0 ｜ 更新 2026-10-22 ｜ 适用 `deploy/docker-compose.yml`
+> 版本 v1.2 ｜ 更新 2026-10-25 ｜ 适用 `deploy/docker-compose.yml`（205 行）
 > 读者：能照着敲命令的家庭用户本人（不需要运维经验）
-> 配套：[系统设计](architecture.md) · [接口契约](api-contract.md) · [硬件与成本](hardware-cost.md)
+> 配套：[NAS 部署（群晖/威联通）](nas-deployment.md) · [系统设计](architecture.md) · [接口契约](api-contract.md) · [硬件与成本](hardware-cost.md) · [验收记录](verification.md)
 
 本文是**操作手册**：从上到下照着做，任何一步都有"怎么确认它成功了"。
+
+> **想部署到 NAS（群晖 DSM / 威联通 QNAP）？直接看 [docs/nas-deployment.md](nas-deployment.md)。**
+> 那份是 NAS 专属手册（架构差异、卷与 PUID/PGID 权限坑、反向代理、SQLite 一致性备份），
+> 本文则是通用手册 + 本机直跑路径。
+
+> ## ⚠️ 本手册的诚实边界（先读这一段再动手）
+>
+> | | 状态 |
+> |---|---|
+> | `docker compose config` 语法与引用校验 | ✅ **验证过**（exit 0，渲染 170 行） |
+> | voice 全链路真实调用（Azure TTS → 音频 → 音素级评测 → 分数） | ✅ **实测过**（`pron=87.2`、`wav 24kHz`、5 个词；见 §10.4） |
+> | 语料预热 / 缓存（幂等、体积） | ✅ **实测过**（§6.2、§10.4） |
+> | 自检脚本 `scripts/check-deploy.sh` | ✅ **实跑过**（11 PASS / 0 FAIL / 4 SKIP，见 §10.6） |
+> | Caddyfile | ✅ **验证过**（真实 caddy 2.11.7 `validate`，4 组域名组合） |
+> | **`docker compose build` / `up`（四个镜像）** | ❌ **从未成功构建过**：交付本仓库的机器上 docker daemon 配了失效代理，任何 `docker pull` 都失败（§8.0）。**"能不能构建成功"是这套交付最大的未知数** |
+> | 浏览器里真实录音 | ❌ 未实测（无 GUI；API 层与服务端渲染已覆盖） |
+>
+> 所以正确的心态是：**编排、脚本、接口、预热、备份这些"代码层"的东西是实测过的；
+> 镜像构建与真机浏览器交互需要你这边第一次部署时确认。** 首次部署请把"先试构建"当第 0 步（§A.1）。
 
 ---
 
@@ -15,6 +34,9 @@ deploy/
 ├── docker-compose.yml   # web(:3000) + voice(:8100) + caddy(TLS)，一条命令起全套
 ├── Caddyfile            # 唯一对外入口，负责 HTTPS（录音功能的前提）
 └── .env.example         # 所有 provider 开关与密钥；复制成 .env 后生效
+scripts/
+├── check-deploy.sh      # 部署自检：一条命令验证编排/健康/provider/TTS/评测（§10.6）
+└── warm-corpus.sh       # 一键预热两种语速（开发机/直跑用；NAS 上用容器内命令，见 nas-deployment.md §4.6）
 ```
 
 三个容器：
@@ -28,7 +50,11 @@ deploy/
 **数据落盘**：host 的 `english-coach/data/` 同时挂给 web 和 voice（一个目录 = 备份就是打包一个目录）。
 **模型缓存**：docker 命名卷 `english-coach_voice-models`，挂到容器内 `/models`。
 
-### 四条部署路径，选一条
+**AI 组合（2026-10-25 定案）**：`asr=azure`、`pa=azure`、`tts=azure`、`llm=deepseek（远程）`；
+本地 `piper`/`local`/`gop` 只作断网兜底（`gop` 经对照实验判定不达标，默认关闭）。
+对应 `.env` 就是 `PROVIDER_MODE=hybrid` + Azure 密钥 + DeepSeek 密钥。
+
+### 五条部署路径，选一条
 
 | 路径 | 适合 | 首次投入 | 家人能用手机/平板吗 | 证书 |
 |---|---|---|---|---|
@@ -36,14 +62,18 @@ deploy/
 | **B. 家用迷你主机常驻** | 想在客厅随手用、不想占主力机 | 约 800–1600 元 | 能 | Caddy internal CA |
 | **C. 公网域名** | 要在外面也能用 | 域名约 50 元/年 + 云服务器 | 能，无需装证书 | Let's Encrypt 自动 |
 | **D. 不用 Docker，本机直跑** | 没有 Docker / 镜像拉不下来 / 只想先验证功能 | 0 元 | **不能**（只能本机 `http://localhost:3000`） | 不需要 |
+| **E. NAS（群晖/威联通）** | 已经有 NAS，想 7×24 常驻、全家共享 | 0 元（用现有 NAS） | 能，NAS 反代签公信证书后**无需装证书** | NAS 反代（推荐）或 Caddy |
 
-> **99% 的家庭用户请走路径 A，稳定两周后再考虑 B。** 路径 C 只在"出门也想练"时才需要，
-> 而且多了一份公网暴露面（见 §9 安全清单）。
+> **有 NAS 就走 E**（[nas-deployment.md](nas-deployment.md)）；没有 NAS、只想先看看效果就走 **A**，
+> 稳定两周后再考虑 B。路径 C 只在"出门也想练"时才需要，而且多了一份公网暴露面（见 §9）。
+> 路径 D 是 Docker 修不好时的兜底，只能本机用。
 
-> ⭐ **四条路径首次部署都有一件必做的事：预热语料缓存（§6.2）。**
+> ⭐ **所有路径首次部署都有一件必做的事：预热语料缓存（§6.2）。**
 > 它把每条语料的示范音与参考 F0 预生成一次 —— **首次跟读就是快的，而且每条语料的云 TTS 只花一次钱**。
-> 跳过它的后果不是报错，而是"首次跟读慢 4–6 秒 + 每条语料反复产生云 TTS 费用"。
-> 各路径的落点：路径 A → §A.1 末尾；路径 B → §3 末尾；路径 C → §4；路径 D → §11.1。
+> 跳过它的后果不是报错，而是"首次跟读要等（Azure 合成新文本实测 1–11 秒、波动很大；
+> S0 升级后 normal 中位约 1.8 秒、slow 中位约 4.2 秒）+ 每条语料反复产生云 TTS 费用"。
+> 各路径的落点：路径 A → §A.1 末尾；路径 B → §3 末尾；路径 C → §4；路径 D → §11.1；
+> 路径 E → [nas-deployment.md §4.6](nas-deployment.md)。
 
 > ⚠️ **如果你的 `docker pull` 报 `proxyconnect tcp: ... connection refused`，先跳到 §8.0。**
 > 这是本机已实测的环境问题（docker daemon 配了失效代理），会让**任何** `docker compose build` 失败。
@@ -92,13 +122,25 @@ cp .env.example .env
 $EDITOR .env
 ```
 
-`.env` 里**至少**确认这两个：
+`.env` 里**至少**确认这几项：
 
 ```ini
 SITE_ADDRESS=192.168.1.23     # ← 改成你本机的局域网 IP（见下），或先写 localhost 只在本机试
 TLS_CERT_MODE=internal        # ← 家庭/局域网保持 internal
-PROVIDER_MODE=mock            # ← 先用 mock 跑通，确认整条链路后再切 hybrid
+
+# AI 组合（2026-10-25 定案：asr/pa/tts=azure、llm=deepseek）
+PROVIDER_MODE=hybrid          # ← 目标配置：云为主 + 本地兜底
+AZURE_SPEECH_KEY=<你的密钥>    # ← hybrid/cloud 必填
+AZURE_SPEECH_REGION=eastasia  # ← 你的资源区域
+LLM_BASE_URL=https://api.deepseek.com
+LLM_API_KEY=<你的密钥>         # ← 不填也能跑，但反馈会降级成模板（providers.llm=template）
+LLM_MODEL=deepseek-flash
 ```
+
+> 想**先零密钥跑通**（验证部署与账号，不花一分钱）：把上面改成 `PROVIDER_MODE=mock`、
+> 注释掉 Azure / LLM 密钥即可 —— mock 模式确定性、离线、不下载任何模型，全链路可用。
+> 确认部署没问题后再切回 `hybrid`。**注意**：切换 provider 会让已有参考音缓存全部失效（缓存键含
+> `tts_provider`，契约 v1.4 §12.2），需要重跑一次预热（§6.2）—— 这是有意的设计，不是故障。
 
 怎么知道自己机器的局域网 IP：
 
@@ -494,9 +536,11 @@ curl -sI https://coach.example.com/healthz | head -1                 # 期望 HT
 | caddy→web | `curl -s https://$SITE/healthz` | `ok` |
 | 端到端（含 /voice 反代） | `curl -s https://$SITE/v1/health` | `status=ok` |
 | 证书是否受信 | 浏览器打开 `https://$SITE` | 锁头、无警告 |
-| 麦克风可用 | 页面 Console 跑 `navigator.mediaDevices` | 不是 `undefined` |
+| 麦克风可用 | 页面 Console 跑 `[isSecureContext, typeof navigator.mediaDevices]` | `[true, 'object']` |
 | 语料缓存已预热 | 重跑一次 §6.2 的预热 | `generated=0`、`cached=语料条数`、`failed=[]` |
-| 缓存体积 | `du -sh data/cache` | 300 条语料约 26.6 MiB（§6.4） |
+| 缓存体积 | `du -sh data/cache` | 两种语速 600 条 ≈ 86 MiB（Azure WAV，§6.4） |
+| provider 组合 | `curl -s localhost:8100/v1/health` | `asr/pa/tts=azure`、`llm=deepseek` |
+| 一键自检（推荐） | `./scripts/check-deploy.sh` | 无 FAIL（见 §10.6） |
 | 最近错误日志 | `docker compose logs --since 10m web voice caddy \| grep -i error` | 无 |
 
 ---
@@ -532,11 +576,14 @@ english-coach/
 **为什么必须做**：跟读语料的示范音（云 TTS）与参考 F0 都是 `(text, voice, rate)` 的**纯函数**，
 预生成一次即可永久复用。预热带来两个直接收益：
 
-- **省延迟**：首次跟读的反馈延迟从 4–6 秒压到 2 秒以内；
+- **省延迟**：Azure 合成**新文本**慢且波动很大 —— 早期实测 **1–11 秒**（服务端出现过 `RTF=9.84` 的合成超时）；
+  **升到 S0 之后**（项目 Lead 实测）：全新文本 `normal` 中位 **≈1.8 s**（最坏 ≈4.4 s）、
+  `slow` 中位 **≈4.2 s**（最坏 ≈9.7 s）。预热后同一句直接命中本地缓存，实测降到 **12–22 ms** 量级 ——
+  也就是"跟读反馈 < 4 秒"这个体验目标（[架构文档 §3.3](architecture.md)）**基本由缓存决定**。
 - **省钱**：每条语料只调用**一次**云 TTS，之后全部命中本地缓存。
   **不预热的话，同一条语料每被跟读一次就会再烧一次云 TTS 的钱。**
 
-**标准做法：从 `web/src/data/sentences.json` 抽出 `text`，批量打 `POST /v1/warmup`（契约 v1.1 §12）。**
+**标准做法：从 `web/src/data/sentences.json` 抽出 `text`，批量打 `POST /v1/warmup`（契约 v1.4 §12）。**
 
 > 下面第 1 步会生成一个临时清单文件 `data/warmup-items.json`（约 10KB）。它只是给预热用的输入，
 > **预热完可以删掉**；留在那里也无害（备份时想干净就一并 `rm`）。
@@ -562,14 +609,27 @@ assert r["requested"] == r["generated"] + r["cached"] + len(r["failed"]) + r["sk
 PY
 ```
 
-**预期输出与判据**（`requested = generated + cached + failed + skipped_duplicates`，契约 §12.4）：
+**预期输出与判据**（`requested = generated + cached + failed + skipped_duplicates`，契约 v1.4 §12.4）：
 
 | 第几次跑 | `generated` | `cached` | `failed` | 含义 |
 |---|---|---|---|---|
-| 第一次 | = 语料条数 | 0 | `[]` | 真正生成。300 条语料在 mock provider 下本机实测约 12 秒 |
+| 第一次 | = 语料条数 | 0 | `[]` | 真正生成。300 条语料本机实测约 **11–18 秒**（mock；Azure 取决于云 TTS） |
 | 第二次 | **0** | = 语料条数 | `[]` | **幂等** —— 可以放心重跑，不会重复烧云 TTS |
 
-**也可以用 `voice/scripts/warmup.py`（README §8.2 的 CLI）**，
+**一键脚本 `scripts/warm-corpus.sh`（推荐日常用）**：它会自动从
+`web/src/data/sentences.json` 生成清单，并**把两种语速都预热**：
+
+```bash
+./scripts/warm-corpus.sh                 # normal + slow
+./scripts/warm-corpus.sh --rate slow     # 只补儿童用的慢速
+```
+
+> **为什么要预热两种语速**：`normal` 是成人的示范音 + `pronounce` 参考音分析（内部固定用 normal）；
+> `slow` 是**儿童模式的默认示范音**。只预热 normal 的话，孩子那边每次仍然要现合成。
+> 注意这个脚本依赖**宿主机**的 `voice/.venv/bin/python`，所以它是给开发机/本机直跑用的；
+> **NAS 上要用容器内命令**，见 [nas-deployment.md §4.6](nas-deployment.md)。
+
+**也可以直接调 CLI**（`voice/scripts/warmup.py`，README §8.2），
 支持 `--items` / `--text-file` / `--url` / `--concurrency` / `--voice` / `--rate` / `--json`
 （前四个见 README §8.2；后三个见 `voice/scripts/warmup.py --help`）：
 
@@ -577,23 +637,29 @@ PY
 cd voice
 # (a) 进程内直接预热（不需要起服务；适合 §11 的本机直跑场景）
 .venv/bin/python scripts/warmup.py --items ../data/warmup-items.json --concurrency 2
+.venv/bin/python scripts/warmup.py --text-file ../data/warmup-corpus.txt --concurrency 2   # 纯文本清单也行
 
 # (b) 打一个已经在跑的服务（compose 部署用，宿主机的 8100 已发布）
 .venv/bin/python scripts/warmup.py --items ../data/warmup-items.json --url http://127.0.0.1:8100 --concurrency 2
 ```
 
-> **注意（实测踩过的坑）**：`voice/Dockerfile` 只 `COPY app ./app`，**没有 COPY `scripts/`**，
-> 所以**不要**在容器里直接跑 `python scripts/warmup.py`（找不到文件）。
-> 脚本内部用 `Path(__file__).parent.parent` 推导 import 根，因此 `docker compose cp` 到 `/tmp/` 也会
-> import 失败；真要放进容器必须放到 `/app/scripts/`。**docker 部署首选上面那个 HTTP 端点方式。**
+> **容器内也能跑 CLI 了**：`voice/Dockerfile` 现在会 `COPY scripts ./scripts`（放在 `/app/scripts`，
+> 正好让脚本内部的 `Path(__file__).parent.parent` 解析到 `/app`），所以
+> `docker compose exec -T voice python scripts/warmup.py ...` 是可用的。
+> （早期版本的 Dockerfile 只 COPY `app/`，容器里没有脚本 —— 那个缺口已经补掉了。）
 >
 > `concurrency` 别贪大：契约 §12.3 建议 1–8、默认 2，云 TTS 有限流，预热是后台任务不是用户请求。
 
 ### 6.3 语料变化后要做什么
 
 语料库在 `web/src/data/sentences.json`。**改完语料必须重跑一次预热** ——
-因为缓存键是 `sha1(text + "\x1f" + voice + "\x1f" + rate)`：**文本一变就是一个全新的键**，
-旧缓存不会被复用。
+因为缓存键是（契约 v1.4 §12.2）：
+
+```
+sha1("v3" + "\x1f" + tts_provider + "\x1f" + fmt + "\x1f" + text + "\x1f" + voice + "\x1f" + rate)
+```
+
+**文本一变就是一个全新的键**，旧缓存不会被复用。
 
 标准三步：
 
@@ -606,16 +672,25 @@ $EDITOR web/src/data/sentences.json
 # 2) 重新灌库（web 的 package.json 脚本）
 cd web && pnpm db:seed && cd ..
 
-# 3) 重跑一次预热（§6.2 的命令）。增量即可：
+# 3) 重跑一次预热（§6.2 的命令 / 或 ./scripts/warm-corpus.sh）。增量即可：
 #    已缓存的算 cached，只有新增/改动的条目才真正生成
 ```
 
 **不预热会怎样？** —— **功能不会坏，只是变慢 + 产生云 TTS 费用。**
-新句子的示范音会在第一次跟读时现场生成（多等 2–4 秒），而且在这之后如果缓存没落上，
+新句子的示范音会在第一次跟读时现场合成（Azure 上按 1–11 秒量级等），而且在这之后如果缓存没落上，
 每被跟读一次就可能再调用一次云 TTS。所以"改语料 → 预热"要成对做。
+（[nas-deployment.md §9](nas-deployment.md) 的排查表里也把"第一次慢、第二次快"标成了**正常现象**。）
 
-同样需要重跑预热的情况：**改了 `rate`（如加一批 `slow`）**、
-**换了 `DEFAULT_TTS_VOICE` / `AZURE_TTS_VOICE`** —— 它们都在缓存键里，等于一批新条目。
+同样需要重跑预热的情况（它们都在缓存键 v3 里，等于一批全新条目）：
+
+- **改了 `rate`**（例如新增一批 `slow`）；
+- **换了 `DEFAULT_TTS_VOICE` / `AZURE_TTS_VOICE`**；
+- **换了 TTS provider**（`VOICE_TTS_PROVIDER`，比如 Azure ↔ piper/edge-tts）；
+- **换了音频格式 `fmt`**（mp3 ↔ wav）。
+
+> 缓存键带 provider 与格式是本项目踩过的一个真实坑的修复：早期键里没有 provider 身份，
+> 导致"先用 mock 预热、再切 Azure"时会**命中合成音缓存**，把它当母语者示范播放（[verification.md §7.4](verification.md)）。
+> 所以**切换 provider 后缓存必然全部失效，这是设计而不是 bug**。
 
 ### 6.4 缓存管理
 
@@ -623,17 +698,18 @@ cd web && pnpm db:seed && cd ..
 |---|---|
 | 位置 | `DATA_DIR/cache/` → compose 下就是 host 的 `data/cache/`（`DATA_DIR=/data`） |
 | 组成 | `cache/audio/<hash>.<ext>`（示范音）+ `cache/f0/<hash>.json`（参考 F0 曲线） |
-| 键 | `sha1(text + "\x1f" + voice + "\x1f" + rate)`（契约 §12.2） |
-| **体积（本机实测）** | **300 条语料 → 600 个文件、27,929,928 字节 ≈ 26.6 MiB**（audio 25.9 MiB + f0 0.7 MiB），**平均每条 ≈ 93 KB**。折算：40 条 ≈ 3.6 MiB；2000 条（条数上限）≈ 178 MiB |
+| **键** | `sha1("v3" + "\x1f" + tts_provider + "\x1f" + fmt + "\x1f" + text + "\x1f" + voice + "\x1f" + rate)`（契约 **v1.4** §12.2）。**换 provider、换格式、换音色、换语速、改文本 → 旧缓存全部不命中**（有意设计，避免把合成音当母语者示范复用） |
+| **体积（本机实测）** | Azure WAV 24 kHz：单条示范音**平均 144 KB**（955 个样本：中位 137 KB / 最小 27 KB / 最大 394 KB），参考 F0 平均 **3 KB**。满语料 **300 句 × 2 语速 = 600 条 ≈ 86 MiB**<br>早期 mock 合成音（WAV 16 kHz）实测：600 文件 / 26.6 MiB / 平均 93 KB —— 换 provider 与格式后体积会变，**以 `du -sh data/cache` 为准** |
 | 上限 | `CACHE_MAX_BYTES` 默认 `524288000`（500MB）；`CACHE_MAX_ENTRIES` 默认 `2000`（audio + f0 合计） |
 | 淘汰 | **LRU**：超限时按文件 mtime 从旧到新删 |
 | 开关 | `CACHE_ENABLED` 默认 `true`；设为 `false` 回退 v1.0 行为（不写缓存，`provider_meta.cache` 全为 `disabled`） |
 | 坏缓存 | 校验后使用：JSON 解析失败、点数 <2 或 >600、时间轴非递增、全清音 —— 一律视为**未命中并重新生成**，绝不会拿坏缓存算分 |
 | 失败不落盘 | TTS 全挂时的本地兜底音**不会**写进缓存，下次仍会尝试云 TTS（避免把"降级音"永久固化） |
+| 并发 | 同一 key 的并发请求只会生成一次（预热与跟读共用 SingleFlight），不会重复烧云 TTS |
 
-> 上面的体积是**本机实测值**（`PROVIDER_MODE=mock` 的合成示范音，WAV 格式）。
-> 换成 Azure / edge-tts 时是 mp3，通常**更小**，所以把 26.6 MiB 当**上界**看即可。
-> `voice/README.md` §8 未给出体积数字，这里的数字可自行复现：跑一次 §6.2 的预热后 `du -sh data/cache`。
+> 体积数字都是**本机实测值**，可自行复现：跑一次 §6.2 的预热后 `du -sh data/cache`。
+> 它取决于 `tts_provider` 与 `fmt`（WAV 比 mp3 大得多），所以别把某个具体数字当成跨配置的常数。
+> 实测方式：`find data/cache/audio -type f | wc -l` 数条数、`du -sh data/cache` 看总量。
 
 **什么时候可以安全删除？—— 随时。** 删掉唯一的后果是"下次跟读要现场生成示范音"
 （变慢一点 + 一小笔云 TTS 费用）。**练习记录、分数、错音本、SRS 排期一条都不会丢**（它们在 `app.db` 里，与缓存无关）。
@@ -827,7 +903,13 @@ df -h /var/lib/docker                          # 看是不是磁盘满了（模�
 | 企业/校园网需要代理 | `.env` 里加 `HTTPS_PROXY=http://你的代理:端口`（compose 会把 .env 传进容器） |
 | 磁盘满 | `docker system prune -a` 清无用镜像；确认 `df -h` 有 5GB+ 空闲 |
 | 下载到一半的残包导致反复失败 | `docker compose down` → `docker volume rm english-coach_voice-models` → `up -d`（会重新下） |
-| 就是下不动 | **降级绕过**：`.env` 设 `PROVIDER_MODE=mock`（零下载、零密钥、全链路可跑），先把产品和三账号跑通；同时把 TTS 切到 `edge-tts`（走微软的公共接口，不需要下载模型） |
+| 就是下不动 | **降级绕过**：`.env` 设 `PROVIDER_MODE=mock`（零下载、零密钥、全链路可跑），先把产品和三账号跑通；同时把 TTS 切到 `edge-tts`（走微软公共接口，不需要下载模型）或本地 `piper`（`VOICE_TTS_PROVIDER=piper`，需先下载 Piper 音色） |
+
+> **最重要的一点：本项目定案的组合（`asr/pa/tts=azure` + `llm=deepseek`）压根不需要下载任何本地模型。**
+> 本地模型（faster-whisper / Piper / GOP）只是**断网兜底**，全部惰性加载 —— 不装、不下载也不影响主流程。
+> 所以"模型下不动"不该阻塞你上线：确认 `provider_meta` 里 provider 是 azure、缓存预热过，就可以用了。
+> 只有在你确实想用本地兜底（`PROVIDER_MODE=local`）时，才需要 `voice/requirements-local.txt` 里的依赖与模型
+> （实测量级 888 MB，见 [nas-deployment.md §2.2](nas-deployment.md)）。
 
 **一个重要判断**：如果你本来就要用云评测（`PROVIDER_MODE=cloud`），本地模型**根本不需要下载**。
 "模型下不动"不该阻塞你上线，切 `cloud` 或 `mock` 即可。
@@ -1009,13 +1091,16 @@ du -sh data/cache/audio data/cache/f0    # 分别看
 ls -lt data/cache/audio | head           # 最近生成的（LRU 按 mtime 从旧到新淘汰）
 ```
 
-**正常量级参考（本机实测）**：300 条语料 ≈ 600 个文件、**26.6 MiB**，平均每条 ≈ 93 KB（§6.4）。
-所以"300 条语料却占了几个 GB"一定不正常，通常是下面几种情况：
+**正常量级参考（本机实测）**：满语料 **300 句 × 2 语速 = 600 条 ≈ 86 MiB**（Azure WAV 24 kHz；
+单条示范音平均 144 KB、参考 F0 平均 3 KB）。早期 mock 合成音实测是 600 文件 / 26.6 MiB ——
+**体积随 `tts_provider` 与 `fmt` 变化**，所以以 `du -sh data/cache` 为准（§6.4）。
+"300 条语料却占了几个 GB"一定不正常，通常是下面几种情况：
 
 | 原因 | 修法 |
 |---|---|
 | 缓存上限被调大了 | 检查 `.env` 的 `CACHE_MAX_BYTES`（默认 `524288000` = 500MB）/ `CACHE_MAX_ENTRIES`（默认 `2000`），改回默认 |
-| 换过多次音色 / 语速，历史条目堆积 | 每次换 `voice`/`rate` 都会产生**一批新键**（缓存键含 voice 与 rate）。确认不需要旧的就清空（见下） |
+| 换过多次音色 / 语速 / provider，历史条目堆积 | 每次换 `voice`/`rate`/`tts_provider`/`fmt` 都会产生**一批新键**（缓存键 v3 含这些分量）。确认不需要旧的就清空（见下） |
+| 只预热了一种语速，运行中又补了另一种 | 正常，属于两批条目 |
 | 语料反复试读产生大量一次性条目 | 正常，交给 LRU；也可以手动清 |
 | 把 `data/audio/`（用户录音）误当成缓存 | 那是**用户练习录音**，属于要备份的数据，别删（§6.1） |
 
@@ -1030,14 +1115,14 @@ rm -rf data/cache/audio/* data/cache/f0/*
 
 ### 8.11 跟读第一次慢、第二次很快 —— 这是**正常**的，不是 bug
 
-**症状**：同一条语料，第一次跟读要等 4–6 秒，之后同一句只要 1–2 秒。
+**症状**：同一条语料，第一次跟读明显要等（Azure 上按 1–11 秒量级），之后同一句快得多。
 
 **这正是缓存生效的表现**，是 V1.5 刻意做的优化，不要当故障排查：
 
 | 时刻 | 发生了什么 | 耗时 |
 |---|---|---|
-| 第一次跟读（该句未预热） | 现场调云 TTS 生成示范音 + 跑 praat 提参考 F0，然后落缓存 | 4–6 秒 |
-| 之后每次跟读 | 示范音与参考 F0 直接命中 `data/cache/`；只有"用户音频的归一化 + DTW"要算 | 1–2 秒 |
+| 第一次跟读（该句未预热） | 现场调云 TTS 合成示范音 + 跑 praat 提参考 F0，然后落缓存 | 与文本长度和云服务负载有关。早期实测 **1–11 秒**（`RTF=9.84` 超时）；**S0 后**：`normal` 中位 ≈1.8 s（最坏 ≈4.4 s）、`slow` 中位 ≈4.2 s（最坏 ≈9.7 s） |
+| 之后每次跟读 | 示范音与参考 F0 直接命中 `data/cache/`；只剩"用户音频的归一化 + DTW"要算 | 缓存读取实测 **12–22 ms**（早期口径 10–30 ms）；整条评测通常在 1–2 秒内 |
 
 想确认缓存真的命中了，看 `/v1/pronounce` 响应里的 `provider_meta`（契约 §12.5，可选字段）：
 
@@ -1068,9 +1153,18 @@ rm -rf data/cache/audio/* data/cache/f0/*
 
 ## 9. 安全清单
 
+> ⚠️ **这是给孩子的应用：三个人的账号 + 孩子的练习录音 + 家长面板。别把它裸奔在公网。**
+> 详细取舍（只局域网 / VPN 回连 / 公网反代各自的代价）见 [nas-deployment.md §6.4](nas-deployment.md) ——
+> 那一段对非 NAS 部署同样适用。
+
 - [ ] `deploy/.env` **不要**提交到 git（`.gitignore` 里确认有 `.env`）；密钥只存在于 voice 容器环境里。
-- [ ] `3000` / `8100` 只绑 `127.0.0.1`（compose 已如此）。**不要**改成 `0.0.0.0` —— 那等于绕过 TLS 暴露 AI 网关。
-- [ ] 公网路径：给 caddy 加访问控制（家庭自用最简单的办法是只允许家里出口 IP，或加一层 Basic Auth），
+- [ ] `deploy/.env` 权限设 `600`；`.env.example` 里**只能有占位符**，绝不出现真实密钥。
+- [ ] `3000` / `8100` 只绑 `127.0.0.1`（compose 已如此）。**不要**改成 `0.0.0.0` —— 那等于绕过 TLS 暴露 AI 网关，
+      也等于把 Azure/DeepSeek 的额度送人。
+- [ ] 首次部署就把 `.env` 里的 `BOOTSTRAP_*` 示例密码改掉（默认密码是公开的）。
+- [ ] **优先只在局域网用**；要从外面访问就上 VPN（WireGuard / Tailscale / NAS 自带 VPN Server），
+      比直接暴露 443 更省事也更安全。
+- [ ] 公网路径：给 caddy（或 NAS 反向代理）加访问控制（最简单的办法是只允许家里出口 IP），
       并确保 `/v1/pronounce` 不会被陌生人当免费 API 刷。
 - [ ] 定期备份并**做过一次恢复演练**。
 - [ ] 女儿的音频是敏感数据：家长面板的"删除全部语音"要真的能用；不需要长期留存就走删。
@@ -1158,43 +1252,113 @@ $ echo $?  → 0
 requested : 5   generated : 0   cached : 5   failed : 0   elapsed_ms : 5   → exit 0
 ```
 
-**缓存体积实测**（300 条语料，`PROVIDER_MODE=mock` 的合成示范音）：
+**缓存体积实测** —— 两组数字，都来自本机真实缓存目录：
 
 ```
-cache/audio : 300 files, 27,189,040 bytes = 25.93 MiB
-cache/f0    : 300 files,    740,888 bytes =  0.71 MiB
-TOTAL       : 600 files, 27,929,928 bytes = 26.64 MiB   →  平均每条 ≈ 93 KB
-折算：40 条 ≈ 3.6 MiB ｜ 2000 条（CACHE_MAX_ENTRIES 上限）≈ 178 MiB
+A) 早期 mock 合成示范音（WAV 16 kHz），300 条语料：
+   cache/audio : 300 files, 27,189,040 bytes = 25.93 MiB
+   cache/f0    : 300 files,    740,888 bytes =  0.71 MiB
+   TOTAL       : 600 files, 27,929,928 bytes = 26.64 MiB   →  平均每条 ≈ 93 KB
+
+B) 当前 Azure TTS（WAV 24 kHz，`fmt=wav`）真实缓存目录：
+   cache/audio : 955 files, 140,619,830 bytes = 134.1 MiB  →  平均 144 KB/条
+                 （中位 137 KB、最小 27 KB、最大 394 KB；含 936 个 .wav + 19 个 .mp3）
+   cache/f0    : 911 files,   2,568,321 bytes =   2.4 MiB  →  平均 3 KB/条
+   折算满语料  ：300 句 × 2 语速 = 600 条 ≈ 86 MiB
 ```
 
-**同时确认的两个事实**：
+> **别把 (A) 当常数**：体积随 `tts_provider` 与 `fmt` 变化（缓存键 v3 把这两者都算进去了）。
+> 复现方法：跑一次 §6.2 的预热后 `du -sh data/cache`；或 `find data/cache/audio -type f | wc -l` 数条数。
 
-1. `voice/Dockerfile` 只 `COPY app ./app`（第 38 行），**没有 COPY `scripts/`** ——
-   所以容器里没有 `scripts/warmup.py`；且脚本用 `Path(__file__).parent.parent` 推导 import 根，
-   拷到 `/tmp/` 会 import 失败。**docker 部署走 HTTP 端点**（§6.2），这个坑已写进文档。
-2. `data/cache/` 的体积与 `voice/README.md` §8 的描述一致（README 未给出体积数字，
-   上面的数字是本机可复现的实测值，复现方法：跑一次预热后 `du -sh data/cache`）。
+**一键脚本 `scripts/warm-corpus.sh` 也整条跑过**（对着本机 mock voice，零 API 费用）：
+
+```
+$ VOICE_URL=http://127.0.0.1:8199 ./scripts/warm-corpus.sh --concurrency 4
+voice: http://127.0.0.1:8199
+providers: {'asr': 'mock', 'pa': 'mock', 'tts': 'mock', 'llm': 'template'}
+语料清单: 300 句 → /…/.warmup-corpus.txt
+
+── 预热 rate=normal ──
+requested 300 / generated 300 / cached 0 / failed 0 / elapsed_ms 29335
+cache: audio_entries=300 f0_entries=300 bytes=27929928
+
+── 预热 rate=slow ──
+requested 300 / generated 300 / cached 0 / failed 0 / elapsed_ms 35855
+cache: audio_entries=600 f0_entries=600 bytes=68425535
+
+完成。已缓存的句子下次会直接跳过（幂等）。
+$ echo $?  → 0
+```
+
+要点：脚本自己从 `web/src/data/sentences.json` 生成清单（300 句）、**两种语速都预热**、退出码 0。
+本轮 300 条耗时约 29 s（mock，本机 10 核）；**换成 Azure 会慢得多**（受云 TTS 影响，一次全量建议预留 5–15 分钟），
+但因为是幂等的，中途中断后再跑只会补缺失项。
+
+**同时确认的事实**：
+
+1. `voice/Dockerfile` **会** `COPY scripts ./scripts`（放在 `/app/scripts`，正好让脚本内部的
+   `Path(__file__).parent.parent` 解析到 `/app`），所以 **`docker compose exec -T voice python scripts/warmup.py ...` 是可用的**。
+   （早期版本只 COPY `app/`，容器里没有脚本 —— 这个缺口已经被补掉；[nas-deployment.md §4.6](nas-deployment.md) 用的就是容器内形式。）
+2. 缓存键是 **v3** 且包含 `tts_provider` 与 `fmt`（契约 v1.4 §12.2），所以切换 provider / 格式后
+   缓存必然全部失效 —— **这是修复过一个真实缺陷后的有意设计**（见 [verification.md §7.4](verification.md)）。
+3. `voice/README.md` §8 未给出体积数字；上面两组都是本机可复现的实测值。
 
 ### 10.5 未在本机实测的部分（诚实说明）
 
 | 项 | 状态 | 原因 |
 |---|---|---|
-| `docker compose build` / `up` 端到端 | ⚠️ 未实测 | 本机 docker daemon 配了一个失效的 HTTP 代理（`127.0.0.1:7890` 拒绝连接），任何 `docker pull` 都失败；属宿主环境问题，非编排文件问题。修法见 §1 |
-| `web` / `voice` 的 Dockerfile | ✅ 已存在（未构建） | `web/Dockerfile`（standalone，构建期 `ARG VOICE_SERVICE_URL`）与 `voice/Dockerfile`（python:3.11-slim + uv，不装系统 ffmpeg，只 COPY `app/`）均已交付。Dockerfile 层未实测构建，原因同上 |
-| 预热 / 缓存（V1.5） | ✅ 已实测 | 见 §10.4：300 条语料真实预热、幂等性、HTTP 端点与 CLI `--url` 两种调用方式、缓存体积全部实测 |
+| `docker compose build` / `up` 端到端 | ⚠️ 未实测 | 本机 docker daemon 配了一个失效的 HTTP 代理（`127.0.0.1:7890` 拒绝连接），任何 `docker pull` 都失败；属宿主环境问题，非编排文件问题。修法见 §8.0。**四个镜像至今没有被构建出来过** —— 这是本交付最大的未知数 |
+| `web` / `voice` 的 Dockerfile | ✅ 文件已交付（未构建） | `web/Dockerfile`（多阶段 standalone，构建期 `ARG VOICE_SERVICE_URL`，`USER node`，COPY `migrations`/`src/data`/`scripts`）与 `voice/Dockerfile`（python:3.11-slim + uv，不装系统 ffmpeg，COPY `app` 与 `scripts`） |
+| **voice 全链路真实调用（Azure）** | ✅ **已实测** | 真实 Azure 密钥联调：TTS 出 `audio/wav` 163 KB（`x-cache: hit`）、`/v1/pronounce` 返回 `provider=azure`、`granularity=phoneme`、`pron=87.2`、5 个词、`intonation.available=true`（见 §10.4 与 [verification.md §8](verification.md)） |
+| 预热 / 缓存 | ✅ 已实测 | §10.4：300 条语料真实预热、幂等复跑、CLI 与 HTTP 两种方式、体积两轮实测 |
+| **自检脚本 `scripts/check-deploy.sh`** | ✅ **已实跑** | §10.6：11 PASS / 0 FAIL / 4 SKIP，退出码 0；并做过变异测试确认断言会失败 |
+| 浏览器真实录音 / 麦克风权限 | ❌ 未实测 | 无 GUI 环境；API 层与服务端渲染已覆盖，麦克风需要你第一次真机使用时确认（§8.1） |
 | 真实云 API 计费对齐 | 见 [硬件与成本](hardware-cost.md) | 价格为官网核实值，实际账单以官网为准 |
 
 **验收标准的口径（明确区分）**：
 
-- ✅ **已验证**：`docker compose config` 语法与引用校验通过（exit=0）；所有构建上下文与 bind 路径真实存在；
-  `Caddyfile` 用真实 caddy 2.11.7 二进制在 4 种 `SITE_ADDRESS`/`TLS_CERT_MODE` 组合下 `validate` 通过；
-  V1.5 的预热与缓存在本机真实跑通（§10.4，含 300 条语料实测与幂等复跑）。
+- ✅ **已验证**：`docker compose config` 语法与引用校验通过（exit=0，170 行）；构建上下文与 bind 路径真实存在；
+  `Caddyfile` 用真实 caddy 2.11.7 在 4 种 `SITE_ADDRESS`/`TLS_CERT_MODE` 组合下 `validate` 通过；
+  预热与缓存在本机真实跑通（§10.4）；**Azure 全链路（TTS + 音素级评测）在真实密钥下调用成功**（§10.4）；
+  自检脚本实跑通过且经变异测试（§10.6）。
 - ❌ **未在本机验证**：`docker compose build` 与 `docker compose up` 的完整启动。
   原因：本机 docker daemon 配了失效代理，**任何**镜像都拉不下来（§8.0 已收录该 case 与修复路径），
-  且本机只有 `python:3.11-slim`、没有任何 node 镜像。
-  这是宿主环境问题，不是编排文件的问题；修好 §8.0 后即可构建。
-- 🔁 **替代验证路径**：§11「不用 Docker 的本地直跑」在这台机器上立刻可用，可完整验证三账号与跟读闭环
-  （含 §11.1 的预热步骤）。
+  且本机没有 node 镜像。**这是宿主环境问题，不是编排文件的问题；修好 §8.0 后即可构建。**
+- ❌ **未验证**：NAS 上的构建与运行、arm64 架构、浏览器真实麦克风 —— 见 [nas-deployment.md §0](nas-deployment.md)。
+- 🔁 **替代验证路径**：§11「不用 Docker 的本地直跑」随时可用，可完整验证三账号与跟读闭环（含 §11.1 的预热步骤）。
+
+### 10.6 部署自检脚本（`scripts/check-deploy.sh`）
+
+一条命令验证"这套部署到底通不通"，**每项都是真断言**（不是打印 OK），失败时给可操作提示，
+当前环境验证不了的项**明确 SKIP 并说明原因**。它只做只读探测（唯一的写请求是 1 次 TTS + 1 次评测，
+且用的是**语料里已有的句子**，TTS 通常直接命中缓存）。
+
+```bash
+./scripts/check-deploy.sh                                  # 默认 127.0.0.1:8100 / :3000
+EXPECT_SERVICES="voice web" EXTERNAL_URL=https://你的域名 ./scripts/check-deploy.sh   # NAS（TLS 交给 NAS 反代）
+CHECK_LLM=0 ./scripts/check-deploy.sh                      # 有意只用模板反馈时
+```
+
+覆盖：compose 配置 → 容器健康 → `/v1/health` 与 `/api/health`（含 `db.ok`）→ **provider 组合**
+→ **TTS 真的出音频** → **评测真的出分数** → 数据目录可写（NAS 权限坑）→ 缓存覆盖度 → HTTPS → 镜像构建。
+
+**本机实跑输出**（2026-10-25，对着真实运行中的 hybrid 服务；完整输出见 [nas-deployment.md §8](nas-deployment.md)）：
+
+```
+── 3. 两个健康端点 ──  PASS voice /v1/health status=ok  mode=hybrid providers=asr=azure,llm=deepseek,pa=azure,tts=azure
+                       PASS web /api/health ok 且数据库可用
+                       PASS web → voice 连通
+── 4. provider 组合 ──  PASS 符合预期（mode=hybrid）· PASS LLM 可用 llm=deepseek
+── 5. 示范音 ──         PASS POST /v1/tts  provider=azure cache=hit bytes=163246 type=audio/wav
+── 6. 评测 ──           PASS POST /v1/pronounce  granularity=phoneme pron=87.2 acc=96.0 flu=75.0 comp=100.0 words=5
+── 汇总 ──  PASS 11   FAIL 0   WARN 0   SKIP 4    退出码 0
+```
+
+**变异测试**（证明断言不是装饰）：voice 地址指向死端口 → `FAIL voice .../v1/health` + 退出码 2；
+`EXPECT_PROVIDERS` 故意写成 `local/local/piper` → `FAIL provider 组合`，逐项列出
+`asr: 期望 local / 实际 azure` 等差异 + 退出码 1。
+
+`bash -n scripts/check-deploy.sh` 通过。本机**没有 shellcheck**，故未做 shellcheck 检查。
 
 ---
 
@@ -1221,15 +1385,17 @@ curl -s http://127.0.0.1:8100/v1/health | python3 -m json.tool   # 期望 "statu
 ```
 
 **直跑同样要预热一次语料缓存**（否则首次跟读慢、而且每条语料每次都重复调云 TTS）。
-直跑用 CLI 的"进程内"形式（不需要起服务，也不需要打端口）：
+直跑有一个现成的一键脚本（**它依赖宿主机 `voice/.venv`，所以只适合这种直跑场景，NAS 上不适用**）：
 
 ```bash
 cd /home/wangsimeng/project/dsh/english-coach
 
-# 抽 text 清单（直跑时 data/ 用项目根的，和 §6.2 一致）
-python3 -c "import json;d=json.load(open('web/src/data/sentences.json'));json.dump([s['text'] for s in d['sentences']],open('data/warmup-items.json','w'),ensure_ascii=False)"
+# 方式一（推荐）：一键脚本，两种语速都预热，幂等
+./scripts/warm-corpus.sh
+./scripts/warm-corpus.sh --rate slow        # 只补儿童用的慢速
 
-# 在 voice/ 下用 CLI 直接预热（README §8.2 的 (a) 形式）
+# 方式二：手动两步（等价于脚本内部做的事）
+python3 -c "import json;d=json.load(open('web/src/data/sentences.json'));json.dump([s['text'] for s in d['sentences']],open('data/warmup-items.json','w'),ensure_ascii=False)"
 cd voice
 DATA_DIR=$PWD/../data .venv/bin/python scripts/warmup.py --items ../data/warmup-items.json --concurrency 2
 # 期望：generated = 语料条数、cached = 0、failed = 0；再跑一次 → generated = 0、cached = 语料条数
@@ -1238,6 +1404,9 @@ DATA_DIR=$PWD/../data .venv/bin/python scripts/warmup.py --items ../data/warmup-
 > 直跑时 `DATA_DIR` 默认是 `voice/data`（见 `voice/.env.example`），所以上面显式指到项目根的 `data/`，
 > 与 §6 的路径说明保持一致。若你希望直跑也写在 `voice/data`，去掉 `DATA_DIR=...` 即可，
 > 但要记得备份的是 `voice/data/`。
+>
+> 注意 `warm-corpus.sh` 内部用 `--url http://127.0.0.1:8100` 打**正在运行的服务**，所以要先按 §11.1 起 voice；
+> 它还会在仓库根生成一个临时清单 `.warmup-corpus.txt`（可删）。
 
 ### 11.2 起 web（:3000）
 
