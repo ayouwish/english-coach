@@ -191,8 +191,17 @@ async function main() {
     check("非 mock 模式下仍拿到非降级评测", true);
   }
   const r = att.data?.result;
-  check("result.scores.pron 为 0-100 数值", isNum(r?.scores?.pron) && r.scores.pron >= 0 && r.scores.pron <= 100,
-    `scores=${JSON.stringify(r?.scores)}`);
+  // 契约 §4：scores.* 不可得时必须是 null（不能是 0）。本脚本提交的是**合成正弦波**（不是语音），
+  // Azure 无法评估 → 全 0 分会被 voice 按契约转成 null 并附 scores_unavailable 警告。
+  // 因此这里接受两种合法形态：0-100 的数值，或"null + scores_unavailable"。
+  const pronWarnings = Array.isArray(r?.warnings) ? r.warnings : [];
+  const pronIsNumber = isNum(r?.scores?.pron) && r.scores.pron >= 0 && r.scores.pron <= 100;
+  const pronIsHonestNull = r?.scores?.pron === null && pronWarnings.includes("scores_unavailable");
+  check("result.scores.pron 为 0-100 数值，或按契约显式为 null 且带 scores_unavailable",
+    pronIsNumber || pronIsHonestNull,
+    `scores=${JSON.stringify(r?.scores)} warnings=${JSON.stringify(pronWarnings)}`);
+  check("scores.pron 不得为 0（0 与\"不可得\"不可区分，契约要求用 null）",
+    r?.scores?.pron !== 0, `scores=${JSON.stringify(r?.scores)}`);
   check("评测结果带 words 数组", Array.isArray(r?.words));
   check("评测结果带 issues 数组（≤5 条）", Array.isArray(r?.issues) && r.issues.length <= 5, `issues=${r?.issues?.length}`);
   check("返回 intonation（语调曲线是降级模式下唯一还能给的精确反馈）", !!r?.intonation,
@@ -378,7 +387,13 @@ async function main() {
     const fin = await call(`/api/blind-tests/${btId}/finish`, { method: "POST", json: {} });
     if (check("结束盲测成功（2xx）", is2xx(fin.res.status), `status=${fin.res.status} body=${JSON.stringify(fin.data)?.slice(0, 300)}`)) {
       const summary = fin.data?.summary ?? fin.data;
-      check("结束后给出平均分（avg_pron 为数值）", isNum(summary?.avg_pron), JSON.stringify(summary)?.slice(0, 200));
+      // 本脚本用的是合成音：所有条目都可能"不可评"→ 平均分合法地是 null。
+      // 只要不是"有分数却算不出平均"，就应通过。
+      const avg = summary?.avg_pron;
+      const anyScored = isNum(avg);
+      const noneScorable = avg === null;
+      check("结束后给出平均分（数值；若全部条目都不可评则允许 null）",
+        anyScored || noneScorable, JSON.stringify(summary)?.slice(0, 200));
       check("结束后给出与上一次的差值字段", "delta_pron" in (fin.data ?? {}) || "delta_pron" in (summary ?? {}),
         Object.keys(fin.data ?? {}).join(","));
     }
