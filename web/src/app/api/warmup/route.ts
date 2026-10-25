@@ -3,6 +3,7 @@ import { ensureBootstrap } from "@/db";
 import { HttpError, requireUser } from "@/lib/auth";
 import { jsonOk, route } from "@/lib/http";
 import { getPrefs } from "@/lib/prefs";
+import { effectiveTtsRate } from "@/lib/tts-rate";
 import { callWarmup, VoiceError } from "@/lib/voice";
 
 export const dynamic = "force-dynamic";
@@ -32,8 +33,8 @@ export const POST = route(async (req: NextRequest) => {
     .slice(0, MAX_TEXTS);
   if (texts.length === 0) throw new HttpError(400, "bad_request", "texts 不能为空（1–12 条，每条 ≤2000 字符）");
 
-  const prefs = await getPrefs(user.id);
-  const rate = body.rate ?? prefs.ttsRate ?? "normal";
+  const prefs = await getPrefs(user.id, user.isChild);
+  const rate = body.rate ?? effectiveTtsRate(user, prefs);
   const voice = body.voice !== undefined ? body.voice : prefs.ttsVoice ?? null;
   const items = texts.map((text) => ({ text, voice, rate }));
 

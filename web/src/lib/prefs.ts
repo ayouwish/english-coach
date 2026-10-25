@@ -10,23 +10,29 @@ export interface UserPrefs {
   ttsRate: "slow" | "normal";
 }
 
-const DEFAULTS: UserPrefs = { correctionLevel: "gentle", ttsVoice: null, ttsRate: "normal" };
+/** 默认偏好：儿童默认慢速（孩子需要听清），成人默认正常 */
+function defaultsFor(isChild: boolean): UserPrefs {
+  return { correctionLevel: "gentle", ttsVoice: null, ttsRate: isChild ? "slow" : "normal" };
+}
 
-export async function getPrefs(userId: string): Promise<UserPrefs> {
+const DEFAULTS: UserPrefs = defaultsFor(false);
+
+export async function getPrefs(userId: string, isChild = false): Promise<UserPrefs> {
   const db = getDb();
   const [row] = await db.select().from(userPrefs).where(eq(userPrefs.userId, userId)).limit(1);
   if (!row) {
+    const defaults = defaultsFor(isChild);
     await db
       .insert(userPrefs)
       .values({
         userId,
-        correctionLevel: DEFAULTS.correctionLevel,
-        ttsVoice: DEFAULTS.ttsVoice,
-        ttsRate: DEFAULTS.ttsRate,
+        correctionLevel: defaults.correctionLevel,
+        ttsVoice: defaults.ttsVoice,
+        ttsRate: defaults.ttsRate,
         updatedAt: new Date().toISOString(),
       })
       .onConflictDoNothing();
-    return { ...DEFAULTS };
+    return { ...defaults };
   }
   return {
     correctionLevel: (row.correctionLevel as CorrectionLevel) ?? DEFAULTS.correctionLevel,

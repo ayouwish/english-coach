@@ -94,7 +94,7 @@ export function seed(db, { resetPasswords = false } = {}) {
   );
   const insertPrefs = db.prepare(
     `INSERT INTO user_prefs (user_id, correction_level, tts_voice, tts_rate, updated_at)
-     VALUES (?, 'gentle', NULL, 'normal', ?) ON CONFLICT(user_id) DO NOTHING`,
+     VALUES (?, 'gentle', NULL, ?, ?) ON CONFLICT(user_id) DO NOTHING`,
   );
   const insertSentence = db.prepare(
     `INSERT INTO sentences (id, text, translation_zh, level, tags, focus_phonemes, source, sort_order)
@@ -130,7 +130,7 @@ export function seed(db, { resetPasswords = false } = {}) {
         allow_free_chat: a.allowFreeChat,
         created_at: now,
       });
-      insertPrefs.run(a.id, now);
+      insertPrefs.run(a.id, a.ageBand === "child" ? "slow" : "normal", now);
       summary.users += 1;
     }
     sentences.forEach((s, i) => {

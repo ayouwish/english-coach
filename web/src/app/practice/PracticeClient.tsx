@@ -27,6 +27,8 @@ interface Props {
   voiceReachable: boolean;
   voiceMode: string;
   initialUsage: AttemptApiResponse["usage"];
+  /** 有效语速（偏好优先，儿童默认 slow）—— task-21 */
+  ttsRate: "slow" | "normal";
   /** 强化练习模式（来自 /report 的「去练这 N 句」） */
   focus?: { active: boolean; label: string; count: number; matched: boolean; defaultLevel: string };
 }
@@ -39,6 +41,7 @@ export function PracticeClient({
   voiceReachable,
   voiceMode,
   initialUsage,
+  ttsRate,
   focus,
 }: Props) {
   const [level, setLevel] = useState<string>(focus?.defaultLevel ?? (userLevel || "A1"));
@@ -75,10 +78,11 @@ export function PracticeClient({
   useEffect(() => {
     if (!selectedText) return;
     // 示范音路径用页面实际播放所用的语速（儿童=慢速）
-    warmSentence(selectedText, { rate: isChild ? "slow" : "normal" });
+    warmSentence(selectedText, { rate: ttsRate });
     // 儿童还要给"评测路径"预热一次 normal（pronounce 内部合成参考音用的是 normal）
-    if (isChild) warmSentence(selectedText, { rate: "normal" });
-  }, [selectedText, isChild]);
+    // 评测路径内部合成参考音用 normal（契约 §3 默认），与偏好无关，仍需单独预热
+    if (ttsRate !== "normal") warmSentence(selectedText, { rate: "normal" });
+  }, [selectedText, isChild, ttsRate]);
 
   // 低优先级：进入页面/切换等级后，静默预热当前等级前 5 句（串行、去重）
   useEffect(() => {
@@ -169,7 +173,7 @@ export function PracticeClient({
       headers: { "content-type": "application/json" },
       body: JSON.stringify({
         text: selected.text,
-        rate: isChild ? "slow" : "normal",
+        rate: ttsRate,
       }),
     });
     if (!res.ok) return null;

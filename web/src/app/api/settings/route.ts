@@ -15,7 +15,7 @@ const LEVELS: CorrectionLevel[] = ["gentle", "standard", "none"];
 export const GET = route(async () => {
   await ensureBootstrap();
   const user = await requireUser();
-  const prefs = await getPrefs(user.id);
+  const prefs = await getPrefs(user.id, user.isChild);
   const usage = await getDailyUsage(user.id, user.dailyLimitMinutes);
   return jsonOk({ user, prefs, usage });
 });

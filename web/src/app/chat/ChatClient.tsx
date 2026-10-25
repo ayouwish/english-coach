@@ -65,6 +65,7 @@ export function ChatClient({
   hiddenCount,
   usage: initialUsage,
   voiceReachable,
+  ttsRate: initialTtsRate,
 }: {
   isChild: boolean;
   age: number;
@@ -72,6 +73,8 @@ export function ChatClient({
   hiddenCount: number;
   usage: Usage;
   voiceReachable: boolean;
+  /** 服务端算好的有效语速（偏好优先；儿童默认 slow）—— task-21 */
+  ttsRate: "slow" | "normal";
 }) {
   const [active, setActive] = useState<ScenarioItem | null>(null);
   const [sessionId, setSessionId] = useState<string | null>(null);
@@ -102,7 +105,29 @@ export function ChatClient({
   const [readTick, setReadTick] = useState(0);
   const lastAssistantRef = useRef<{ index: number; text: string } | null>(null);
   const timersRef = useRef<Timers>({});
-  const speechRate: "slow" | "normal" = isChild ? "slow" : "normal";
+  /** 当前朗读语速：初始值来自偏好（服务端算好），用户可在头部就地切换 */
+  const [speechRate, setSpeechRate] = useState<"slow" | "normal">(initialTtsRate);
+  const [rateSaving, setRateSaving] = useState(false);
+
+  async function changeRate(next: "slow" | "normal") {
+    if (next === speechRate || rateSaving) return;
+    setRateSaving(true);
+    try {
+      const res = await fetch("/api/settings", {
+        method: "PATCH",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ tts_rate: next }),
+      });
+      if (res.ok) {
+        stopAllAudio();
+        setSpeechRate(next); // 之后的消息（以及回放）立刻用新语速，且已写入偏好
+      }
+    } catch {
+      /* 静默：语速保存失败不影响对话 */
+    } finally {
+      setRateSaving(false);
+    }
+  }
 
   /** 停掉所有正在播的（不销毁元素：用户仍可点原生播放器的 ▶） */
   function stopAllAudio() {
@@ -343,8 +368,40 @@ export function ChatClient({
             {autoRead ? "🔊 自动朗读：开" : "🔇 自动朗读：关"}
           </button>
           <span className="text-xs text-[var(--ec-muted)]">
-            每条回复会自动读出来（{isChild ? "慢速" : "正常语速"}）。语音合成可能要几秒（1–11s），
-            期间消息旁会显示进度；**每条消息下面都有一个播放器**，点它的 ▶ 一定能播。
+            每条回复会自动读出来（当前：{speechRate === "slow" ? "慢速" : "正常语速"}）。
+            合成通常需要几秒，<strong>已经预热过的句子是秒出</strong>；期间消息旁会显示进度。
+            每条消息下面都有一个原生播放器，点它的 ▶ 一定能播。
+          </span>
+        </div>
+
+        <div className="mt-2 flex flex-wrap items-center gap-2">
+          <span className="text-sm font-medium">朗读语速：</span>
+          <button
+            type="button"
+            data-testid="chat-rate-slow"
+            data-rate="slow"
+            aria-pressed={speechRate === "slow"}
+            aria-label="把朗读语速设为慢速"
+            onClick={() => void changeRate("slow")}
+            disabled={rateSaving}
+            className={`ec-btn ${speechRate === "slow" ? "ec-btn-primary" : "ec-btn-ghost"}`}
+          >
+            🐢 慢速
+          </button>
+          <button
+            type="button"
+            data-testid="chat-rate-normal"
+            data-rate="normal"
+            aria-pressed={speechRate === "normal"}
+            aria-label="把朗读语速设为正常"
+            onClick={() => void changeRate("normal")}
+            disabled={rateSaving}
+            className={`ec-btn ${speechRate === "normal" ? "ec-btn-primary" : "ec-btn-ghost"}`}
+          >
+            🐇 正常
+          </button>
+          <span className="text-xs text-[var(--ec-muted)]">
+            慢速更清楚，但合成耗时约为正常语速的 2.3 倍（等待更久）。切换会保存在设置里。
           </span>
         </div>
 
@@ -504,7 +561,7 @@ export function ChatClient({
           data-testid="degraded-llm-banner"
         >
           ⚠️ 当前回复来自<strong>内置话术</strong>（还没接入大模型），它会按剧本往下走、
-          不会真的回应你说的话。配好 `LLM_API_KEY` 并重启 voice 后即可变成智能对话。
+          不会真的回应你说的话。配好 <code>LLM_API_KEY</code> 并重启 voice 后即可变成智能对话。
         </p>
       ) : null}
 

@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { HttpError, requireUser } from "@/lib/auth";
 import { getPrefs } from "@/lib/prefs";
+import { effectiveTtsRate } from "@/lib/tts-rate";
 import { callTts } from "@/lib/voice";
 
 export const dynamic = "force-dynamic";
@@ -27,8 +28,9 @@ async function synthesize(params: {
   if (!text) throw new HttpError(400, "bad_request", "缺少 text");
   if (text.length > 2000) throw new HttpError(413, "payload_too_large", "文本超过 2000 字符上限");
 
-  const prefs = await getPrefs(user.id);
-  const rate = params.rate === "slow" || params.rate === "normal" ? params.rate : user.isChild ? "slow" : prefs.ttsRate;
+  const prefs = await getPrefs(user.id, user.isChild);
+  // 显式传入优先；否则用"有效语速"（偏好优先，儿童默认 slow）—— task-21
+  const rate = params.rate === "slow" || params.rate === "normal" ? params.rate : effectiveTtsRate(user, prefs);
 
   // 默认 wav：**与参考音分析共用同一份预热缓存**（练习页的「听示范」因此零等待）。
   // 但对话回复每次都是全新文本（必 miss），此时 mp3 体积约 1/3、传输更快，所以聊天用 mp3。

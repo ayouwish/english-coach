@@ -8,6 +8,8 @@ import { childSafeDeep } from "@/lib/child-safe";
 import { parseJsonArray, parseJsonObject } from "@/lib/http";
 import { isSpeechMissing } from "@/lib/speech-detection";
 import { getCapabilities } from "@/lib/voice";
+import { getPrefs } from "@/lib/prefs";
+import { effectiveTtsRate } from "@/lib/tts-rate";
 import { getDailyUsage } from "@/lib/usage";
 import { resolveFocus, isMinimalPairSentence } from "@/lib/focus";
 import type { Intonation, PronounceIssue, PronounceResult, SentenceItem } from "@/lib/types";
@@ -144,6 +146,7 @@ export default async function PracticePage({
         voiceReachable={caps.reachable}
         voiceMode={caps.mode}
         initialUsage={usage}
+        ttsRate={effectiveTtsRate(user, await getPrefs(user.id, user.isChild))}
         focus={focusState}
       />
 

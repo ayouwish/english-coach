@@ -5,6 +5,8 @@ import { chatMessages, chatScenarios, chatSessions } from "@/db/schema";
 import { ttsUrl } from "@/lib/tts-url";
 import { getCurrentUser } from "@/lib/auth";
 import { getCapabilities } from "@/lib/voice";
+import { getPrefs } from "@/lib/prefs";
+import { effectiveTtsRate } from "@/lib/tts-rate";
 import { getDailyUsage } from "@/lib/usage";
 import { ChatClient } from "./ChatClient";
 
@@ -56,7 +58,8 @@ export default async function ChatPage() {
           .limit(1)
       )[0]
     : null;
-  const speechRate: "slow" | "normal" = user.isChild ? "slow" : "normal";
+  // 语速：尊重偏好（儿童默认 slow，可被设置覆盖）—— task-21
+  const speechRate = effectiveTtsRate(user, await getPrefs(user.id, user.isChild));
 
   return (
     <div className="flex flex-col gap-5">
@@ -75,6 +78,7 @@ export default async function ChatPage() {
       }))}
       hiddenCount={rows.length - visible.length}
       usage={usage}
+      ttsRate={speechRate}
       voiceReachable={caps.reachable}
     />
 

@@ -50,7 +50,7 @@ export const POST = route(async (req: NextRequest, ctx: { params: Promise<{ id: 
     .orderBy(asc(chatMessages.createdAt));
 
   const turnIndex = history.filter((m) => m.role === "user").length;
-  const prefs = await getPrefs(user.id);
+  const prefs = await getPrefs(user.id, user.isChild);
   const childSafe = user.isChild || !user.allowFreeChat;
   const caps = await getCapabilities();
 

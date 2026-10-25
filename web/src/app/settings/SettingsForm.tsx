@@ -136,17 +136,49 @@ export function SettingsForm({
               className="rounded-xl border border-[#d9dcf0] px-3 py-2"
             />
           </label>
-          <label className="flex flex-col gap-1 text-sm font-medium">
-            示范音语速
-            <select
-              value={ttsRate}
-              onChange={(e) => setTtsRate(e.target.value)}
-              className="rounded-xl border border-[#d9dcf0] px-3 py-2"
-            >
-              <option value="normal">normal</option>
-              <option value="slow">slow（慢速，教学）</option>
-            </select>
-          </label>
+          <div className="flex flex-col gap-1 text-sm font-medium" data-testid="tts-rate-options">
+            <span>朗读语速（示范音 / 对话朗读 / 跟读回放都生效）</span>
+            {/* 儿童用大按钮两选一（小下拉手指不好点），成人保留下拉 */}
+            {user.isChild ? (
+              <div className="mt-1 flex flex-wrap gap-3">
+                <button
+                  type="button"
+                  data-testid="tts-rate-slow"
+                  data-rate="slow"
+                  aria-pressed={ttsRate === "slow"}
+                  aria-label="把朗读语速设为慢速"
+                  onClick={() => setTtsRate("slow")}
+                  className={`ec-btn ${ttsRate === "slow" ? "ec-btn-primary" : "ec-btn-ghost"}`}
+                >
+                  🐢 慢速（听清楚）
+                </button>
+                <button
+                  type="button"
+                  data-testid="tts-rate-normal"
+                  data-rate="normal"
+                  aria-pressed={ttsRate === "normal"}
+                  aria-label="把朗读语速设为正常"
+                  onClick={() => setTtsRate("normal")}
+                  className={`ec-btn ${ttsRate === "normal" ? "ec-btn-primary" : "ec-btn-ghost"}`}
+                >
+                  🐇 正常（快一点）
+                </button>
+              </div>
+            ) : (
+              <select
+                value={ttsRate}
+                onChange={(e) => setTtsRate(e.target.value)}
+                className="rounded-xl border border-[#d9dcf0] px-3 py-2"
+                data-testid="tts-rate-select"
+              >
+                <option value="normal">normal（正常）</option>
+                <option value="slow">slow（慢速，教学）</option>
+              </select>
+            )}
+            <span className="mt-1 text-xs font-normal text-[var(--ec-muted)]">
+              慢速更清楚，但合成耗时约为正常语速的 <strong>2.3 倍</strong>（等待更久）；测过：已经预热过的句子是秒出。
+            </span>
+          </div>
         </div>
 
         {message ? <p className="ec-pop text-sm font-semibold text-[var(--ec-good)]">{message}</p> : null}

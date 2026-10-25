@@ -165,6 +165,78 @@ check(
 check("6s 提示「还在生成」+ 20s 提示「可能失败」", chatSrc.includes("6000") && chatSrc.includes("20000"));
 check("用户录音 object URL 会 revoke", chatSrc.includes("URL.revokeObjectURL"));
 
+// ── 4) 语速偏好真的生效（task-21 核心）──────────────────────────────────────
+section("4. 语速偏好：儿童默认 slow，改成 normal 后真的变 normal");
+const Database = (await import("better-sqlite3")).default;
+const DB_PATH = process.env.DB_PATH ?? path.join(WEB_ROOT, "data/app.db");
+function readRate(userId) {
+  const db = new Database(DB_PATH, { readonly: true });
+  const row = db.prepare("SELECT tts_rate FROM user_prefs WHERE user_id = ?").get(userId);
+  db.close();
+  return row?.tts_rate ?? "(no row)";
+}
+const rateBefore = readRate("u-girl");
+console.log(`   ↳ 数据库 u-girl.tts_rate（迁移后）= ${rateBefore}`);
+check("迁移已生效：儿童账号库里是 slow", rateBefore === "slow", rateBefore);
+
+const setRate = async (cookie, rate) => {
+  const r = await fetch(`${BASE}/api/settings`, {
+    method: "PATCH",
+    headers: { "content-type": "application/json", cookie },
+    body: JSON.stringify({ tts_rate: rate }),
+  });
+  return { status: r.status, body: await r.json() };
+};
+const chatRate = async (cookie) => {
+  const html = (await (await fetch(`${BASE}/chat`, { headers: { cookie } })).text()).replace(/&amp;/g, "&");
+  const src = /src="(\/api\/tts\?[^"]+)"/.exec(html)?.[1] ?? "";
+  return { src, rate: (src.match(/rate=(\w+)/) ?? [])[1] ?? "" };
+};
+
+const def = await chatRate(girl.cookie);
+check("★ 儿童默认：/chat 的 audio src 是 rate=slow", def.rate === "slow", def.src.slice(0, 100));
+
+const toNormal = await setRate(girl.cookie, "normal");
+check("儿童可以自己改语速（PATCH /api/settings 200）", toNormal.status === 200, `status=${toNormal.status}`);
+check("库里随之变成 normal", readRate("u-girl") === "normal", readRate("u-girl"));
+const afterNormal = await chatRate(girl.cookie);
+console.log(`   ↳ 改偏好后的 src：${afterNormal.src.slice(0, 110)}`);
+check(
+  "★★ 偏好真的生效：改 normal 后同一个 audio 请求变成 rate=normal",
+  afterNormal.rate === "normal",
+  `rate=${afterNormal.rate}`,
+);
+
+// 恢复成孩子应有的默认值（slow），不污染用户设置
+const restore = await setRate(girl.cookie, "slow");
+const restored = await chatRate(girl.cookie);
+check("恢复 slow 成功（不残留测试改动）", restore.status === 200 && restored.rate === "slow", `rate=${restored.rate}`);
+
+// ── 5) 显示 bug 回归：不再有字面 markdown/反引号；设置页儿童能用大按钮 ─────────
+section("5. 显示修复 + 儿童设置入口");
+for (const [who, cookie] of [["儿童", girl.cookie], ["成人", mom.cookie]]) {
+  for (const page of ["/chat", "/practice", "/settings"]) {
+    const html = await (await fetch(`${BASE}${page}`, { headers: { cookie } })).text();
+    const visible = html.replace(/<script[\s\S]*?<\/script>/g, "").replace(/<!--\s*-->/g, "");
+    check(`${who} ${page} 不含字面 **`, !visible.includes("**"));
+    check(`${who} ${page} 不含字面反引号`, !/[^\\/]`[A-Za-z_]+`/.test(visible));
+  }
+}
+const girlSettings = (await (await fetch(`${BASE}/settings`, { headers: { cookie: girl.cookie } })).text()).replace(
+  /<!--\s*-->/g,
+  "",
+);
+check("★ 儿童 /settings 有大按钮语速选项 slow", /data-testid="tts-rate-slow"[^>]*aria-pressed/.test(girlSettings));
+check("★ 儿童 /settings 有大按钮语速选项 normal", /data-testid="tts-rate-normal"[^>]*aria-pressed/.test(girlSettings));
+check("语速取舍说明（2.3 倍）可见", girlSettings.includes("2.3"));
+const girlChatHtml = (await (await fetch(`${BASE}/chat`, { headers: { cookie: girl.cookie } })).text()).replace(
+  /<!--\s*-->/g,
+  "",
+);
+check("★ 聊天头部可直接切语速", girlChatHtml.includes('data-testid="chat-rate-slow"') && girlChatHtml.includes('data-testid="chat-rate-normal"'));
+check("聊天头部说明含取舍文案", girlChatHtml.includes("2.3 倍"));
+check("不再写死过时秒数（1–11s）", !girlChatHtml.includes("1–11s") && !girlChatHtml.includes("1–11"));
+
 console.log(`\n合计失败 ${failed} 项`);
 console.log(failed === 0 ? "结论：全部通过 ✅" : "结论：存在失败 ❌");
 process.exit(failed > 0 ? 1 : 0);

@@ -3,7 +3,7 @@
  *
  * 为什么要参数化：43 个音素如果逐个手绘 SVG，既不可维护也无法自动生成。
  * 把它们抽象成一组可比较的维度（舌位高低/前后、唇开合/圆展、气流强弱、受阻位置、
- * 声带是否振动、是否鼻音、时长），就能用**同一个渲染器**为任意音素自动画出侧面剖面动画，
+ * 声带是否振动、是否鼻音、时长），就能用同一个渲染器为任意音素自动画出侧面剖面动画，
  * 并且能自动对比两个音（例如 /θ/ 与 /s/ 的差别只在"舌尖是否伸出齿间"）。
  *
  * 坐标约定（0..1，渲染器按这个解释）：
@@ -55,7 +55,7 @@ export interface ArticulationArt {
 
 export interface Articulation {
   ipa: string;
-  /** 儿童可见的名字（**不含 IPA 符号**） */
+  /** 儿童可见的名字（不含 IPA 符号） */
   childLabel: string;
   /** 发音要点：必须是"可执行的动作" */
   tipZh: string;
@@ -515,7 +515,7 @@ export const ARTICULATIONS: Record<string, Articulation> = {
   r: {
     ipa: "r",
     childLabel: "舌尖不碰任何地方的「若」",
-    tipZh: "舌尖抬向齿龈后但**不接触**，舌尖略卷，双唇略圆。",
+    tipZh: "舌尖抬向齿龈后但不接触，舌尖略卷，双唇略圆。",
     tipChildZh: "舌尖往上卷一点，但不要碰到牙床，嘴唇圆一点说「若」。",
     commonErrorsZh: ["读成中文「r」卷舌太重", "舌尖顶到了牙床变成 /l/", "读成 /w/"],
     examples: ["red", "right", "very", "green"],
@@ -525,7 +525,7 @@ export const ARTICULATIONS: Record<string, Articulation> = {
   j: {
     ipa: "j",
     childLabel: "「耶」的 y",
-    tipZh: "舌前部抬到硬腭但**不摩擦**，很快滑向后面的元音。",
+    tipZh: "舌前部抬到硬腭但不摩擦，很快滑向后面的元音。",
     tipChildZh: "舌头前部往上抬，很快滑到下一个音，说「耶」。",
     commonErrorsZh: ["摩擦太重变成 /dʒ/", "与 /i/ 混"],
     examples: ["yes", "you", "year", "yellow"],

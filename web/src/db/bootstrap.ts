@@ -63,7 +63,7 @@ export function seedAccounts(
   );
   const insertPrefs = sqlite.prepare(
     `INSERT INTO user_prefs (user_id, correction_level, tts_voice, tts_rate, updated_at)
-     VALUES (?, 'gentle', NULL, 'normal', ?)
+     VALUES (?, 'gentle', NULL, ?, ?)
      ON CONFLICT(user_id) DO NOTHING`,
   );
   for (const a of accounts) {
@@ -81,7 +81,8 @@ export function seedAccounts(
       allow_free_chat: a.allowFreeChat,
       created_at: now,
     });
-    insertPrefs.run(a.id, now);
+    // 新儿童账号默认慢速（task-21）；成人默认正常
+    insertPrefs.run(a.id, a.ageBand === "child" ? "slow" : "normal", now);
   }
 }
 

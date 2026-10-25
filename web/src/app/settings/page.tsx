@@ -13,7 +13,7 @@ export default async function SettingsPage() {
   await ensureBootstrap();
   const user = await getCurrentUser();
   if (!user) redirect("/login");
-  const prefs = await getPrefs(user.id);
+  const prefs = await getPrefs(user.id, user.isChild);
   const usage = await getDailyUsage(user.id, user.dailyLimitMinutes);
   const mySentences = user.role === "parent"
     ? (await listVisibleSentences(user)).filter((s) => s.mine)
