@@ -46,11 +46,12 @@ jobs:
       - uses: pnpm/action-setup@v4
         with:
           version: 11
+      # 不用 setup-node 的 `cache: pnpm`：它会在**仓库根**（没有 package.json）执行
+      # `pnpm store path` 来定位缓存，在 pnpm 11 + 前端位于子目录时会失败。
+      # CI 慢一点可以接受，可靠性优先。
       - uses: actions/setup-node@v4
         with:
-          node-version: "20"
-          cache: pnpm
-          cache-dependency-path: web/pnpm-lock.yaml
+          node-version: "22"
       - name: 安装依赖
         working-directory: web
         run: pnpm install --frozen-lockfile
@@ -90,11 +91,12 @@ jobs:
       - uses: pnpm/action-setup@v4
         with:
           version: 11
+      # 不用 setup-node 的 `cache: pnpm`：它会在**仓库根**（没有 package.json）执行
+      # `pnpm store path` 来定位缓存，在 pnpm 11 + 前端位于子目录时会失败。
+      # CI 慢一点可以接受，可靠性优先。
       - uses: actions/setup-node@v4
         with:
-          node-version: "20"
-          cache: pnpm
-          cache-dependency-path: web/pnpm-lock.yaml
+          node-version: "22"
       - working-directory: web
         run: pnpm install --frozen-lockfile
 
