@@ -244,6 +244,11 @@ def test_piper_tts_returns_decodable_wav(monkeypatch):
 
 
 def test_piper_slow_rate_uses_length_scale(monkeypatch):
+    # `piper` 是**可选**依赖（只在 requirements-local.txt 里）。本用例验证的是
+    # "慢速通过 SynthesisConfig.length_scale 拉长"这段真实接线，需要 piper.config 里的类，
+    # 所以没装 piper 时应跳过而不是失败 —— 这正是首次 CI 失败的原因
+    # （CI 只装 requirements.txt，而它是 `uv export --no-dev` 导出的，不含本地 provider 依赖）。
+    pytest.importorskip("piper", reason="本地合成 provider 的可选依赖未安装")
     voice = _FakePiperVoice()
     monkeypatch.setattr("app.providers.piper.load_voice", lambda *a, **k: voice)
     PiperTTS().synthesize("hello", rate="slow")

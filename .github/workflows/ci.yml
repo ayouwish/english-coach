@@ -23,7 +23,11 @@ jobs:
           cache: pip
           cache-dependency-path: voice/requirements.txt
       - name: 安装依赖
-        run: pip install -r voice/requirements.txt
+        # requirements.txt 是 `uv export --no-dev` 导出的，**不含测试依赖**；
+        # 首次 CI 就是栽在这里（python -m pytest → No module named pytest）。
+        run: |
+          pip install -r voice/requirements.txt
+          pip install "pytest>=8.0"
       - name: pytest
         working-directory: voice
         # conftest 会把 ENV_FILE 指向一个不存在的文件，测试不依赖任何真实密钥
@@ -34,9 +38,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      # 不写死 version：pnpm/action-setup 会读 package.json 的 `packageManager` 字段
+      # （本项目固定 pnpm 11 —— web/pnpm-workspace.yaml 是纯配置型，pnpm 9 会报
+      #  `ERROR packages field missing or empty`，这正是首次 CI 失败的原因）
       - uses: pnpm/action-setup@v4
-        with:
-          version: 9
       - uses: actions/setup-node@v4
         with:
           node-version: "20"
@@ -73,9 +78,10 @@ jobs:
           cache-dependency-path: voice/requirements.txt
       - run: pip install -r voice/requirements.txt
 
+      # 不写死 version：pnpm/action-setup 会读 package.json 的 `packageManager` 字段
+      # （本项目固定 pnpm 11 —— web/pnpm-workspace.yaml 是纯配置型，pnpm 9 会报
+      #  `ERROR packages field missing or empty`，这正是首次 CI 失败的原因）
       - uses: pnpm/action-setup@v4
-        with:
-          version: 9
       - uses: actions/setup-node@v4
         with:
           node-version: "20"

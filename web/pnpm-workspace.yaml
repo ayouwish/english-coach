@@ -1,5 +1,20 @@
-# pnpm 10+ 的配置都在这里（package.json 里的 "pnpm" 字段已不再被读取）
-storeDir: ../../.cache/pnpm-store
+# pnpm 10+ 的配置放在这里（package.json 里的 "pnpm" 字段已不再被读取）。
+#
+# ⚠️ 两个坑，都是踩过才写在这里的：
+#
+# 1) 不要写机器专属路径。早期这里写过 `storeDir: ../../.cache/pnpm-store`
+#    （指向仓库外），在 CI 和别人的机器上完全无效，甚至可能因目录不可写而失败。
+#    → 已移除，改用 pnpm 默认 store。
+#
+# 2) 也不要随手加 `packages:` 字段。本仓库是单包（非 monorepo），
+#    一旦声明 workspace 就会改变依赖提升与链接语义。
+#    代价：pnpm 9 无法解析这种"纯配置型" workspace 文件（会报
+#    `ERROR packages field missing or empty`）。所以本项目的 pnpm 版本
+#    由 package.json 的 `packageManager` 字段固定（≥10），CI 也按它安装。
+
+# 这些依赖的 postinstall 必须执行（原生模块编译 / 二进制下载）。
+# pnpm 10+ 默认拦截构建脚本：不在这里声明，better-sqlite3 就不会被编译、
+# esbuild 也没有二进制 —— 装得"成功"但跑不起来。
 onlyBuiltDependencies:
   - better-sqlite3
   - esbuild
