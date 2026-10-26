@@ -1,0 +1,43 @@
+{
+  "accounts": [
+    {
+      "id": "u-dad",
+      "email": "dad@example.com",
+      "password": "Dad12345!",
+      "displayName": "爸爸",
+      "role": "parent",
+      "birthYear": 1988,
+      "ageBand": "adult",
+      "cefrLevel": "B1",
+      "avatar": "👨",
+      "dailyLimitMinutes": 30,
+      "allowFreeChat": 1
+    },
+    {
+      "id": "u-mom",
+      "email": "mom@example.com",
+      "password": "Mom12345!",
+      "displayName": "妈妈",
+      "role": "parent",
+      "birthYear": 1990,
+      "ageBand": "adult",
+      "cefrLevel": "A2",
+      "avatar": "👩",
+      "dailyLimitMinutes": 30,
+      "allowFreeChat": 1
+    },
+    {
+      "id": "u-girl",
+      "email": "girl@example.com",
+      "password": "Girl12345!",
+      "displayName": "女儿",
+      "role": "child",
+      "birthYear": 2018,
+      "ageBand": "child",
+      "cefrLevel": "A1",
+      "avatar": "🧒",
+      "dailyLimitMinutes": 20,
+      "allowFreeChat": 0
+    }
+  ]
+}

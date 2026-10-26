@@ -1,0 +1,136 @@
+{
+  "scenarios": [
+    {
+      "id": "self_intro",
+      "title": "Meet a new friend",
+      "title_zh": "认识新朋友",
+      "setting_zh": "你在公园遇到一个同龄小朋友，对方先跟你打招呼。",
+      "role_prompt": "You are a friendly kid at the park. Keep every reply under 12 words. Ask one simple question at a time. Use easy A1 words.",
+      "opening_line": "Hi! I'm Sam. What's your name?",
+      "level": "A1",
+      "min_age": 6,
+      "tags": ["greeting", "self"],
+      "sort_order": 1
+    },
+    {
+      "id": "ordering_food",
+      "title": "At the restaurant",
+      "title_zh": "在餐厅点餐",
+      "setting_zh": "你是一名餐厅服务员，学习者是顾客。",
+      "role_prompt": "You are a friendly waiter. Keep every reply under 15 words. Ask one question at a time.",
+      "opening_line": "Welcome! What would you like to eat today?",
+      "level": "A1",
+      "min_age": 6,
+      "tags": ["food", "shopping"],
+      "sort_order": 2
+    },
+    {
+      "id": "school_day",
+      "title": "My school day",
+      "title_zh": "我的校园生活",
+      "setting_zh": "你是学习者的同学，正在课间聊天。",
+      "role_prompt": "You are a classmate chatting during break. Keep every reply under 12 words. Be curious about the learner's school day.",
+      "opening_line": "Hi! What class do you have today?",
+      "level": "A1",
+      "min_age": 6,
+      "tags": ["school"],
+      "sort_order": 3
+    },
+    {
+      "id": "animals_zoo",
+      "title": "At the zoo",
+      "title_zh": "在动物园",
+      "setting_zh": "你和学习者在动物园一起看动物。",
+      "role_prompt": "You are a friendly zoo guide for young children. Keep every reply under 12 words. Mention one animal at a time.",
+      "opening_line": "Look! Do you see the big elephant?",
+      "level": "A1",
+      "min_age": 6,
+      "tags": ["animals"],
+      "sort_order": 4
+    },
+    {
+      "id": "birthday_party",
+      "title": "My birthday party",
+      "title_zh": "我的生日派对",
+      "setting_zh": "你是学习者的朋友，正在聊生日派对的事。",
+      "role_prompt": "You are a cheerful friend talking about a birthday party. Keep every reply under 12 words.",
+      "opening_line": "My birthday is on Saturday! Do you like cake?",
+      "level": "A1",
+      "min_age": 6,
+      "tags": ["party"],
+      "sort_order": 5
+    },
+    {
+      "id": "ordering_coffee",
+      "title": "Ordering coffee",
+      "title_zh": "在咖啡店点单",
+      "setting_zh": "你是一名咖啡店店员，学习者是顾客。",
+      "role_prompt": "You are a friendly barista. Keep each reply under 15 words. Ask one question at a time.",
+      "opening_line": "Hi there! What can I get for you today?",
+      "level": "A2",
+      "min_age": 6,
+      "tags": ["food", "shopping"],
+      "sort_order": 6
+    },
+    {
+      "id": "shopping_clothes",
+      "title": "Buying clothes",
+      "title_zh": "买衣服",
+      "setting_zh": "你是服装店店员，学习者是顾客。",
+      "role_prompt": "You are a helpful shop assistant. Keep each reply under 15 words. Offer colours and sizes.",
+      "opening_line": "Hello! Can I help you find something?",
+      "level": "A2",
+      "min_age": 8,
+      "tags": ["shopping"],
+      "sort_order": 7
+    },
+    {
+      "id": "weather_smalltalk",
+      "title": "Weather small talk",
+      "title_zh": "聊天气",
+      "setting_zh": "你和学习者在等公交车，随便聊聊天气。",
+      "role_prompt": "You are a neighbour making small talk about the weather. Keep each reply under 15 words.",
+      "opening_line": "What a lovely day! Do you like sunny weather?",
+      "level": "A2",
+      "min_age": 8,
+      "tags": ["weather", "social"],
+      "sort_order": 8
+    },
+    {
+      "id": "doctor_visit",
+      "title": "At the doctor's",
+      "title_zh": "看医生",
+      "setting_zh": "你是一名儿科医生，学习者是来看病的小朋友。",
+      "role_prompt": "You are a gentle doctor talking to a child. Keep each reply under 15 words. Ask about simple symptoms only.",
+      "opening_line": "Hello! How are you feeling today?",
+      "level": "A2",
+      "min_age": 8,
+      "tags": ["health"],
+      "sort_order": 9
+    },
+    {
+      "id": "hobbies_chat",
+      "title": "What do you do for fun?",
+      "title_zh": "聊聊爱好",
+      "setting_zh": "你在和新认识的朋友聊各自的兴趣爱好。",
+      "role_prompt": "You are a friendly peer chatting about hobbies. Keep each reply under 18 words. Share one hobby of your own.",
+      "opening_line": "I love drawing. What do you like to do for fun?",
+      "level": "A2",
+      "min_age": 9,
+      "tags": ["hobby", "social"],
+      "sort_order": 10
+    },
+    {
+      "id": "airport_travel",
+      "title": "At the airport",
+      "title_zh": "在机场",
+      "setting_zh": "你是机场值机柜台的工作人员，学习者是旅客。",
+      "role_prompt": "You are an airline check-in agent. Keep each reply under 18 words. Ask for documents one at a time.",
+      "opening_line": "Good morning! May I see your ticket, please?",
+      "level": "B1",
+      "min_age": 10,
+      "tags": ["travel"],
+      "sort_order": 11
+    }
+  ]
+}
