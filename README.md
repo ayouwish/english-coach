@@ -234,7 +234,8 @@ python tests/audit_corpus_phonemes.py
 |---|---|
 | [docs/architecture.md](docs/architecture.md) | 架构设计与关键取舍（含踩坑记录） |
 | [docs/api-contract.md](docs/api-contract.md) | 接口契约 v1.4（冻结） |
-| [docs/nas-deployment.md](docs/nas-deployment.md) | NAS 部署完整流程 |
+| [docs/nas-deployment.md](docs/nas-deployment.md) | NAS 部署完整流程（群晖 / 威联通） |
+| [docs/fnos-deployment.md](docs/fnos-deployment.md) | **飞牛 fnOS 部署指南**（端口冲突 / HTTPS 与麦克风 / 国内镜像） |
 | [docs/deployment.md](docs/deployment.md) | 通用部署与运维 |
 | [docs/verification.md](docs/verification.md) | 验收记录与真实 Azure 联调数据 |
 | [docs/hardware-cost.md](docs/hardware-cost.md) | 硬件与成本核算 |

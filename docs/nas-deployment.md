@@ -1,5 +1,8 @@
 # 在 NAS 上部署 english-coach（群晖 DSM / 威联通 QNAP）
 
+> 如果你用的是 **飞牛 fnOS**，请看 [fnos-deployment.md](fnos-deployment.md) ——
+> 它的端口与目录约定和群晖/威联通差别较大（自带 Nginx 占 80/443）。
+
 > 版本 v1.0 ｜ 2026-10-25 ｜ 适用 `deploy/docker-compose.yml`（205 行）
 > 配套：[部署手册](deployment.md)（通用 + 本机直跑）· [系统设计](architecture.md) · [接口契约](api-contract.md) · [硬件与成本](hardware-cost.md)
 
