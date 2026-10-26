@@ -12,7 +12,14 @@ __pycache__/
 
 # ── 运行数据（含家庭隐私 + 可再生的缓存，绝不入库）────────────
 # web: SQLite 数据库 + 孩子的录音；voice: 参考音/F0 缓存（几百 MB，可重新预热）
-data/
+#
+# ⚠️ 必须写**锚定路径**。早期这里写的是笼统的 `data/`，它匹配任意层级叫 data 的目录，
+#    于是把 `web/src/data/`（300 句语料 / 场景 / 种子账号）也一起忽略了 ——
+#    结果是"仓库能 clone 但跑不起来"，CI 的类型检查直接报
+#    `Cannot find module '@/data/sentences.json'`。开源仓库绝不能少了这些源码数据。
+/data/
+/web/data/
+/voice/data/
 *.db
 *.db-wal
 *.db-shm
