@@ -166,6 +166,11 @@ PY
       if [[ -n "${W_DBERR:-}" ]]; then
         printf "       %sdb.error = %s%s\n" "$C_Y" "$W_DBERR" "$C_0"
         case "$W_DBERR" in
+          */app/*|*/app/migrations*)
+            # 镜像内文件 EACCES —— 和 data/ 属主无关，是构建上下文权限被带进了镜像
+            printf "       %s→ 镜像内文件权限不对（构建上下文里是 600，COPY 原样带进镜像）%s\n" "$C_Y" "$C_0"
+            printf "       %s  立即修： docker compose exec -u root web sh -c 'chmod -R a+rX /app/migrations /app/src/data /app/scripts /app/public'%s\n" "$C_Y" "$C_0"
+            printf "       %s  永久修： 在仓库里 chmod -R a+rX web/ 后 docker compose build web%s\n" "$C_Y" "$C_0" ;;
           *SQLITE_CANTOPEN*|*EACCES*|*permission*|*readonly*)
             printf "       %s→ 权限问题：sudo chown -R 1000:1000 <repo>/data 后重启 web%s\n" "$C_Y" "$C_0" ;;
           *migrations*|*"no such table"*)

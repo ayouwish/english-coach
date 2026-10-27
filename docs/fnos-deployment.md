@@ -388,7 +388,8 @@ docker compose logs -f web | head -40
 | `docker compose up` 报 compose 文件解析错误 | Compose < v2.24，见 §3 的降级改法 |
 | caddy 起不来 / 端口被占 | 飞牛自带 Nginx 占了 80/443，见 §2 用方案 A 或改 8443 |
 | 页面能开，但**录音按钮报"无法访问麦克风"** | 用了 `http://内网IP`。必须 `https://` 或 `localhost`，见 §6 |
-| `web` 容器反复重启，日志 `SQLITE_CANTOPEN` / `EACCES` | `data/` 属主不对：`chown -R 1000:1000 /vol1/1000/docker/english-coach/data` |
+| `web` 容器反复重启，日志 `SQLITE_CANTOPEN` / `EACCES` | `data/` 属主不对：`chown -R 1000:1000 <repo>/data` |
+| `/api/health` 里 `db.ok=false`，`db.error` 是 **`EACCES ... '/app/migrations/...'`**（或预热脚本报 `/app/src/data/...` EACCES） | **不是数据目录问题**，是**镜像内文件权限**：如果用 `scp`/`rsync` 把仓库拷到 NAS（或 `umask 077` 下 clone），文件是 `600`，`COPY` 会把 600 带进镜像，运行期 `USER node`(uid 1000) 读不了。<br>立即修：`docker compose exec -u root web sh -c 'chmod -R a+rX /app/migrations /app/src/data /app/scripts /app/public' && docker compose restart web`<br>永久修：仓库里 `find . -type f -exec chmod 644 {} +`（`.env` 保持 600）后 `docker compose build web` |
 | `/api/health` 里 `voice.reachable=false` | voice 没起来或没 healthy：`docker compose logs voice`；确认 `.env` 里没有语法错误 |
 | 评测返回 401 / `scores` 全是 null | Azure key/region 没配好；或音频不是语音（无语音时按契约返回 `null` 是**正确行为**） |
 | 示范音要等好几秒 | 没预热。跑 §8 的预热；Azure 合成新文本本身 1–5 秒 |

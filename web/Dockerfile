@@ -81,6 +81,16 @@ COPY --from=builder /app/migrations ./migrations
 COPY --from=builder /app/src/data ./src/data
 COPY --from=builder /app/scripts ./scripts
 
+# ★ 把从**构建上下文**拷进来的目录统一成"任何用户可读"。
+#   原因：如果宿主机/CI 上的仓库文件是 600（umask 077，或用 scp/rsync 保留了权限），
+#   `COPY` 会把 600 原样带进镜像；而运行期是 `USER node`（uid 1000），读不了 root 的 600 文件，
+#   表现为：
+#     /api/health → status=degraded, db.ok=false
+#     db.error = EACCES: permission denied, open '/app/migrations/0001_init.sql'
+#     （同理 scripts/ 与 src/data/ 也会 EACCES，预热脚本读不到语料）
+#   `a+rX`：文件加读、目录加读+进入，不改变已有可执行位。
+RUN chmod -R a+rX /app/migrations /app/src/data /app/scripts /app/public
+
 RUN mkdir -p /app/data/audio && chown -R node:node /app/data
 USER node
 EXPOSE 3000

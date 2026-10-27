@@ -44,6 +44,10 @@ RUN uv pip install --system --no-cache -r requirements.txt
 
 COPY app ./app
 
+# 同 web：构建上下文的文件可能是 600（umask 077 / scp 保留权限），
+# 统一成"任何用户可读"，避免以后改成非 root 运行时出现 EACCES。
+RUN chmod -R a+rX /app/app
+
 # 预热 CLI 也进镜像：scripts/warmup.py 用 Path(__file__).parent.parent 推导 import 根，
 # 放在 /app/scripts 下正好解析到 /app，因此容器内可直接
 #   docker compose exec voice python scripts/warmup.py --items ...
