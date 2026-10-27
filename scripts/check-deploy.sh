@@ -36,6 +36,9 @@ WEB_URL="${WEB_URL:-http://127.0.0.1:3000}"
 TIMEOUT="${TIMEOUT:-60}"
 CHECK_LLM="${CHECK_LLM:-1}"
 EXPECT_PROVIDERS="${EXPECT_PROVIDERS:-}"
+# 记录是否由用户**显式**指定：未指定时，"没有 caddy 容器"应当 SKIP 而不是 FAIL ——
+# 飞牛/DSM/QNAP 上更常见的做法是让 NAS 自带 Nginx 终结 TLS，根本不跑 caddy。
+EXPECT_SERVICES_EXPLICIT="${EXPECT_SERVICES:+1}"
 EXPECT_SERVICES="${EXPECT_SERVICES:-voice web caddy}"
 EXTERNAL_URL="${EXTERNAL_URL:-}"
 
@@ -91,6 +94,12 @@ if command -v docker >/dev/null 2>&1 && (cd "$DEPLOY_DIR" && docker compose ps -
   for svc in $EXPECT_SERVICES; do
     cid="$(cd "$DEPLOY_DIR" && docker compose ps -q "$svc" 2>/dev/null)"
     if [[ -z "$cid" ]]; then
+      if [[ "$svc" == "caddy" && -z "$EXPECT_SERVICES_EXPLICIT" ]]; then
+        skip "容器 caddy" \
+             "没有 caddy 容器，且未显式要求 —— 视为 TLS 由 NAS 自带反向代理终结（飞牛/DSM/QNAP 常见做法）" \
+             "若确实要用 caddy：EXPECT_SERVICES=\"voice web caddy\" ./scripts/check-deploy.sh"
+        continue
+      fi
       bad "容器 $svc 在运行" "没有该服务的容器" "cd deploy && docker compose up -d $svc"
       continue
     fi
@@ -140,18 +149,31 @@ import json, sys
 d = json.load(open(sys.argv[1], encoding="utf-8"))
 db = (d.get("db") or {}).get("ok")
 v = d.get("voice") or {}
-print("%s|%s|%s|%s" % (d.get("status"), db, v.get("reachable"), v.get("mode")))
+err = str((d.get("db") or {}).get("error") or "").replace("|", "/").replace("\n", " ")[:300]
+print("%s|%s|%s|%s|%s" % (d.get("status"), db, v.get("reachable"), v.get("mode"), err))
 PY
 )"
   if [[ -z "$W_LINE" ]]; then
     warn "web /api/health 响应无法解析" "HTTP 200 但没有解析出字段（本机缺 python3？）" \
          "人工确认：curl -s $WEB_URL/api/health | python3 -m json.tool"
   else
-    IFS='|' read -r W_ST W_DB W_VREACH W_VMODE <<<"$W_LINE"
+    IFS='|' read -r W_ST W_DB W_VREACH W_VMODE W_DBERR <<<"$W_LINE"
     if [[ "$W_ST" == "ok" && "$W_DB" == "True" ]]; then ok "web /api/health ok 且数据库可用"
     else
       bad "web /api/health / 数据库" "status=$W_ST db.ok=$W_DB" \
           "数据库不可写最常见：data/ 属主不对（NAS 头号坑）→ sudo chown -R 1000:1000 data/"
+      # ★ 把服务端真实报错打出来：否则只能看到 db.ok=False，无法定位
+      if [[ -n "${W_DBERR:-}" ]]; then
+        printf "       %sdb.error = %s%s\n" "$C_Y" "$W_DBERR" "$C_0"
+        case "$W_DBERR" in
+          *SQLITE_CANTOPEN*|*EACCES*|*permission*|*readonly*)
+            printf "       %s→ 权限问题：sudo chown -R 1000:1000 <repo>/data 后重启 web%s\n" "$C_Y" "$C_0" ;;
+          *migrations*|*"no such table"*)
+            printf "       %s→ 迁移问题：确认镜像里有 migrations/（MIGRATIONS_DIR），或数据目录被旧文件占用%s\n" "$C_Y" "$C_0" ;;
+          *"not a database"*|*malformed*|*corrupt*)
+            printf "       %s→ app.db 损坏或不是数据库文件：备份后删除 <repo>/data/app.db 让服务重建%s\n" "$C_Y" "$C_0" ;;
+        esac
+      fi
     fi
     if [[ "$W_VREACH" == "True" ]]; then ok "web → voice 连通" "voice.mode=$W_VMODE"
     else
