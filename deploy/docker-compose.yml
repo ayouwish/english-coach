@@ -24,6 +24,10 @@ services:
     build:
       context: ../voice
       dockerfile: Dockerfile
+      args:
+        # Python 包源：国内/离线环境在 .env 里设
+        #   PIP_INDEX_URL=https://pypi.tuna.tsinghua.edu.cn/simple
+        PIP_INDEX_URL: ${PIP_INDEX_URL:-https://pypi.org/simple}
     image: english-coach-voice:0.1.0
     restart: unless-stopped
     # .env 不存在时不报错（compose 长语法 required:false）；仍建议先 cp .env.example .env
@@ -87,6 +91,9 @@ services:
         # 不在这里传的话，构建期 fallback 成 http://127.0.0.1:8100 → web 容器内指向自己，
         # 浏览器播放 /voice/v1/audio/... 会全部 404/502。
         VOICE_SERVICE_URL: http://voice:8100
+        # npm registry：国内/离线环境在 .env 里设 NPM_REGISTRY=https://registry.npmmirror.com
+        # （默认官方源）。不设也能构建，只是飞牛/国内直连 npmjs 可能超时。
+        NPM_REGISTRY: ${NPM_REGISTRY:-https://registry.npmjs.org}
     image: english-coach-web:0.1.0
     restart: unless-stopped
     env_file:

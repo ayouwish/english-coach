@@ -222,6 +222,30 @@ docker load -i english-coach.tar
 cd /vol1/1000/docker/english-coach/deploy && docker compose up -d
 ```
 
+**④ 构建期包源（pnpm / pip）——这个不设，构建很可能直接失败**
+
+即使基础镜像拉下来了，**构建过程中还要联网装依赖**。飞牛上实测过的报错：
+
+```
+[web builder 6/6] RUN pnpm build
+  ! Corepack is about to download https://registry.npmjs.org/pnpm/-/pnpm-11.28.5.tgz
+  Error: ... pnpm-11.28.5.tgz ... [cause]: Error: read ECONNRESET
+```
+
+原因是 corepack 会在"真正运行 pnpm 的那一刻"才去 registry 下对应版本，
+多阶段构建里每个用到 pnpm 的 stage 都要下一次；国内直连 npmjs 很容易被重置。
+
+**当前仓库已修掉这个机制**（pnpm 在共享基础层用 npm 显式安装一次，不再依赖 corepack），
+并把包源做成构建参数，在 `deploy/.env` 里设两行即可：
+
+```ini
+NPM_REGISTRY=https://registry.npmmirror.com
+PIP_INDEX_URL=https://pypi.tuna.tsinghua.edu.cn/simple
+```
+
+设了之后 `docker compose build` 会自动传给两个镜像（`deploy/docker-compose.yml` 里已接线），
+**顺带把 `pnpm install` 从 5 分钟压缩到几十秒**（实测飞牛上 deps 阶段原本 314 秒）。
+
 **③ 用国内镜像源的基础镜像**：把两个 Dockerfile 的 `FROM node:22-bookworm-slim` /
 `FROM python:3.11-slim` 换成镜像站前缀（如 `docker.m.daocloud.io/library/node:22-bookworm-slim`）。
 

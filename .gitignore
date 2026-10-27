@@ -44,3 +44,9 @@ Thumbs.db
 .tone.wav
 deploy/.*.log
 deploy/.*.wav
+
+# 编辑器临时/交换文件（vi/vim 打开 .env 时会生成 .env.swp —— 里面是明文的密钥副本！）
+*.swp
+*.swo
+*.swn
+*~

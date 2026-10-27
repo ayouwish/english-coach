@@ -7,6 +7,13 @@
 # 默认 PROVIDER_MODE=mock：**没有任何密钥也能起来并全链路可用**。
 FROM python:3.11-slim
 
+# Python 包镜像源：国内/离线环境建议
+#   --build-arg PIP_INDEX_URL=https://pypi.tuna.tsinghua.edu.cn/simple
+# （同时作用于下面的 pip 与 uv；compose 里通过 .env 的 PIP_INDEX_URL 传入）
+ARG PIP_INDEX_URL=https://pypi.org/simple
+ENV PIP_INDEX_URL=${PIP_INDEX_URL} \
+    UV_INDEX_URL=${PIP_INDEX_URL}
+
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
     PIP_NO_CACHE_DIR=1 \
