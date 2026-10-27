@@ -1,0 +1,27 @@
+# 局域网 HTTPS 覆盖文件 —— 给"80/443 已被系统占用"的 NAS 用（飞牛 fnOS / 群晖 / 威联通）
+#
+# 用法（在 deploy/ 目录）：
+#   docker compose -f docker-compose.yml -f docker-compose.lan-https.yaml up -d voice web caddy
+#   访问： https://<你的局域网IP>:8443
+#
+# 或者直接用 helper 脚本（会顺便改 .env、导出根证书、打印设备安装步骤）：
+#   cd .. && ./scripts/lan-https-setup.sh
+#
+# ── 为什么要这个覆盖文件 ──────────────────────────────────────────────────────
+# 飞牛自带 Nginx 占用宿主机的 80 / 443 / 8000 / 8001，base compose 里 caddy 的
+# "80:80 / 443:443" 会直接端口冲突起不来。这里把 caddy 的**宿主端口**改到 8443，
+# 容器内仍是标准 443 —— Caddyfile 完全不用动。
+#
+# 为什么用 `!override`：Compose 对 `ports` 这类多值字段的默认合并行为是**追加**，
+# 直接写 8443:443 会把 base 里的 80/443 保留下来，照样冲突。
+# `!override` 需要 Compose ≥ v2.24（能用 env_file 的 path/required 长语法就满足）。
+#
+# ⚠️ 局域网自签场景请保持 HTTPS 的 HSTS 关闭（Caddyfile 里已默认注释掉），
+#    否则证书不受信时浏览器会直接硬失败、连"继续访问"都不给。
+
+services:
+  caddy:
+    ports: !override
+      - "8443:443"
+      # QUIC/HTTP3 走 UDP；不映射也能用（浏览器自动回落 h2），映射了更快
+      - "8443:443/udp"

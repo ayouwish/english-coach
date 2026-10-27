@@ -173,6 +173,51 @@ SITE_ADDRESS=english.example.com
 **这意味着**：从手机/平板打开 `http://192.168.1.x:3000` 时，**录音按钮会直接失败**
 （"无法访问麦克风"）。所以在 NAS 上部署，HTTPS 是硬要求。
 
+### 只在家用（局域网）？推荐这条：Caddy 自签 + 8443
+
+不用域名、不用公网、不碰飞牛的系统文件。一条命令搞定服务端：
+
+```bash
+cd /vol1/1000/project/english-coach
+./scripts/lan-https-setup.sh            # 自动探测局域网 IP；也可 ./scripts/lan-https-setup.sh 192.168.1.50
+```
+
+它做的事（全部幂等，可重跑）：
+
+1. 在 `deploy/.env` 里写入 `SITE_ADDRESS=<你的局域网IP>`、`TLS_CERT_MODE=internal`、`COOKIE_SECURE=1`
+2. 用 `deploy/docker-compose.lan-https.yaml` 覆盖启动 caddy —— **宿主端口改成 8443**，
+   绕开飞牛占用的 80/443（容器内仍是标准 443，Caddyfile 不用改）
+3. 用 Caddy **内置 CA** 给这个 IP 签证书，并把**根证书**导出到 `deploy/caddy-root-ca.crt`
+4. 自检 `https://127.0.0.1:8443/healthz → ok`，并校验证书里确实包含该 IP
+
+**然后必须在家人的每台设备上装一次根证书**（这一步最容易漏，但漏了就不算 secure context）：
+
+| 设备 | 步骤 |
+|---|---|
+| iPhone / iPad | Safari 打开证书 → 允许下载描述文件 → 设置→通用→VPN与设备管理→安装 → **设置→通用→关于本机→证书信任设置→打开完全信任** |
+| Android | 设置 → 安全 → 加密与凭据 → 安装证书 → **CA 证书** → 选择该文件 |
+| Windows | 双击 → 安装证书 → 本地计算机 → **受信任的根证书颁发机构** |
+| macOS | 双击导入钥匙串 → 系统 → 该证书 → 显示简介 → 信任 → **始终信任** |
+
+之后访问 **`https://<你的局域网IP>:8443`**，地址栏出现锁头，录音按钮就能用了。
+
+验证：
+
+```bash
+curl --cacert deploy/caddy-root-ca.crt https://<你的局域网IP>:8443/healthz   # 应输出 ok
+EXTERNAL_URL=https://<你的局域网IP>:8443 ./scripts/check-deploy.sh
+```
+
+**两个注意点**：
+
+- **IP 要固定**：在路由器上给 NAS 做 DHCP 静态绑定。IP 变了证书就对不上，需要重跑脚本。
+- **别开 HSTS**：Caddyfile 里 HSTS 默认是注释掉的，自签场景千万别打开 ——
+  证书一旦不受信，浏览器会直接硬失败，连"继续访问"都不给。
+- 想让地址更好看（`coach.lan` 而不是 IP），给它起个局域网能解析的名字后
+  `./scripts/lan-https-setup.sh coach.lan` 重新签一次即可。
+
+---
+
 三种拿可信证书的方式，按省事程度排序：
 
 | 方式 | 前提 | 备注 |
