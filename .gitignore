@@ -50,3 +50,8 @@ deploy/.*.wav
 *.swo
 *.swn
 *~
+# 证书私钥（部署时放进 deploy/certs/，绝不能进仓库）
+deploy/certs/*
+!deploy/certs/.gitkeep
+*.pem
+!*/caddy-root-ca.crt

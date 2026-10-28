@@ -173,6 +173,52 @@ SITE_ADDRESS=english.example.com
 **这意味着**：从手机/平板打开 `http://192.168.1.x:3000` 时，**录音按钮会直接失败**
 （"无法访问麦克风"）。所以在 NAS 上部署，HTTPS 是硬要求。
 
+### 已经有证书了（acme.sh / 商业证书）？用文件模式
+
+如果你用 `acme.sh` 之类的工具已经签好了 PEM（`fullchain.pem` + `privkey.pem`），
+**不需要**把证书装进 `/etc/ssl`，也**不要**去改飞牛自带的 nginx —— 直接让项目的 Caddy 用这些文件：
+
+```bash
+cd /vol1/1000/project/english-coach
+git pull                     # 拿到 Caddyfile.tls-files 与 docker-compose.tls-files.yaml
+
+cd deploy
+mkdir -p certs && chmod 700 certs
+
+# ① 把证书装到项目目录（你自己的目录，不需要 sudo，不会踩 /etc/ssl 的 Permission denied）
+~/.acme.sh/acme.sh --install-cert -d <你的域名> \
+  --key-file       "$PWD/certs/privkey.pem" \
+  --fullchain-file "$PWD/certs/fullchain.pem" \
+  --reloadcmd      "cd $PWD && docker compose -f docker-compose.yml -f docker-compose.tls-files.yaml exec -T caddy caddy reload --config /etc/caddy/Caddyfile || true"
+chmod 600 certs/privkey.pem
+
+# ② .env 里改成证书对应的域名（必须与证书 SAN 完全一致）
+#    SITE_ADDRESS=<你的域名>
+#    COOKIE_SECURE=1
+
+# ③ 起 caddy（宿主端口 8443，绕开系统 Nginx 占用的 80/443）
+docker compose -f docker-compose.yml -f docker-compose.tls-files.yaml up -d voice web caddy
+
+# ④ 验证（用 --resolve 绕过 DNS，直接确认证书与站点都对）
+curl -v --resolve <你的域名>:8443:127.0.0.1 https://<你的域名>:8443/healthz
+```
+
+要点：
+
+- 证书文件挂进容器是**只读**的（`deploy/certs` → `/certs`），私钥仅本机可见；
+  `deploy/certs/*` 已在 `.gitignore` 里，**不会被提交**。
+- `acme.sh` 续期后要 `caddy reload` 才会用上新证书 —— 上面 `--reloadcmd` 已经带上了。
+- **域名只解决"浏览器信任"，不解决"局域网怎么解析它"**：如果这个域名在公网 DNS 里指向你的公网 IP，
+  局域网内访问会绕到公网（还可能被路由器的 NAT 回环卡住）。**只在家用的话，请在路由器/内网 DNS
+  里给这个域名加一条静态解析 → NAS 的局域网 IP**，然后访问 `https://<域名>:8443`。
+- 想让 URL 不带 `:8443`，必须让某个监听 443 的服务做反代 —— 那就得用飞牛自带的反向代理入口
+  （或把系统 Nginx 的 443 让出来，不推荐）。
+
+> 注意：这条路径**不要**跑 `scripts/lan-https-setup.sh`（那是给自签 CA 用的，会把
+> `TLS_CERT_MODE` 改回 internal）。用了文件模式就固定用 `docker-compose.tls-files.yaml` 这个组合。
+
+---
+
 ### 只在家用（局域网）？推荐这条：Caddy 自签 + 8443
 
 不用域名、不用公网、不碰飞牛的系统文件。一条命令搞定服务端：
