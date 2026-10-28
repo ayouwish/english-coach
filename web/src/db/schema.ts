@@ -68,6 +68,10 @@ export const attempts = sqliteTable(
     warningsJson: text("warnings_json").notNull().default("[]"),
     /** 1 = 盲测产生的记录；不参与 phoneme_mastery / 趋势 / SRS（契约 §13.3） */
     isBlind: integer("is_blind").notNull().default(0),
+    /** 异步评分状态（task-24）：pending | scoring | done | failed；历史行默认 done */
+    status: text("status").notNull().default("done"),
+    scoredAt: text("scored_at"),
+    error: text("error"),
     blindTestId: text("blind_test_id"),
     createdAt: text("created_at").notNull(),
   },
@@ -220,6 +224,27 @@ export const auditLog = sqliteTable(
     detailJson: text("detail_json").notNull().default("{}"),
   },
   (t) => [index("idx_audit_ts").on(t.ts)],
+);
+
+/** 「提建议」（task-23）：家里人在使用中随手留建议，家长集中查看并导出。 */
+export const suggestions = sqliteTable(
+  "suggestions",
+  {
+    id: text("id").primaryKey(),
+    userId: text("user_id"),
+    userRole: text("user_role"),
+    page: text("page"),
+    category: text("category"),
+    content: text("content").notNull(),
+    contextJson: text("context_json"),
+    status: text("status").notNull().default("open"),
+    createdAt: text("created_at").notNull(),
+    handledAt: text("handled_at"),
+  },
+  (t) => [
+    index("idx_suggestions_created").on(t.createdAt),
+    index("idx_suggestions_status").on(t.status, t.createdAt),
+  ],
 );
 
 /** web 私有扩展表：纠正强度 / 音色 / 语速偏好（不改动契约冻结列）。 */

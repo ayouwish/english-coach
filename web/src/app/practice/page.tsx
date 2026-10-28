@@ -1,9 +1,10 @@
 import { redirect } from "next/navigation";
 import { and, asc, desc, eq } from "drizzle-orm";
-import { ensureBootstrap, getDb, getSqlite } from "@/db";
+import { ensureBootstrap, getDb } from "@/db";
 import { attempts, sentences } from "@/db/schema";
 import { NoSpeechNotice, ReadonlyResultSections, type ResultSnapshot } from "@/components/ResultSections";
 import { getCurrentUser } from "@/lib/auth";
+import { wordsFromPhonemeScores } from "@/lib/attempt-view";
 import { childSafeDeep } from "@/lib/child-safe";
 import { parseJsonArray, parseJsonObject } from "@/lib/http";
 import { isSpeechMissing } from "@/lib/speech-detection";
@@ -21,32 +22,6 @@ export const dynamic = "force-dynamic";
  * attempts 表没有 words_json 列（契约 §10 未含），但 phoneme_scores 里有逐音素/逐词明细。
  * 这里按插入顺序还原"逐词得分"，用于渲染"上一次的结果"（同名单词会合并，只读展示足够）。
  */
-function wordsFromPhonemeScores(attemptId: string): PronounceResult["words"] {
-  const rows = getSqlite()
-    .prepare("SELECT word, score FROM phoneme_scores WHERE attempt_id = ? ORDER BY rowid")
-    .all(attemptId) as { word: string; score: number | null }[];
-  const order: string[] = [];
-  const acc = new Map<string, number[]>();
-  for (const r of rows) {
-    if (!acc.has(r.word)) {
-      acc.set(r.word, []);
-      order.push(r.word);
-    }
-    if (typeof r.score === "number") acc.get(r.word)?.push(r.score);
-  }
-  return order.map((word) => {
-    const list = acc.get(word) ?? [];
-    const avg = list.length ? list.reduce((a, b) => a + b, 0) / list.length : null;
-    return {
-      word,
-      score: avg === null ? null : Math.round(avg * 10) / 10,
-      start_ms: null,
-      end_ms: null,
-      error_type: null,
-    };
-  });
-}
-
 export default async function PracticePage({
   searchParams,
 }: {

@@ -318,6 +318,9 @@ export function PracticeClient({
           <span className="ml-auto self-center text-xs text-[var(--ec-muted)]">
             共 {sentences.length} 句 · 当前 {list.length} 句
           </span>
+          <Link href="/flow" className="ec-btn ec-btn-ghost text-xs" data-testid="flow-entry">
+            🔗 连读模式
+          </Link>
         </div>
 
         <ul className="mt-3 grid max-h-[46vh] gap-2 overflow-y-auto pr-1 sm:grid-cols-2 lg:max-h-[calc(100vh_-_15rem)] lg:grid-cols-1">

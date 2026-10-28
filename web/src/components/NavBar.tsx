@@ -1,9 +1,11 @@
 import Link from "next/link";
 import type { SessionUser } from "@/lib/auth";
 import { LogoutButton } from "./LogoutButton";
+import { SuggestButton } from "./SuggestButton";
 
 const BASE_LINKS = [
   { href: "/practice", label: "🎤 跟读练习" },
+  { href: "/flow", label: "🔗 连读模式" },
   { href: "/chat", label: "💬 对话训练" },
   { href: "/review", label: "📒 错音本" },
   { href: "/blindtest", label: "🎯 盲测周报" },
@@ -38,6 +40,7 @@ export function NavBar({ user }: { user: SessionUser | null }) {
         <div className="ml-auto flex items-center gap-3 text-sm">
           {user ? (
             <>
+              <SuggestButton isChild={user.isChild} />
               <span className="font-semibold">
                 {user.avatar ?? "🙂"} {user.displayName}
                 <span className="ml-2 rounded-full bg-[var(--ec-primary-soft)] px-2 py-0.5 text-xs font-medium text-[var(--ec-primary)]">

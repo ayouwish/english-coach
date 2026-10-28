@@ -78,6 +78,8 @@ pnpm db:seed -- --reset-passwords        # 强制把密码重置回上表
 | `pnpm check:warmup` | 参考音预热：`/api/warmup` 打通 voice §12，第二次调用应命中缓存（证明"点示范音秒出"） |
 | `pnpm check:diagnosis` | 发音诊断：`/api/diagnosis` 分档/排序/零 IPA、`/practice?focus=` 过滤与 banner、`/report` 口型微课与儿童零 IPA |
 | `pnpm check:chat-speech` | 对话朗读：`/api/tts` 同句两次耗时对比（缓存）、`/chat` 里自动朗读开关/重播按钮的 aria 断言、儿童 slow / 成人 normal |
+| `pnpm check:suggestions` | 「提建议」：儿童可提交且响应/库中无 IPA、儿童 GET 403、家长可见与字段、超长/非法分类 4xx、`/suggestions` 无字面 `**`、导出 Markdown |
+| `pnpm check:flow` | 连读模式：`/api/attempts/async` <1.5s 返回、轮询 pending→done、自由文本 `custom:` 路径、重启恢复、儿童 `/flow` 零 IPA/无字面 `**` |
 
 ## 4. 自测（无浏览器环境下的验收方式）
 
@@ -288,6 +290,42 @@ GET/PATCH /api/settings       偏好设置（儿童不能自行改时长/自由�
 - **儿童语音输入默认展开**（`showMic` 初始 `isChild`）。
 - `/chat` 还服务端渲染「最近一次对话（只读）」，每条助手消息带 `aria-label` 的重播按钮
   —— 这样无浏览器环境也能对 `aria-label` 做 HTML 断言。
+
+## 6.5 提建议（task-23）
+
+家里人在使用中随手留建议，家长集中查看并导出，用于持续迭代。
+
+- **入口**：导航栏「💡 提建议」（儿童版「💡 我想说」）→ 弹窗表单：分类（儿童只有 3 类大按钮）、正文
+  （字数提示、上限 2000）、提交；成功「收到啦，谢谢！」自动关闭，**失败显示可读原因**（绝不静默）。
+- **数据**：`migrations/0005_suggestions.sql`（幂等、纯追加）+ Drizzle `suggestions`；
+  `page/user_role/context(UA、voice_mode、viewport、app_version)` 由**服务端采集**，`user_id` 取 session。
+- **儿童安全**：儿童提交的正文入库前剥掉特征 IPA 字形（`stripIpaGlyphs`），响应只回 `{ok,id}` 不回显正文；
+  `/suggestions` 是**家长专属**（儿童 `forbidden()` → HTTP 403）。
+- **API**：`POST /api/suggestions`（登录即可，服务端再校验长度/枚举）、`GET /api/suggestions`（仅家长，`?status=&limit=&offset=`）、
+  `PATCH /api/suggestions/:id`（家长标记 open/read/resolved）、`GET /api/suggestions/export?format=md|json`（附件下载）。
+- **家长页 `/suggestions`**：状态计数、筛选、标记已读/已解决、「复制全部为 Markdown」+「下载 .md / .json」。
+  导出格式见 `suggestionsToMarkdown()`，可直接贴给开发者/AI 继续优化。
+
+## 6.6 连读模式（task-24）
+
+逐句连读、**不等待评分**：录完一句立刻进入下一句，评分在后台排队算，结果陆续出现在列表里（每句仍是完整音素级反馈）。
+
+- **数据**：`migrations/0006_async_scoring.sql` 给 `attempts` 加 `status`（`pending|scoring|done|failed`）/`scored_at`/`error`；
+  历史行默认 `done`（同步评完的），不破坏既有数据。SQLite 的 `ALTER TABLE ADD COLUMN` 不支持 `IF NOT EXISTS`，
+  迁移执行器对 "duplicate column name" 做了幂等处理（可重复执行）。
+- **API**：
+  - `POST /api/attempts/async`：校验 + 存音频 + 写 `pending` 行后**立即返回**（实测 14ms），
+    评测用 Next `after()` 在响应之后跑；后台并发**最多 2**（`async-scoring` 的队列/信号量）。
+  - `GET /api/attempts/status?ids=a,b,c`：轮询用；完成时返回 `scores/words/issues/intonation/feedback`
+    （`words` 从 `phoneme_scores` 还原；儿童载荷整体剥离 IPA）。
+  - **重启恢复**：`ensureBootstrap` 在进程启动时把遗留 `pending/scoring` 标成 `failed`（`error='服务重启，未完成评分'`），不会永远卡"评分中"。
+- **自由文本**：`sentence_id = custom:<sha1前12位>`；为满足 `attempts.sentence_id` 外键，会在 `sentences` 里插一条
+  `source='flow-custom'` 的行——它**不会**出现在语料/练习列表里（`visibleSentencesWhere` 已排除）。
+- **SRS/掌握度取舍**：逐音素明细 / `phoneme_mastery` / 错音卡片**照常更新**（记录的是"音发得怎么样"，与句子来源无关）；
+  句子级 SRS 不涉及（本项目错音本只有 phoneme/word 卡片，custom 句子也无法被 `?focus=` 检索）。
+- **页面 `/flow`**：从语料按级别/起点/条数取一段，或粘贴文本按 `. ! ? 。！？` 切句（可逐句编辑预览）；
+  连读界面大字显示当前句 + 进度 + 自动进入下一句开关 + 实时评分列表（1.2s 轮询）+ 完成后汇总（平均分/最差 3 句/去诊断）。
+  儿童：大字号、口语化、**零 IPA**（已加入 `check:child-ipa` 清单）。中途退出不丢数据（已提交的照常评完）。
 
 ## 7. 儿童模式（`age_band=child`）
 

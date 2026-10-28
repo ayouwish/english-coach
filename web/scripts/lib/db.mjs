@@ -46,8 +46,13 @@ export function migrate(db) {
     if (applied.has(file)) continue;
     const sql = fs.readFileSync(path.join(MIGRATIONS_DIR, file), "utf8");
     db.transaction(() => {
-      db.exec(sql);
-      db.prepare("INSERT INTO _migrations (name, applied_at) VALUES (?, ?)").run(
+      try {
+        db.exec(sql);
+      } catch (err) {
+        // ALTER TABLE ADD COLUMN 不支持 IF NOT EXISTS：列已存在时视为已应用
+        if (!/duplicate column name/i.test(String(err))) throw err;
+      }
+      db.prepare("INSERT OR IGNORE INTO _migrations (name, applied_at) VALUES (?, ?)").run(
         file,
         new Date().toISOString(),
       );

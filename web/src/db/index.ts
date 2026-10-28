@@ -45,9 +45,15 @@ export function runMigrations(sqlite: Database.Database, dir: string = MIGRATION
     if (applied.has(file)) continue;
     const sql = fs.readFileSync(path.join(dir, file), "utf8");
     const tx = sqlite.transaction(() => {
-      sqlite.exec(sql);
+      try {
+        sqlite.exec(sql);
+      } catch (err) {
+        // SQLite 的 ALTER TABLE ADD COLUMN 不支持 IF NOT EXISTS：
+        // 若列已存在（例如迁移文件被部分执行过），视为已应用，保证可重复执行。
+        if (!/duplicate column name/i.test(String(err))) throw err;
+      }
       sqlite
-        .prepare("INSERT INTO _migrations (name, applied_at) VALUES (?, ?)")
+        .prepare("INSERT OR IGNORE INTO _migrations (name, applied_at) VALUES (?, ?)")
         .run(file, new Date().toISOString());
     });
     tx();
@@ -100,6 +106,14 @@ export async function ensureBootstrap(): Promise<void> {
   runMigrations(getSqlite());
   const { seedIfEmpty } = await import("./bootstrap");
   await seedIfEmpty(getSqlite());
+  // task-24：把上次进程遗留的 pending/scoring 标成 failed（否则永远卡"评分中"）
+  try {
+    const { recoverStuckAttempts } = await import("@/lib/async-scoring");
+    const recovered = recoverStuckAttempts();
+    if (recovered > 0) console.warn(`[bootstrap] 恢复遗留的异步评分记录：${recovered} 条 → failed`);
+  } catch (err) {
+    console.warn("[bootstrap] 恢复遗留评分失败（不影响启动）", err);
+  }
   store.bootstrapped = true;
 }
 

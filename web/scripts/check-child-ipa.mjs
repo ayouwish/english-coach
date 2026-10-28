@@ -127,12 +127,24 @@ await checkApi(cookie, "/api/blind-tests");
 await checkApi(cookie, "/api/parent/summary", { expectStatus: 403 });
 
 console.log("\n── 页面 HTML（含 RSC flight 负载）──");
-for (const p of ["/practice", "/review", "/", "/blindtest", "/blindtest/report", "/report"]) {
+for (const p of ["/practice", "/review", "/", "/blindtest", "/blindtest/report", "/report", "/flow"]) {
   await checkPage(cookie, p);
 }
 console.log("\n── 额外覆盖（同样对儿童可访问）──");
 for (const p of ["/chat", "/settings"]) {
   await checkPage(cookie, p);
+}
+
+// 仅家长可见的页面：儿童应 403，且页面里不得含 IPA
+console.log("\n── 仅家长页面（儿童 → 403，且零 IPA）──");
+for (const p of ["/parent", "/suggestions"]) {
+  const res = await fetch(`${BASE}${p}`, { headers: { cookie }, redirect: "manual" });
+  const html = await res.text();
+  const leaked = glyphs.filter((g) => html.includes(g));
+  const ok = res.status === 403 && leaked.length === 0;
+  if (!ok) failed += 1;
+  rows.push({ label: p, ok, hits: `status=${res.status} leaked=${leaked.join("")}`, bytes: html.length });
+  console.log(`${ok ? "✅" : "❌"} 儿童 ${p.padEnd(16)} ${ok ? "HTTP 403 · 无 IPA" : `HTTP ${res.status} · 命中 ${leaked.join("")}`}`);
 }
 
 console.log(`\n合计 ${rows.length} 项，命中 ${rows.filter((r) => !r.ok).length} 项。`);

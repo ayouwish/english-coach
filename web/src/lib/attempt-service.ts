@@ -81,30 +81,14 @@ export async function persistAttempt(input: AttemptPersistInput): Promise<Attemp
 
   // 盲测：绝不写逐音素明细 / 掌握度 / SRS —— 两套指标必须严格分开
   if (input.result && !input.isBlind) {
-    const rows = collectPhonemeRows(input.result);
-    const sqlite = getSqlite();
-    sqlite.transaction(() => {
-      const stmt = sqlite.prepare(
-        `INSERT INTO phoneme_scores (id, attempt_id, user_id, word, phoneme, score, actual, error_type, hint_key, created_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      );
-      for (const r of rows) {
-        stmt.run(
-          baseId("psc"),
-          attemptId,
-          input.user.id,
-          r.word,
-          r.phoneme,
-          r.score,
-          r.actual,
-          r.errorType,
-          r.hintKey,
-          createdAt,
-        );
-        phonemeRows += 1;
-      }
-    })();
-    newCards = await updateMasteryAndCards(input.user.id, rows, createdAt);
+    const details = await persistEvaluationDetails({
+      user: input.user,
+      attemptId,
+      result: input.result,
+      createdAt,
+    });
+    phonemeRows = details.phonemeRows;
+    newCards = details.newCards;
   }
 
   await recordPracticeTime({
@@ -134,6 +118,44 @@ export async function persistAttempt(input: AttemptPersistInput): Promise<Attemp
   });
 
   return { attemptId, degraded, warnings, phonemeRows, newCards, isBlind: Boolean(input.isBlind) };
+}
+
+/**
+ * 把一次评测的**逐音素明细 + 掌握度 + 错音卡片**写进库（同步评测与异步后台评分共用）。
+ * 不写 attempts 行本身（调用方负责），也不处理盲测/Mastery 排除策略（调用方判断）。
+ */
+export async function persistEvaluationDetails(input: {
+  user: SessionUser;
+  attemptId: string;
+  result: PronounceResult;
+  createdAt: string;
+}): Promise<{ phonemeRows: number; newCards: number }> {
+  const rows = collectPhonemeRows(input.result);
+  const sqlite = getSqlite();
+  let phonemeRows = 0;
+  sqlite.transaction(() => {
+    const stmt = sqlite.prepare(
+      `INSERT INTO phoneme_scores (id, attempt_id, user_id, word, phoneme, score, actual, error_type, hint_key, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    );
+    for (const r of rows) {
+      stmt.run(
+        baseId("psc"),
+        input.attemptId,
+        input.user.id,
+        r.word,
+        r.phoneme,
+        r.score,
+        r.actual,
+        r.errorType,
+        r.hintKey,
+        input.createdAt,
+      );
+      phonemeRows += 1;
+    }
+  })();
+  const newCards = await updateMasteryAndCards(input.user.id, rows, input.createdAt);
+  return { phonemeRows, newCards };
 }
 
 interface PhonemeRow {

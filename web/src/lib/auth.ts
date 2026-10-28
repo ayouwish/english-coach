@@ -111,6 +111,13 @@ export async function getUserByToken(token: string): Promise<SessionUser | null>
   return row ? toSessionUser(row.user) : null;
 }
 
+/** 按 id 取用户（后台任务没有 cookie，用这个） */
+export async function getSessionUserById(id: string): Promise<SessionUser | null> {
+  const db = getDb();
+  const [row] = await db.select().from(users).where(eq(users.id, id)).limit(1);
+  return row ? toSessionUser(row) : null;
+}
+
 export async function requireUser(): Promise<SessionUser> {
   const user = await getCurrentUser();
   if (!user) throw new HttpError(401, "unauthorized", "请先登录");

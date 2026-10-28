@@ -101,9 +101,12 @@ check(
 
 const migrations = db.prepare("SELECT name FROM _migrations ORDER BY name").all().map((r) => r.name);
 check(
-  "_migrations 记录 0001→0002→0003 全部就位",
-  migrations.join(",") ===
-    "0001_init.sql,0002_srs_opaque_ids.sql,0003_blind_tests_and_custom_corpus.sql",
+  "_migrations 记录全部迁移且顺序正确（不写死清单，后续新增迁移无需改这里）",
+  migrations.length >= 3 &&
+    migrations[0] === "0001_init.sql" &&
+    migrations.join(",") === [...migrations].sort().join(",") &&
+    migrations.includes("0002_srs_opaque_ids.sql") &&
+    migrations.includes("0003_blind_tests_and_custom_corpus.sql"),
   migrations.join(","),
 );
 

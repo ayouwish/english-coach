@@ -5,7 +5,7 @@
  *       家长自定义语料（source='parent'）只有「录入者本人 + 其孩子」可见可用。
  * 本应用是单家庭部署，所以"其孩子"= 家庭里 role='child' 的用户。
  */
-import { and, asc, eq, inArray, isNull, or, sql } from "drizzle-orm";
+import { and, asc, eq, inArray, isNull, ne, or, sql } from "drizzle-orm";
 import { getDb } from "@/db";
 import { attempts, sentences, users } from "@/db/schema";
 import { HttpError, type SessionUser } from "./auth";
@@ -26,9 +26,12 @@ export async function visibleOwnerIds(user: SessionUser): Promise<string[]> {
 /** drizzle where 条件：官方 + 可见的自定义语料。 */
 export async function visibleSentencesWhere(user: SessionUser) {
   const owners = await visibleOwnerIds(user);
-  return owners.length > 0
-    ? or(isNull(sentences.ownerUserId), inArray(sentences.ownerUserId, owners))
-    : isNull(sentences.ownerUserId);
+  const visible =
+    owners.length > 0
+      ? or(isNull(sentences.ownerUserId), inArray(sentences.ownerUserId, owners))
+      : isNull(sentences.ownerUserId);
+  // 连读模式里"用户自己贴的句子"只用于归属那条 attempt，不进语料库/练习列表
+  return and(visible, ne(sentences.source, "flow-custom"));
 }
 
 export interface SentenceView {
