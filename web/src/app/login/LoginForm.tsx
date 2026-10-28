@@ -3,13 +3,22 @@
 import { useRouter } from "next/navigation";
 import { useState } from "react";
 
-const DEMO = [
-  { label: "👨 爸爸（家长）", email: "dad@example.com", password: "Dad12345!" },
-  { label: "👩 妈妈（家长）", email: "mom@example.com", password: "Mom12345!" },
-  { label: "🧒 女儿（儿童）", email: "girl@example.com", password: "Girl12345!" },
-];
+/**
+ * 演示账号（由服务端计算后传入）。
+ *
+ * `password` 为 `null` 表示"部署时用 BOOTSTRAP_*_PASSWORD 覆盖过种子密码"，
+ * 前端不知道真实密码，此时只填邮箱、不猜密码 —— 否则用户点一下就带着错误密码提交，
+ * 只会看到"邮箱或密码不正确"，很难意识到问题在部署配置上。
+ */
+export type DemoAccount = { label: string; email: string; password: string | null };
 
-export function LoginForm() {
+export function LoginForm({
+  demoAccounts = [],
+  passwordsAreDefault = true,
+}: {
+  demoAccounts?: DemoAccount[];
+  passwordsAreDefault?: boolean;
+}) {
   const router = useRouter();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -78,14 +87,16 @@ export function LoginForm() {
       <details className="mt-2 rounded-xl bg-[var(--ec-primary-soft)] p-3 text-sm">
         <summary className="cursor-pointer font-semibold">演示账号（点一下自动填）</summary>
         <div className="mt-2 flex flex-col gap-2">
-          {DEMO.map((d) => (
+          {demoAccounts.map((d) => (
             <button
               key={d.email}
               type="button"
               className="ec-btn ec-btn-ghost justify-start"
               onClick={() => {
                 setEmail(d.email);
-                setPassword(d.password);
+                // 只有确认是内置默认密码时才一起填；否则只填邮箱
+                setPassword(d.password ?? "");
+                setError(null);
               }}
             >
               {d.label} · {d.email}
@@ -93,7 +104,18 @@ export function LoginForm() {
           ))}
         </div>
         <p className="mt-2 text-xs text-[var(--ec-muted)]">
-          初始密码见 web/README.md；部署时可用 BOOTSTRAP_*_PASSWORD 覆盖。
+          {passwordsAreDefault ? (
+            <>
+              点一下会<strong>同时填入</strong>邮箱与内置初始密码（见 web/README.md）。
+              若登录失败，说明部署时用 <code>BOOTSTRAP_*_PASSWORD</code> 改过密码 —— 用你设置的那个。
+            </>
+          ) : (
+            <>
+              点一下只填邮箱。<strong>密码是部署时设置的</strong>
+              （<code>deploy/.env</code> 里的 <code>BOOTSTRAP_*_PASSWORD</code>），
+              这里不显示、也不猜测。
+            </>
+          )}
         </p>
       </details>
     </form>

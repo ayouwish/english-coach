@@ -49,7 +49,10 @@ pnpm mock:voice                     # 监听 8100（MOCK_PHONEME_LEVEL=0 可模�
 | 妈妈（parent） | `mom@example.com` | `Mom12345!` | 可看家长面板 |
 | 女儿（child） | `girl@example.com` | `Girl12345!` | `birth_year=2018` / `age_band=child` / 每日 20 分钟 |
 
-登录页有"演示账号"一键填充。种子在首次请求时自动执行（`users` 表为空时），也可手动：
+登录页有"演示账号"一键填充。
+
+> 部署时若用 `BOOTSTRAP_*_PASSWORD` 覆盖了种子密码，登录页的「演示账号」按钮**只填邮箱、不猜密码**，
+> 并在下方提示密码来自 `deploy/.env`。注意：种子密码只在**首次建库**时写入，之后改 `.env` 不会生效。种子在首次请求时自动执行（`users` 表为空时），也可手动：
 
 ```bash
 pnpm db:seed                             # 幂等；已存在账号的密码不会被覆盖
