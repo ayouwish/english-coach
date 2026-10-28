@@ -458,3 +458,78 @@ docker compose logs -f web | head -40
 - 飞牛系统更新后对我们 compose 项目的影响
 
 如果哪一步和本文不符，把报错发到仓库 issue，我按实际输出改文档。
+
+---
+
+## 13. 实测通过的飞牛部署组合（2026-10-28，真实设备）
+
+这一节是**在一台真实飞牛 NAS 上跑通后记录的**，可作为"最终形态"的参考与排查基线。
+
+### 拓扑
+
+```
+家庭设备 ──▶ https://<域名>/  ──▶  (宿主 443) Caddy 容器 ──▶ web:3000 ──▶ voice:8100 ──▶ Azure / DeepSeek
+```
+
+- 证书：**acme.sh 签发的 Let's Encrypt 证书**（公信证书 → 家庭设备**无需安装任何根证书**）
+- 入口：Caddy 直接占用宿主 **443**（飞牛的 80/443 占用已让出）
+- 对外只开 **443**；`80 / 8080 / 8443` 全部关闭 —— 避免出现"明文 HTTP 也能访问"的路径
+  （http 不是 secure context，麦克风不可用；且 `COOKIE_SECURE=1` 时登录会失败，纯属陷阱）
+
+### `deploy/.env` 关键项
+
+```ini
+PROVIDER_MODE=hybrid
+SITE_ADDRESS=<你的域名>
+CADDY_HTTPS_PORT=443
+CADDYFILE=Caddyfile.tls-files
+COOKIE_SECURE=1
+AZURE_SPEECH_KEY=...          # 必填
+LLM_BASE_URL=https://api.deepseek.com/v1
+LLM_API_KEY=...
+LLM_MODEL=deepseek-flash
+```
+
+证书放在 `deploy/certs/fullchain.pem` + `privkey.pem`（600 权限，已在 `.gitignore` 中）。
+
+### 验证（三条，全绿才算通）
+
+```bash
+# 1) 健康检查（走域名，不绕过 TLS）
+curl -sS https://<域名>/api/health | head -c 200
+#    期望 "status":"ok"、"db":{"ok":true}、"voice":{"reachable":true,...}
+
+# 2) 证书受公共信任（不要加 -k）
+curl -sS -o /dev/null -w '%{http_code}\n' https://<域名>/healthz      # 200
+openssl s_client -connect <域名>:443 -servername <域名> </dev/null 2>/dev/null \
+  | openssl x509 -noout -issuer -dates                                  # issuer=Let's Encrypt
+
+# 3) 确实是我们的应用（而不是 NAS 界面）
+curl -sS https://<域名>/login | grep -o '<title>[^<]*</title>'         # English Coach · 家庭英语练习
+```
+
+### 续期（关键，别忘）
+
+`acme.sh` 默认每天 cron 检查，但**续期后必须让 Caddy 重新加载证书**，否则新证书不会被用上：
+
+```bash
+# 确认 cron 在
+crontab -l | grep acme.sh
+# 确认续期钩子指向本项目
+~/.acme.sh/acme.sh --info -d <域名> | grep Le_ReloadCmd
+```
+
+如果当初 `--install-cert` 时带了 `--reloadcmd "cd <deploy> && docker compose exec -T caddy caddy reload ..."`，
+就不用额外处理；否则续期后需要手动 `docker compose restart caddy`。
+
+### 日常运维
+
+```bash
+cd /vol1/1000/project/english-coach/deploy
+docker compose ps                     # 两个容器 healthy | caddy running
+docker compose logs --tail=50 voice   # 排查评测/合成问题
+./scripts/check-deploy.sh             # 一键自检（EXTERNAL_URL= 可顺带验证外部入口）
+```
+
+**备份三样东西**：`data/`（数据库+录音）、`deploy/.env`（密钥）、`deploy/certs/`（证书）。
+数据库用 `VACUUM INTO` 热备，见 §9。
