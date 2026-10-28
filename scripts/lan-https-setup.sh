@@ -16,7 +16,7 @@
 #
 # 它做了什么（全部幂等，可重复执行）：
 #   1. 在 deploy/.env 里设置 SITE_ADDRESS / TLS_CERT_MODE=internal / COOKIE_SECURE=1
-#   2. 用 docker-compose.lan-https.yaml 覆盖启动 caddy（宿主端口 8443，避开 80/443）
+#   2. 在 .env 里把 caddy 的宿主端口改成 8080/8443（避开系统占用的 80/443），然后启动 caddy
 #   3. 导出 Caddy 内置 CA 的根证书到 deploy/caddy-root-ca.crt
 #   4. 自检 https 端口是否真的返回 200，并校验证书里确实包含该地址
 set -euo pipefail
@@ -24,7 +24,8 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 DEPLOY="$ROOT/deploy"
 ENV_FILE="$DEPLOY/.env"
-COMPOSE=(-f "$DEPLOY/docker-compose.yml" -f "$DEPLOY/docker-compose.lan-https.yaml")
+# 只用一个 compose 文件：端口/Caddyfile 都由 .env 变量决定（见 deploy/docker-compose.yml 注释）
+COMPOSE=(-f "$DEPLOY/docker-compose.yml")
 HTTPS_PORT="${HTTPS_PORT:-8443}"
 CA_OUT="${CA_OUT:-$DEPLOY/caddy-root-ca.crt}"
 
@@ -73,6 +74,10 @@ set_env() {  # set_env KEY VALUE [注释]
 set_env SITE_ADDRESS "$HOST" "局域网 HTTPS：证书按这个地址签发（IP 或主机名）"
 set_env TLS_CERT_MODE "internal" "internal = Caddy 内置 CA 自签，客户端需导入根证书"
 set_env COOKIE_SECURE "1" "浏览器访问的是 https，会话 cookie 必须带 Secure"
+# 宿主 80/443 常被 NAS 系统 Nginx 占用 → 改用 8080/8443；
+# 这两个变量由 docker-compose.yml 直接读取，不再需要覆盖文件
+set_env CADDY_HTTP_PORT "8080" "宿主 HTTP 端口（80 被系统占用，改用 8080）"
+set_env CADDY_HTTPS_PORT "$HTTPS_PORT" "宿主 HTTPS 端口（443 被系统占用，改用 8443）"
 info "已更新 $ENV_FILE（SITE_ADDRESS / TLS_CERT_MODE / COOKIE_SECURE）"
 
 # ── 3. 启动 caddy（宿主端口 8443）──────────────────────────────────────────

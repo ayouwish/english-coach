@@ -3,7 +3,7 @@
 # 适用场景：你已经有 `fullchain.pem` + `privkey.pem`（例如 acme.sh 签好的），
 # 不想让 Caddy 自己去 ACME、也不想动 NAS 系统目录里的证书。
 #
-# 用法（配合 docker-compose.tls-files.yaml）：
+# 用法（在 deploy/.env 里设 CADDYFILE=Caddyfile.tls-files，然后 docker compose up -d caddy）：
 #   1. 把证书放进 deploy/certs/（本文件假定挂载到容器的 /certs）
 #        deploy/certs/fullchain.pem
 #        deploy/certs/privkey.pem        ← 权限建议 600
@@ -11,7 +11,7 @@
 #        SITE_ADDRESS=english.example.com
 #        COOKIE_SECURE=1
 #   3. 启动：
-#        docker compose -f docker-compose.yml -f docker-compose.tls-files.yaml up -d caddy
+#        docker compose up -d voice web caddy
 #
 # 说明：
 #   · 本文件**没有**写 `:80 { redir ... }` —— NAS 上 80 通常被系统 Nginx 占用，

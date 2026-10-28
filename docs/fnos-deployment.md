@@ -180,7 +180,7 @@ SITE_ADDRESS=english.example.com
 
 ```bash
 cd /vol1/1000/project/english-coach
-git pull                     # 拿到 Caddyfile.tls-files 与 docker-compose.tls-files.yaml
+git pull                     # 拿到 Caddyfile.tls-files
 
 cd deploy
 mkdir -p certs && chmod 700 certs
@@ -189,15 +189,18 @@ mkdir -p certs && chmod 700 certs
 ~/.acme.sh/acme.sh --install-cert -d <你的域名> \
   --key-file       "$PWD/certs/privkey.pem" \
   --fullchain-file "$PWD/certs/fullchain.pem" \
-  --reloadcmd      "cd $PWD && docker compose -f docker-compose.yml -f docker-compose.tls-files.yaml exec -T caddy caddy reload --config /etc/caddy/Caddyfile || true"
+  --reloadcmd      "cd $PWD && docker compose exec -T caddy caddy reload --config /etc/caddy/Caddyfile || true"
 chmod 600 certs/privkey.pem
 
 # ② .env 里改成证书对应的域名（必须与证书 SAN 完全一致）
 #    SITE_ADDRESS=<你的域名>
 #    COOKIE_SECURE=1
 
-# ③ 起 caddy（宿主端口 8443，绕开系统 Nginx 占用的 80/443）
-docker compose -f docker-compose.yml -f docker-compose.tls-files.yaml up -d voice web caddy
+# ③ .env 里同时指定端口与 Caddyfile 变体（不需要任何覆盖文件）
+#    CADDY_HTTP_PORT=8080
+#    CADDY_HTTPS_PORT=8443
+#    CADDYFILE=Caddyfile.tls-files
+docker compose up -d voice web caddy
 
 # ④ 验证（用 --resolve 绕过 DNS，直接确认证书与站点都对）
 curl -v --resolve <你的域名>:8443:127.0.0.1 https://<你的域名>:8443/healthz
@@ -215,7 +218,8 @@ curl -v --resolve <你的域名>:8443:127.0.0.1 https://<你的域名>:8443/heal
   （或把系统 Nginx 的 443 让出来，不推荐）。
 
 > 注意：这条路径**不要**跑 `scripts/lan-https-setup.sh`（那是给自签 CA 用的，会把
-> `TLS_CERT_MODE` 改回 internal）。用了文件模式就固定用 `docker-compose.tls-files.yaml` 这个组合。
+> `TLS_CERT_MODE` 改回 internal 且把 `CADDYFILE` 设成默认值）。文件模式只需保持
+> `CADDYFILE=Caddyfile.tls-files` 并重启 caddy。
 
 ---
 
@@ -231,7 +235,7 @@ cd /vol1/1000/project/english-coach
 它做的事（全部幂等，可重跑）：
 
 1. 在 `deploy/.env` 里写入 `SITE_ADDRESS=<你的局域网IP>`、`TLS_CERT_MODE=internal`、`COOKIE_SECURE=1`
-2. 用 `deploy/docker-compose.lan-https.yaml` 覆盖启动 caddy —— **宿主端口改成 8443**，
+2. 在 `deploy/.env` 里把 caddy 的宿主端口改成 8080/8443（`CADDY_HTTP_PORT` / `CADDY_HTTPS_PORT`），
    绕开飞牛占用的 80/443（容器内仍是标准 443，Caddyfile 不用改）
 3. 用 Caddy **内置 CA** 给这个 IP 签证书，并把**根证书**导出到 `deploy/caddy-root-ca.crt`
 4. 自检 `https://127.0.0.1:8443/healthz → ok`，并校验证书里确实包含该 IP
@@ -432,6 +436,7 @@ docker compose logs -f web | head -40
 | 现象 | 原因与处理 |
 |---|---|
 | `docker compose up` 报 compose 文件解析错误 | Compose < v2.24，见 §3 的降级改法 |
+| caddy 报 `failed to bind host port for 0.0.0.0:80: address already in use` | 容器仍按默认 80/443 创建。在 `.env` 设 `CADDY_HTTP_PORT=8080` `CADDY_HTTPS_PORT=8443` 后 `docker compose up -d --force-recreate caddy`（早期版本用 `-f` 覆盖文件，忘带第二个 `-f` 就会踩这个坑，现已改为环境变量） |
 | caddy 起不来 / 端口被占 | 飞牛自带 Nginx 占了 80/443，见 §2 用方案 A 或改 8443 |
 | 页面能开，但**录音按钮报"无法访问麦克风"** | 用了 `http://内网IP`。必须 `https://` 或 `localhost`，见 §6 |
 | `web` 容器反复重启，日志 `SQLITE_CANTOPEN` / `EACCES` | `data/` 属主不对：`chown -R 1000:1000 <repo>/data` |
