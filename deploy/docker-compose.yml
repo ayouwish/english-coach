@@ -158,7 +158,13 @@ services:
     #   `failed to bind host port for 0.0.0.0:80: address already in use`。改用变量后没有这个陷阱。
     #   例：CADDY_HTTP_PORT=8080  CADDY_HTTPS_PORT=8443  → 访问 https://<host>:8443
     ports:
-      - "${CADDY_HTTP_PORT:-80}:80"
+      # 默认**只发布 HTTPS**：NAS 上 80/8080 常被系统服务占用（飞牛自带 Nginx 就占 80/443/8000/8001），
+      # 而 NAS 场景用的 `Caddyfile.tls-files` 里也没有 :80 跳转块 —— 发布它只是白白制造端口冲突。
+      # 只有这两种情况才需要放开 HTTP：
+      #   ① 公网域名 + Caddy 自动 ACME（HTTP-01 验证必须 80）
+      #   ② 想要 http→https 自动跳转（Caddyfile 默认变体里有 :80 块）
+      # 需要时把下面这行取消注释，并设 CADDY_HTTP_PORT：
+      # - "${CADDY_HTTP_PORT:-80}:80"
       - "${CADDY_HTTPS_PORT:-443}:443"
       - "${CADDY_HTTPS_PORT:-443}:443/udp"   # HTTP/3
     volumes:

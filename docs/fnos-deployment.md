@@ -235,8 +235,9 @@ cd /vol1/1000/project/english-coach
 它做的事（全部幂等，可重跑）：
 
 1. 在 `deploy/.env` 里写入 `SITE_ADDRESS=<你的局域网IP>`、`TLS_CERT_MODE=internal`、`COOKIE_SECURE=1`
-2. 在 `deploy/.env` 里把 caddy 的宿主端口改成 8080/8443（`CADDY_HTTP_PORT` / `CADDY_HTTPS_PORT`），
-   绕开飞牛占用的 80/443（容器内仍是标准 443，Caddyfile 不用改）
+2. 在 `deploy/.env` 里设 `CADDY_HTTPS_PORT=8443`，绕开飞牛占用的 443
+   （容器内仍是标准 443，Caddyfile 不用改）。**HTTP(80) 默认不发布** ——
+   NAS 上 80/8080 都可能被系统服务占用，而本案也不需要 http→https 跳转
 3. 用 Caddy **内置 CA** 给这个 IP 签证书，并把**根证书**导出到 `deploy/caddy-root-ca.crt`
 4. 自检 `https://127.0.0.1:8443/healthz → ok`，并校验证书里确实包含该 IP
 
@@ -436,7 +437,7 @@ docker compose logs -f web | head -40
 | 现象 | 原因与处理 |
 |---|---|
 | `docker compose up` 报 compose 文件解析错误 | Compose < v2.24，见 §3 的降级改法 |
-| caddy 报 `failed to bind host port for 0.0.0.0:80: address already in use` | 容器仍按默认 80/443 创建。在 `.env` 设 `CADDY_HTTP_PORT=8080` `CADDY_HTTPS_PORT=8443` 后 `docker compose up -d --force-recreate caddy`（早期版本用 `-f` 覆盖文件，忘带第二个 `-f` 就会踩这个坑，现已改为环境变量） |
+| caddy 报 `failed to bind host port for 0.0.0.0:80/8080: address already in use` | 早期版本会发布 80 端口，而飞牛占用了 80/8080。**现已默认只发布 HTTPS**：`git pull` 后 `docker compose up -d --force-recreate caddy`。若仍冲突，换一个空闲的 `CADDY_HTTPS_PORT`（如 18443）：`ss -ltn \| grep -E ':(8443\|18443)\b'` 先确认哪个空闲 |
 | caddy 起不来 / 端口被占 | 飞牛自带 Nginx 占了 80/443，见 §2 用方案 A 或改 8443 |
 | 页面能开，但**录音按钮报"无法访问麦克风"** | 用了 `http://内网IP`。必须 `https://` 或 `localhost`，见 §6 |
 | `web` 容器反复重启，日志 `SQLITE_CANTOPEN` / `EACCES` | `data/` 属主不对：`chown -R 1000:1000 <repo>/data` |

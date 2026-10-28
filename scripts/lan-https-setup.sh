@@ -76,7 +76,8 @@ set_env TLS_CERT_MODE "internal" "internal = Caddy 内置 CA 自签，客户端�
 set_env COOKIE_SECURE "1" "浏览器访问的是 https，会话 cookie 必须带 Secure"
 # 宿主 80/443 常被 NAS 系统 Nginx 占用 → 改用 8080/8443；
 # 这两个变量由 docker-compose.yml 直接读取，不再需要覆盖文件
-set_env CADDY_HTTP_PORT "8080" "宿主 HTTP 端口（80 被系统占用，改用 8080）"
+# 默认只发布 HTTPS（compose 里 HTTP 映射是注释状态）——NAS 上 80/8080 都可能被系统占用，
+# 而自签场景也不需要 http→https 跳转（浏览器会直接报不安全，引导用户用 https 即可）
 set_env CADDY_HTTPS_PORT "$HTTPS_PORT" "宿主 HTTPS 端口（443 被系统占用，改用 8443）"
 info "已更新 $ENV_FILE（SITE_ADDRESS / TLS_CERT_MODE / COOKIE_SECURE）"
 
