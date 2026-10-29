@@ -12,7 +12,7 @@ import logging
 import os
 import tempfile
 
-from ..audio_io import AudioClip
+from ..audio_io import AudioClip, probe_audio, trim_wav_silence
 from ..config import Settings, get_settings
 from ..errors import ProviderError, ProviderTimeout, ProviderUnavailable
 from ..hints import LIKELY_SUBSTITUTION
@@ -322,6 +322,22 @@ class AzureTTS:
                 duration_ms = int(getattr(result, "audio_duration", 0).total_seconds() * 1000)
             except Exception:
                 duration_ms = 0
+        # task-39：Azure 对短词会在尾部带 ~1.3s 低电平噪声（"think" 总 1.82s、语音 0.19s）。
+        # 只对 WAV(PCM) 裁首尾静音；mp3 不裁（无 ffmpeg，重编码不值得）。裁剪后的字节进缓存。
+        if fmt_key == "wav" and settings.tts_trim_silence:
+            trimmed, changed = trim_wav_silence(
+                audio_bytes, settings.tts_trim_threshold_db, settings.tts_trim_keep_ms
+            )
+            if changed:
+                new_probe = probe_audio(trimmed)
+                logger.info(
+                    "azure TTS trimmed silence: %dms -> %dms (text=%.40r)",
+                    duration_ms,
+                    new_probe.duration_ms,
+                    text or "",
+                )
+                audio_bytes = trimmed
+                duration_ms = new_probe.duration_ms
         return TTSResult(audio=audio_bytes, content_type=content_type, provider=self.name, duration_ms=duration_ms, format=fmt_key)
 
     @classmethod

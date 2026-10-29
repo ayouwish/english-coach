@@ -12,6 +12,7 @@
  *
  * 用法：BASE_URL=http://127.0.0.1:3010 node scripts/check-diagnosis.mjs
  */
+import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 const WEB_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
@@ -176,8 +177,56 @@ check("★ SSR 输出口型 SVG（无 JS 也有内容）", childReport.text.incl
 check("有发音要点文字", childReport.text.includes("口型要点"));
 check("有「去练这 N 句」入口", childReport.text.includes('data-testid="practice-focus"'));
 
+
 const dadReport = await get("/report", dad.cookie);
 check("成人 /report 200", dadReport.status === 200);
+
+// ── task-40：对比听 = 两词顺序播放（normal 语速 + 词间停顿），不再拼成一句合成 ──
+{
+  const hasContrast = childReport.text.includes('data-testid="contrast-play"');
+  const adultHasContrast = dadReport.text.includes('data-testid="contrast-play"');
+  check("★ /report 有「对比听」按钮（儿童或成人页）", hasContrast || adultHasContrast);
+  const html = hasContrast ? childReport.text : dadReport.text;
+  const btn = /<button[^>]*data-testid="contrast-play"[^>]*>/.exec(html)?.[0] ?? "";
+  check(
+    "★ 对比听按钮带两词顺序信息（data-pair=\"a|b\" + data-rate=normal）",
+    /data-pair="[^"|]+\|[^"]+"/.test(btn) && /data-rate="normal"/.test(btn),
+    btn.replace(/\s+/g, " ").slice(0, 220),
+  );
+  check(
+    "★ 顺序可读（页面标注 先 A → 再 B）",
+    /→/.test(html) && /先 [^，。]{1,40}? 再 /.test(btn) === true,
+    (btn.match(/title="[^"]*"/) ?? [""])[0],
+  );
+
+  const reportSrc = fs.readFileSync(path.join(WEB_ROOT, "src/app/report/page.tsx"), "utf8");
+  check(
+    "★ 源码：对比听不再把两个词拼成一次合成",
+    !/text=\{`\$\{c\.pair\[0\]\}, \$\{c\.pair\[1\]\}`\}/.test(reportSrc) &&
+      reportSrc.includes("<ContrastButton"),
+  );
+  const contrastSrc = fs.readFileSync(path.join(WEB_ROOT, "src/components/ContrastButton.tsx"), "utf8");
+  check("★ 源码：对比听用 normal 语速（不传 slow）", /rate:\s*"normal"/.test(contrastSrc) && !/rate:\s*"slow"/.test(contrastSrc));
+  check(
+    "★ 源码：顺序播放逻辑（两段请求 + 词间停顿 + onended）",
+    contrastSrc.includes("gapMs") && /setTimeout/.test(contrastSrc) && contrastSrc.includes('"ended"'),
+  );
+  check("源码：播放中再点先停掉当前（不叠加）", contrastSrc.includes("pause()") && contrastSrc.includes("runRef.current"));
+  check("源码：失败可见（示范音暂时不可用）", contrastSrc.includes("示范音暂时不可用"));
+  const bundle = (() => {
+    const dir = path.join(WEB_ROOT, ".next/static/chunks");
+    const walk = (d) =>
+      fs.existsSync(d)
+        ? fs.readdirSync(d, { withFileTypes: true }).flatMap((e) => {
+            const full = path.join(d, e.name);
+            if (e.isDirectory()) return walk(full);
+            return e.name.endsWith(".js") ? [full] : [];
+          })
+        : [];
+    return walk(dir).map((f) => fs.readFileSync(f, "utf8")).join("\n");
+  })();
+  check("bundle 含「对比中…」状态文案", bundle.includes("对比中"));
+}
 const mom = await login("mom@example.com", "Mom12345!");
 const momDiag = await getJson("/api/diagnosis", mom.cookie);
 const momHasCards = (momDiag.json?.items ?? []).length > 0;

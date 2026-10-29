@@ -80,6 +80,86 @@ def pcm16_wav_bytes(samples: np.ndarray, sample_rate: int = TARGET_SR) -> bytes:
     return buf.getvalue()
 
 
+def _parse_wav_pcm16_mono(audio: bytes) -> tuple[int, np.ndarray] | None:
+    """解析 16-bit 单声道 PCM WAV -> (sample_rate, int16 samples)；不是这种格式返回 None。"""
+    import wave
+
+    try:
+        with wave.open(io.BytesIO(audio), "rb") as wf:
+            if wf.getnchannels() != 1 or wf.getsampwidth() != 2:
+                return None
+            sample_rate = int(wf.getframerate())
+            raw = wf.readframes(wf.getnframes())
+    except Exception:
+        return None
+    if sample_rate <= 0 or len(raw) < 2:
+        return None
+    return sample_rate, np.frombuffer(raw, dtype="<i2")
+
+
+def trim_wav_silence(
+    audio: bytes,
+    threshold_db: float = -50.0,
+    keep_ms: int = 50,
+) -> tuple[bytes, bool]:
+    """裁掉 WAV(PCM16 mono) 首尾的静音/低电平噪声。-> (新字节, 是否裁剪)
+
+    背景（task-39）：Azure 对短词（如 "think"）返回的 WAV 总长 1.82s，真正语音只有 0.19s，
+    尾部 ~1.3s 是 ≈-64dB 的低电平噪声 → 听感"词一闪就没了，然后一段空白/底噪"。
+    这里按 **frame RMS >= -50dBFS** 判定语音帧，前后各留 `keep_ms` 余量（默认 50ms，
+    避免削掉真实的轻声收尾/起始气声）；整段都低于阈值（异常）或裁不出更短的音频时**原样返回**。
+    """
+    parsed = _parse_wav_pcm16_mono(audio)
+    if parsed is None:
+        return audio, False
+    sample_rate, samples = parsed
+    if samples.size == 0:
+        return audio, False
+
+    frame = max(1, int(round(sample_rate * 0.01)))  # 10ms 一帧
+    usable = (samples.size // frame) * frame
+    if usable == 0:
+        return audio, False
+    blocks = samples[:usable].astype(np.float64).reshape(-1, frame) / 32768.0
+    rms = np.sqrt((blocks**2).mean(axis=1))
+    threshold = 10.0 ** (float(threshold_db) / 20.0)
+    active = np.flatnonzero(rms >= threshold)
+    if active.size == 0:
+        return audio, False  # 整段低于阈值：不裁（异常输入，保持原样）
+
+    keep = int(round(sample_rate * max(0, keep_ms) / 1000.0))
+    start = max(0, int(active[0]) * frame - keep)
+    end = min(samples.size, (int(active[-1]) + 1) * frame + keep)
+    if start == 0 and end >= samples.size:
+        return audio, False
+    trimmed = samples[start:end]
+    if trimmed.size < sample_rate * 0.01:  # 裁完不足 10ms → 不动（防裁坏极短音频）
+        return audio, False
+    return pcm16_wav_bytes(trimmed.astype(np.float32) / 32768.0, sample_rate), True
+
+
+def wav_speech_span_ms(audio: bytes, threshold_db: float = -50.0) -> tuple[int, int, int] | None:
+    """统计 WAV 的语音段：-> (start_ms, end_ms, speech_ms)；非 PCM16 mono 返回 None。"""
+    parsed = _parse_wav_pcm16_mono(audio)
+    if parsed is None:
+        return None
+    sample_rate, samples = parsed
+    if samples.size == 0:
+        return None
+    frame = max(1, int(round(sample_rate * 0.01)))
+    usable = (samples.size // frame) * frame
+    if usable == 0:
+        return None
+    blocks = samples[:usable].astype(np.float64).reshape(-1, frame) / 32768.0
+    rms = np.sqrt((blocks**2).mean(axis=1))
+    active = np.flatnonzero(rms >= 10.0 ** (float(threshold_db) / 20.0))
+    if active.size == 0:
+        return None
+    start_ms = int(round(int(active[0]) * frame / sample_rate * 1000))
+    end_ms = int(round((int(active[-1]) + 1) * frame / sample_rate * 1000))
+    return start_ms, end_ms, max(0, end_ms - start_ms)
+
+
 def decode_audio(data: bytes, target_sr: int = TARGET_SR, max_seconds: float | None = None) -> AudioClip:
     """把任意上传音频（webm/opus、wav、mp4、ogg...）解码成 16k mono float32。
 

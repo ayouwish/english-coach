@@ -112,6 +112,7 @@ routes(/v1/*) ──> ProviderSet{ asr, pa, tts } ──> 调用链: 主 provide
 | `DEFAULT_TTS_VOICE` | `en-US-JennyNeural` | |
 | `MAX_TTS_CHARS` | `2000` | 超限 → `413 payload_too_large` |
 | `MAX_OCR_BYTES` | `10485760`（10MB）| `/v1/ocr` 图片上限，超限 → `413 payload_too_large` |
+| `TTS_TRIM_SILENCE` / `TTS_TRIM_THRESHOLD_DB` / `TTS_TRIM_KEEP_MS` | `1` / `-50` / `50` | WAV 输出首尾静音裁剪（task-39，mp3 不裁）|
 | `VOICE_OCR_PROVIDER` | `auto` | `auto`（LLM 优先）\|`llm`\|`local`（强制离线 rapidocr）|
 | `OCR_TIMEOUT_S` / `OCR_MAX_TOKENS` | `30` / `800` | 视觉 OCR 调用参数 |
 | `MAX_UPLOAD_BYTES` | `26214400` | 上传体积上限 → `413` |
@@ -352,6 +353,28 @@ cd voice
 > 注意格式维度：预热产物是 `wav`（参考音分析用）。若前端「只听示范」请求 `mp3`，
 > 第一次仍会真合成一次（之后命中自己的 mp3 缓存）。想彻底零调用，可让前端在「只听示范」时
 > 直接用 `pronounce` 返回的 `reference_audio_url`（已预热的 wav），或按 §8.2 预热时同时覆盖需要的格式。
+
+### 8.4 TTS 输出首尾静音裁剪（task-39）
+
+Azure 对**短词**返回的 WAV 尾部会带约 1.3s 的低电平噪声（实测 `think` 总 1.82s、真实语音仅 0.19–0.37s、
+尾部 ≈ -64dB）——播放时"词一闪就没了，然后一段空白/底噪"，听感浑浊拖沓。
+
+- 只处理 **WAV(PCM16 mono)**：按 10ms 帧 RMS 判定，**阈值 -50dBFS**，首尾各保留 **50ms** 余量
+  （不削真实轻声收尾；实测 -44dB 的轻声收尾会保留）。
+- **mp3 不裁剪**（没有 ffmpeg，重编码不值得；`conversation` 的 mp3 路径不受影响）。
+- 裁剪后 `duration_ms` / `X-Audio-Duration-Ms` 反映真实时长；**缓存里存的是裁剪后的字节**
+  （同一 key 两次请求字节一致，第二次 3ms 命中）。
+- 整段低于阈值（异常输入）或音频 <10ms 时**原样返回**，不裁坏。
+- 参考音（warmup）同样走裁剪后的音频，F0 分析不受影响（静音段本来就不产生 F0）。
+- 可配置：`TTS_TRIM_SILENCE=1`（默认开；设 0 关闭）、`TTS_TRIM_THRESHOLD_DB=-50`、`TTS_TRIM_KEEP_MS=50`。
+
+实测（真实 Azure，`fmt=wav`）：
+
+| 文本 / rate | 裁剪前总时长 | 语音段 | 裁剪后总时长 |
+|---|---|---|---|
+| `think` / normal | 1.82s | 0.37s | **0.47s** |
+| `think, sink` / slow | 2.86s | 1.41s | **1.51s** |
+| `think` / mp3 | 1.87s | — | 不裁剪（mp3）|
 
 ### 8.3 `POST /v1/warmup`
 

@@ -17,7 +17,7 @@ import logging
 import threading
 from pathlib import Path
 
-from ..audio_io import pcm16_wav_bytes
+from ..audio_io import pcm16_wav_bytes, trim_wav_silence
 from ..config import Settings, get_settings
 from ..errors import ProviderError, ProviderUnavailable
 from .base import Capabilities, TTSResult
@@ -126,6 +126,13 @@ class PiperTTS:
         sample_rate = int(chunks[0].sample_rate)
         wav = pcm16_wav_bytes(_pcm16_to_float(pcm), sample_rate)
         duration_ms = int(round(len(pcm) / 2 / sample_rate * 1000))
+        if settings.tts_trim_silence:
+            trimmed, changed = trim_wav_silence(wav, settings.tts_trim_threshold_db, settings.tts_trim_keep_ms)
+            if changed:
+                from ..audio_io import probe_audio
+
+                wav = trimmed
+                duration_ms = probe_audio(wav).duration_ms
         return TTSResult(
             audio=wav,
             content_type="audio/wav",

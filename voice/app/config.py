@@ -247,6 +247,10 @@ class Settings:
     max_tts_chars: int = 2000
     max_upload_bytes: int = 25 * 1024 * 1024
     max_ocr_bytes: int = 10 * 1024 * 1024  # /v1/ocr 图片上限（10MB）
+    # TTS WAV 首尾静音裁剪（task-39：Azure 短词尾部 ~1.3s 低电平噪声）
+    tts_trim_silence: bool = True
+    tts_trim_threshold_db: float = -50.0
+    tts_trim_keep_ms: int = 50
     ocr_provider: str = "auto"  # auto | llm | local（task-27：LLM 视觉为主，本地 rapidocr 兜底）
     ocr_timeout_s: float = 30.0
     ocr_max_tokens: int = 1500  # 推理模型先输出 reasoning，800 会被思考吃光（task-36）
@@ -359,6 +363,9 @@ def get_settings() -> Settings:
         max_tts_chars=_env_int("MAX_TTS_CHARS", 2000),
         max_upload_bytes=_env_int("MAX_UPLOAD_BYTES", 25 * 1024 * 1024),
         max_ocr_bytes=_env_int("MAX_OCR_BYTES", 10 * 1024 * 1024),
+        tts_trim_silence=_env_bool("TTS_TRIM_SILENCE", True),
+        tts_trim_threshold_db=_env_float("TTS_TRIM_THRESHOLD_DB", -50.0),
+        tts_trim_keep_ms=_env_int("TTS_TRIM_KEEP_MS", 50),
         ocr_provider=_env("VOICE_OCR_PROVIDER", "auto") or "auto",
         ocr_timeout_s=_env_float("OCR_TIMEOUT_S", 30.0),
         ocr_max_tokens=_env_int("OCR_MAX_TOKENS", 1500),

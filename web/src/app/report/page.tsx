@@ -2,6 +2,7 @@ import Link from "next/link";
 import { redirect } from "next/navigation";
 import { ensureBootstrap } from "@/db";
 import { AudioButton } from "@/components/AudioButton";
+import { ContrastButton } from "@/components/ContrastButton";
 import { ArticulationDemo } from "@/components/ArticulationDemo";
 import { getArticulation } from "@/lib/articulation";
 import type { Articulation } from "@/lib/articulation";
@@ -205,10 +206,9 @@ function ReportCard({
               {item.contrasts.slice(0, 2).map((c, idx) => (
                 <p key={idx} className="mt-1 text-[var(--ec-muted)]">
                   {/* 儿童已剥离对比音素符号，只展示对比词与说明 */}
-                  {c.pair[0]} ↔ {c.pair[1]}：{c.note}
-                  <AudioButton text={`${c.pair[0]}, ${c.pair[1]}`} rate="slow" className="ml-2 !px-2 !py-0.5 text-xs">
-                    对比听
-                  </AudioButton>
+                  <strong>{c.pair[0]}</strong> → <strong>{c.pair[1]}</strong>：{c.note}
+                  {/* task-40：对比听改成"先 A、停 550ms、再 B"，正常语速；不再拼成一句合成 */}
+                  <ContrastButton a={c.pair[0]} b={c.pair[1]} className="ml-2 !px-2 !py-0.5 text-xs" />
                 </p>
               ))}
             </div>
