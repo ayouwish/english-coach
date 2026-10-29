@@ -31,8 +31,8 @@
 
 ```
 deploy/
-├── docker-compose.yml   # web(:3000) + voice(:8100) + caddy(TLS)，一条命令起全套
-├── Caddyfile            # 唯一对外入口，负责 HTTPS（录音功能的前提）
+├── docker-compose.yml   # web(:3000) + voice(:8100)；caddy 是可选的 ingress profile（默认不启动）
+├── Caddyfile            # 可选内置入口（--profile ingress）；也可用 NAS 上的 NPM/Lucky 做统一反代
 └── .env.example         # 所有 provider 开关与密钥；复制成 .env 后生效
 scripts/
 ├── check-deploy.sh      # 部署自检：一条命令验证编排/健康/provider/TTS/评测（§10.6）
@@ -43,8 +43,8 @@ scripts/
 
 | 容器 | 作用 | 端口 | 谁访问它 |
 |---|---|---|---|
-| `caddy` | TLS 终止 + 反向代理 | `80` `443` | 浏览器（唯一入口） |
-| `web` | Next.js：账号/会话/SQLite/SRS/家长面板 | `3000`（只绑 `127.0.0.1`） | 只有 caddy，以及你在本机调试 |
+| `caddy`（可选，`--profile ingress`） | TLS 终止 + 反向代理 | `443`（`CADDY_HTTPS_PORT`） | 浏览器；**也可由 NAS 上的 NPM/Lucky 替代** |
+| `web` | Next.js：账号/会话/SQLite/SRS/家长面板 | `3000`（默认只绑 `127.0.0.1`；`WEB_BIND` 可改） | 反代（caddy/NPM/Lucky）与本机调试 |
 | `voice` | FastAPI AI 网关：ASR/发音评测/TTS/LLM | `8100`（只绑 `127.0.0.1`） | 只有 web 服务端 |
 
 **数据落盘**：host 的 `english-coach/data/` 同时挂给 web 和 voice（一个目录 = 备份就是打包一个目录）。
@@ -58,6 +58,15 @@ scripts/
 
 | 路径 | 适合 | 首次投入 | 家人能用手机/平板吗 | 证书 |
 |---|---|---|---|---|
+> **推荐架构（2026-10 起）**：把"入口"交给 NAS 上的**通用反向代理**（Nginx Proxy Manager / Lucky / 系统 nginx），
+> 而不是让每个应用各带一个 caddy。本项目只需对反代说三件事：
+> 1) 反代目标 `http://<NAS局域网IP>:3000`（把 `web` 绑定到该 IP：`.env` 设 `WEB_BIND=192.168.x.x`——
+>    因为 NPM/Lucky 通常是**桥接网络容器**，连不到宿主的 `127.0.0.1`）；
+> 2) 反代带 `X-Forwarded-Proto: https`（NPM 默认就有），并保持 `.env` 的 `TRUST_PROXY=1`、`COOKIE_SECURE=1`；
+> 3) 证书在反代里签（NPM 内置 Let's Encrypt/ZeroSSL，建议 DNS-01 通配符 `*.example.com`，以后加子域名免重签）。
+>
+> 这样以后新增任何服务只改反代，不动本项目；`caddy` 仅在没有现成反代时用 `--profile ingress` 启用。
+
 | **A. 本机 docker compose** | 先跑起来看看 / 已经有电脑 | 0 元 | 能，但要装一次自签根证书 | Caddy internal CA |
 | **B. 家用迷你主机常驻** | 想在客厅随手用、不想占主力机 | 约 800–1600 元 | 能 | Caddy internal CA |
 | **C. 公网域名** | 要在外面也能用 | 域名约 50 元/年 + 云服务器 | 能，无需装证书 | Let's Encrypt 自动 |

@@ -154,7 +154,7 @@ english-coach/
 │   ├── app/phonemes.py   canonical-v1 音素符号空间（43 符号）
 │   ├── app/warmup.py     参考音与 F0 缓存 + 批量预热
 │   └── tests/            496 个单元测试
-├── deploy/               docker compose / Caddyfile / 环境变量模板
+├── deploy/               docker compose（caddy 为可选 ingress）/ 环境变量模板
 ├── docs/                 架构 / 契约 / 部署 / 验收 / 成本
 ├── tests/                契约校验 · 端到端 · 语料审计 · 各 provider 自检
 └── scripts/              一键预热（warm-corpus.sh）· 部署自检
