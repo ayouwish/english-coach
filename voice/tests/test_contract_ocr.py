@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+import base64
 import io
 import json
 import os
@@ -304,3 +305,83 @@ def test_engine_singleton_is_reused(monkeypatch, tmp_path):
     assert recognize_image(data).text == "hello"
     assert recognize_image(data).text == "hello"
     assert len(created) == 1, "引擎必须是单例（模型只加载一次）"
+
+
+# --------------------------------------------------------------------------------------
+# task-28：可选返回预处理后的 JPEG（供 web 存"我的书页"）
+# --------------------------------------------------------------------------------------
+def _post_fixture(client, form: dict):
+    return client.post(
+        "/v1/ocr",
+        files={"image": ("page.jpg", FIXTURE.read_bytes(), "image/jpeg")},
+        data=form,
+    )
+
+
+def _decode_jpeg(b64: str):
+    from PIL import Image
+
+    assert not b64.startswith("data:"), "响应里必须是纯 base64，不含 data: 前缀"
+    raw = base64.b64decode(b64)
+    assert raw[:3] == b"\xff\xd8\xff", "必须是 JPEG（SOI 标记）"
+    return Image.open(io.BytesIO(raw))
+
+
+def test_return_image_absent_by_default(client):
+    body = _post_fixture(client, {}).json()
+    assert "image_jpeg_b64" not in body, "未请求时字段应缺失（不是 null）"
+    assert set(body) == OCR_KEYS
+
+
+def test_return_image_local_path(client):
+    """本地路径：返回实际识别用的预处理图（JPEG，尺寸与 width/height 一致）。"""
+    body = _post_fixture(client, {"return_image": "1"}).json()
+    assert "image_jpeg_b64" in body
+    image = _decode_jpeg(body["image_jpeg_b64"])
+    assert image.format == "JPEG"
+    assert image.size == (body["width"], body["height"])
+    assert max(image.size) <= 1280
+    # 其余字段不受影响
+    assert body["provider"] == "rapidocr"
+    assert body["text"].startswith("Hello")
+
+
+def test_return_image_true_string(client):
+    body = _post_fixture(client, {"return_image": "true"}).json()
+    assert "image_jpeg_b64" in body
+
+
+def test_return_image_false_values_absent(client):
+    for value in ("0", "false", "no", ""):
+        body = _post_fixture(client, {"return_image": value}).json()
+        assert "image_jpeg_b64" not in body, f"return_image={value!r} 不应返回图片"
+
+
+def test_return_image_downscales_3000x2000(client):
+    """3000×2000 大图 → 返回的 JPEG 长边 ≤1280（web 存小图）。"""
+    from PIL import Image
+
+    image = Image.new("RGB", (3000, 2000), (250, 250, 245))
+    buffer = io.BytesIO()
+    image.save(buffer, format="JPEG", quality=90)
+    response = client.post(
+        "/v1/ocr",
+        files={"image": ("big.jpg", buffer.getvalue(), "image/jpeg")},
+        data={"return_image": "1"},
+    )
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert "image_jpeg_b64" in body
+    sent = _decode_jpeg(body["image_jpeg_b64"])
+    assert max(sent.size) <= 1280
+    assert sent.size == (body["width"], body["height"])
+    assert "image_downscaled" in body["warnings"]
+
+
+def test_return_image_encode_failure_warning(client, monkeypatch):
+    """编码失败：warnings 里明确说明，且不返回该字段（不是返回空串/null）。"""
+    monkeypatch.setattr(ocr_module, "encode_jpeg_b64", lambda *a, **k: None)
+    body = _post_fixture(client, {"return_image": "1"}).json()
+    assert "image_jpeg_b64" not in body
+    assert "image_encode_failed" in body["warnings"]
+    assert body["text"].startswith("Hello")  # 识别本身不受影响

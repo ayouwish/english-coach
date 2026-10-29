@@ -436,12 +436,13 @@ async def dialogue(payload: DialogueRequest) -> dict:
 # 9. ocr（task-25：拍照识别书页英文，离线 rapidocr，不落盘）
 # --------------------------------------------------------------------------------------
 @router.post("/ocr")
-async def ocr(image: UploadFile = File(...)) -> dict:
+async def ocr(image: UploadFile = File(...), return_image: str | None = Form(None)) -> dict:
     settings = get_settings()
     data = await _read_upload(image, settings.max_ocr_bytes)
     if not data:
         raise BadRequest("empty image payload")
-    result = await run_in_threadpool(recognize_image, data, settings)
+    wants_image = str(return_image or "").strip().lower() in ("1", "true", "yes", "on")
+    result = await run_in_threadpool(recognize_image, data, settings, wants_image)
     return result.to_contract()
 
 

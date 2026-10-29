@@ -80,6 +80,7 @@ pnpm db:seed -- --reset-passwords        # 强制把密码重置回上表
 | `pnpm check:chat-speech` | 对话朗读：`/api/tts` 同句两次耗时对比（缓存）、`/chat` 里自动朗读开关/重播按钮的 aria 断言、儿童 slow / 成人 normal |
 | `pnpm check:suggestions` | 「提建议」：儿童可提交且响应/库中无 IPA、儿童 GET 403、家长可见与字段、超长/非法分类 4xx、`/suggestions` 无字面 `**`、导出 Markdown |
 | `pnpm check:flow` | 连读模式：`/api/attempts/async` <1.5s 返回、轮询 pending→done、自由文本 `custom:` 路径、重启恢复、儿童 `/flow` 零 IPA/无字面 `**` |
+| `pnpm check:materials` | 书页材料库：创建/图片字节一致/落盘位置/重命名与句数重算/删除连同图片/儿童删别人 403/未登录 401/路径穿越 4xx/儿童 `/flow` 零 IPA |
 
 ## 4. 自测（无浏览器环境下的验收方式）
 
@@ -326,6 +327,26 @@ GET/PATCH /api/settings       偏好设置（儿童不能自行改时长/自由�
 - **页面 `/flow`**：从语料按级别/起点/条数取一段，或粘贴文本按 `. ! ? 。！？` 切句（可逐句编辑预览）；
   连读界面大字显示当前句 + 进度 + 自动进入下一句开关 + 实时评分列表（1.2s 轮询）+ 完成后汇总（平均分/最差 3 句/去诊断）。
   儿童：大字号、口语化、**零 IPA**（已加入 `check:child-ipa` 清单）。中途退出不丢数据（已提交的照常评完）。
+
+## 6.7 书页材料库（task-29）
+
+把拍照识别过的书页**存下来反复读**：`/flow` 的来源从两选变三选（「从语料选」「📚 我的书页」「自己输入」）。
+
+- **数据**：`migrations/0007_reading_materials.sql`（幂等纯追加）+ Drizzle `reading_materials`
+  （id / created_by / title / text / image_path / sentence_count / source / created_at / updated_at）。
+  **家庭共享**：所有登录用户都能看到全部书页（妈妈拍的女儿也能读）。
+- **存储**：图片落 `DATA_DIR/materials/<id>.jpg`（与 `audio/` 同级，**不入库、不进缓存淘汰**）；
+  写入用「临时文件 + rename」原子写；路径解析限定在 `materials/` 内（`resolveMaterialPath`，防目录穿越）；
+  删除材料时同步删图片（ENOENT 忽略）。
+- **图片来源**：调用 `/api/ocr` 时带 `return_image=1` → voice 响应里的 `image_jpeg_b64`（预处理后的 JPEG，≈100KB）
+  透传给客户端 → 保存时随 `POST /api/materials` 一起提交；**voice 未实现该字段时仍保存文本**（`image_path` 为 NULL），
+  UI 明确提示「这次没拿到图片，只保存了文字」。
+- **API**：`POST /api/materials`（title 1–60 / text 1–20000 / image_b64 ≤5MB，服务端二次校验）、
+  `GET /api/materials`（列表，家庭共享）、`GET|PATCH|DELETE /api/materials/[id]`（**创建者或家长**才能改/删，儿童改删别人的 → 403）、
+  `GET /api/materials/[id]/image`（`image/jpeg` + `Cache-Control: private, max-age=86400`；无图 404）。
+- **`/flow`**：书页卡片列表（标题/句数/日期/缩略图）+ 点击直接进连读 + 重命名/编辑文本（句数自动重算）/删除；
+  OCR 成功后出现「💾 保存为我的书页」（标题默认取第一行前 40 字），保存后可选「立即开始读」。
+- **隐私文案（更新）**：「🔒 照片会保存在**你自己的 NAS 上**（方便以后反复读）；识别时会上传到你配置的 AI 服务（DeepSeek）。」
 
 ## 7. 儿童模式（`age_band=child`）
 

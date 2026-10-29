@@ -247,6 +247,23 @@ export const suggestions = sqliteTable(
   ],
 );
 
+/** 书页材料库（task-29）：识别的文本 + voice 预处理后的 JPEG，供连读反复练习。 */
+export const readingMaterials = sqliteTable(
+  "reading_materials",
+  {
+    id: text("id").primaryKey(),
+    createdBy: text("created_by"),
+    title: text("title").notNull(),
+    text: text("text").notNull(),
+    imagePath: text("image_path"),
+    sentenceCount: integer("sentence_count").notNull().default(0),
+    source: text("source").notNull().default("photo"),
+    createdAt: text("created_at").notNull(),
+    updatedAt: text("updated_at").notNull(),
+  },
+  (t) => [index("idx_materials_created").on(t.createdAt)],
+);
+
 /** web 私有扩展表：纠正强度 / 音色 / 语速偏好（不改动契约冻结列）。 */
 export const userPrefs = sqliteTable("user_prefs", {
   userId: text("user_id").primaryKey(),

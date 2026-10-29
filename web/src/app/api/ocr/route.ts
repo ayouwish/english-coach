@@ -61,7 +61,9 @@ export async function POST(req: NextRequest) {
     if (!looksLikeImage(data)) {
       throw new HttpError(400, "bad_request", "这不是有效的图片文件（内容不是图片）。请重新拍照或选择图片。");
     }
-    const result = await callOcr({ data, mime, filename: image.name || "page.jpg" });
+    // 客户端要"保存我的书页"时会带 return_image=1（voice 契约：响应里多一个 image_jpeg_b64）
+    const returnImage = form.get("return_image") === "1" || req.nextUrl.searchParams.get("return_image") === "1";
+    const result = await callOcr({ data, mime, filename: image.name || "page.jpg", returnImage });
     return jsonOk({
       provider: result.provider,
       text: result.text,
@@ -70,6 +72,11 @@ export async function POST(req: NextRequest) {
       height: result.height ?? null,
       elapsed_ms: result.elapsed_ms ?? null,
       warnings: result.warnings ?? [],
+      // voice 还没实现 return_image 时这里是 null —— 前端会降级为"只保存文字"
+      image_jpeg_b64:
+        typeof result.image_jpeg_b64 === "string" && result.image_jpeg_b64.length > 0
+          ? result.image_jpeg_b64
+          : null,
     });
   } catch (err) {
     if (err instanceof HttpError) {

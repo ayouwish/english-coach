@@ -642,7 +642,11 @@ WER **mean 0.295 / median 0.171**，RTF mean **0.371**（max 1.2）；词级时�
 
 - `text` 按**行序**用 `\n` 连接（前端可直接 `split("\n")` 切句），`lines` 是同一批行。
 - `lines[].confidence`：LLM 视觉**没有置信度 → `null`**（诚实，不编造）；本地 rapidocr 兜底时给真实分数。
-- `warnings`：`image_downscaled`（缩放）、`no_text_found`（没识别到英文）、`llm_vision_failed`（LLM 失败已降级本地）。
+- `warnings`：`image_downscaled`（缩放）、`no_text_found`（没识别到英文）、`llm_vision_failed`（LLM 失败已降级本地）、`image_encode_failed`（请求了返回图但编码失败）。
+- **可选返回预处理图**（task-28）：请求加 `return_image=1`（或 `true`）时，响应多一个 `image_jpeg_b64`
+  ——**纯 base64（不含 `data:` 前缀）**，就是实际送去识别的那张图（EXIF 已转正、长边 ≤1280、JPEG q85，fixture 900×400 约 100KB）。
+  用于 web 存"我的书页"反复复读，避免存 3–8MB 手机原图。未请求时字段**缺失**（不是 `null`）；
+  编码失败时给 `warnings:["image_encode_failed"]` 且不返回该字段。
 - `width`/`height` 是**发送给识别引擎前**的尺寸（EXIF 转正 + 缩放后）。
 
 ### 14.2 Provider 链与预处理

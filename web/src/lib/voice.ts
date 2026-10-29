@@ -154,9 +154,16 @@ export async function callAsr(form: FormData): Promise<AsrResult> {
  * 拍照识别（OCR）：`POST /v1/ocr`（multipart，字段 image）。
  * voice 未实现该端点时会 404 / 503 —— 调用方必须给"可操作的中文提示"，不许静默失败。
  */
-export async function callOcr(image: { data: Uint8Array; mime: string; filename: string }): Promise<OcrResult> {
+export async function callOcr(image: {
+  data: Uint8Array;
+  mime: string;
+  filename: string;
+  /** 让 voice 顺带返回预处理后的 JPEG（base64，不含 data: 前缀）——保存"我的书页"用 */
+  returnImage?: boolean;
+}): Promise<OcrResult> {
   const form = new FormData();
   form.append("image", new Blob([new Uint8Array(image.data)], { type: image.mime }), image.filename);
+  if (image.returnImage) form.append("return_image", "1");
   return callVoice<OcrResult>("/v1/ocr", { method: "POST", body: form }, TIMEOUTS.ocr);
 }
 

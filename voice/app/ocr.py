@@ -30,7 +30,7 @@ from .llm import LLMClient
 logger = logging.getLogger("voice.ocr")
 
 MAX_LONG_SIDE_LLM = 1280  # 发给视觉模型前缩到 ≤1280（token 成本随像素涨；1600→1280 省约 40%）
-MAX_LONG_SIDE_LOCAL = 1600  # 本地 PP-OCR 用 1600
+MAX_LONG_SIDE_LOCAL = 1280  # 本地 PP-OCR 同样用 1280：两条路径共用同一张预处理图（task-28 返回图 ≤1280）
 MAX_PIXELS = 40_000_000  # 解码前像素上限（防解压炸弹）
 MIN_SIDE = 8
 LLM_JPEG_QUALITY = 85
@@ -41,6 +41,7 @@ LOCAL_PROVIDER_NAME = "rapidocr"
 WARNING_LLM_FAILED = "llm_vision_failed"
 WARNING_NO_TEXT = "no_text_found"
 WARNING_DOWNSCALED = "image_downscaled"
+WARNING_ENCODE_FAILED = "image_encode_failed"
 
 OCR_PROMPT = (
     "请逐行输出图片中的英文原文：\n"
@@ -75,9 +76,10 @@ class OcrResult:
     elapsed_ms: int = 0
     warnings: list[str] = field(default_factory=list)
     provider: str = LOCAL_PROVIDER_NAME
+    image_jpeg_b64: str | None = None  # task-28：仅 return_image 请求时出现（缺失=未请求，不是 null）
 
     def to_contract(self) -> dict:
-        return {
+        payload = {
             "provider": self.provider,
             "text": self.text,
             "lines": self.lines,
@@ -86,6 +88,9 @@ class OcrResult:
             "elapsed_ms": self.elapsed_ms,
             "warnings": self.warnings,
         }
+        if self.image_jpeg_b64 is not None:
+            payload["image_jpeg_b64"] = self.image_jpeg_b64
+        return payload
 
 
 # --------------------------------------------------------------------------------------
@@ -219,12 +224,21 @@ def preprocess_image(data: bytes, settings: Settings | None = None, max_long_sid
     return image, width, height, warnings
 
 
-def jpeg_data_url(image, quality: int = LLM_JPEG_QUALITY) -> str:
-    """PIL RGB -> `data:image/jpeg;base64,...`（视觉模型的 image_url 格式）。"""
-    buffer = io.BytesIO()
-    image.save(buffer, format="JPEG", quality=quality, optimize=True)
-    encoded = base64.b64encode(buffer.getvalue()).decode("ascii")
-    return f"data:image/jpeg;base64,{encoded}"
+def encode_jpeg_b64(image, quality: int = LLM_JPEG_QUALITY) -> str | None:
+    """PIL RGB -> base64（不含 data: 前缀）。编码失败返回 None（调用方决定降级/加 warning）。"""
+    try:
+        buffer = io.BytesIO()
+        image.save(buffer, format="JPEG", quality=quality, optimize=True)
+        return base64.b64encode(buffer.getvalue()).decode("ascii")
+    except Exception as exc:  # pragma: no cover - 实际极少失败（PIL 纯内存编码）
+        logger.warning("OCR image encode failed: %s", exc)
+        return None
+
+
+def jpeg_data_url(image, quality: int = LLM_JPEG_QUALITY) -> str | None:
+    """PIL RGB -> `data:image/jpeg;base64,...`（视觉模型的 image_url 格式）；失败返回 None。"""
+    encoded = encode_jpeg_b64(image, quality=quality)
+    return f"data:image/jpeg;base64,{encoded}" if encoded is not None else None
 
 
 # --------------------------------------------------------------------------------------
@@ -301,9 +315,14 @@ def _to_float(value) -> float:
 # --------------------------------------------------------------------------------------
 # 两个 provider 的实现
 # --------------------------------------------------------------------------------------
-def _recognize_with_llm(image, width: int, height: int, warnings: list[str], settings: Settings) -> OcrResult:
+def _recognize_with_llm(
+    image, width: int, height: int, warnings: list[str], settings: Settings, return_image: bool
+) -> OcrResult:
     client = LLMClient(settings)
-    data_url = jpeg_data_url(image)
+    encoded = encode_jpeg_b64(image)
+    if encoded is None:
+        raise _LlmVisionFailed("image_encode_failed")
+    data_url = f"data:image/jpeg;base64,{encoded}"
     started = time.perf_counter()
     outcome = client.read_image(
         data_url,
@@ -327,10 +346,13 @@ def _recognize_with_llm(image, width: int, height: int, warnings: list[str], set
         height=height,
         elapsed_ms=elapsed_ms,
         warnings=warnings,
+        image_jpeg_b64=encoded if return_image else None,
     )
 
 
-def _recognize_with_local(image, width: int, height: int, warnings: list[str]) -> OcrResult:
+def _recognize_with_local(
+    image, width: int, height: int, warnings: list[str], return_image: bool
+) -> OcrResult:
     engine = _get_engine()
     import numpy as np
 
@@ -347,6 +369,11 @@ def _recognize_with_local(image, width: int, height: int, warnings: list[str]) -
     lines = sort_ocr_lines(items or [])
     if not lines:
         warnings.append(WARNING_NO_TEXT)
+    encoded = None
+    if return_image:
+        encoded = encode_jpeg_b64(image)
+        if encoded is None:
+            warnings.append(WARNING_ENCODE_FAILED)
     return OcrResult(
         provider=LOCAL_PROVIDER_NAME,
         text="\n".join(line["text"] for line in lines),
@@ -355,14 +382,19 @@ def _recognize_with_local(image, width: int, height: int, warnings: list[str]) -
         height=height,
         elapsed_ms=elapsed_ms,
         warnings=warnings,
+        image_jpeg_b64=encoded,
     )
 
 
 # --------------------------------------------------------------------------------------
 # 入口
 # --------------------------------------------------------------------------------------
-def recognize_image(data: bytes, settings: Settings | None = None) -> OcrResult:
-    """识别一张图片（内存中完成，不落盘）。LLM 视觉优先，失败降级本地（若可用）。"""
+def recognize_image(data: bytes, settings: Settings | None = None, return_image: bool = False) -> OcrResult:
+    """识别一张图片（内存中完成，不落盘）。LLM 视觉优先，失败降级本地（若可用）。
+
+    `return_image=True` 时把**实际送去识别的那张预处理图**（EXIF 转正、长边 ≤1280、JPEG q85）
+    以 base64 放进 `image_jpeg_b64`（供 web 存"我的书页"，避免存手机原图）。
+    """
     settings = settings or get_settings()
     chain = ocr_chain(settings)
     if not chain:
@@ -376,7 +408,7 @@ def recognize_image(data: bytes, settings: Settings | None = None) -> OcrResult:
 
     if PROVIDER_LLM in chain:
         try:
-            return _recognize_with_llm(image, width, height, warnings, settings)
+            return _recognize_with_llm(image, width, height, warnings, settings, return_image)
         except _LlmVisionFailed as exc:
             logger.warning("LLM vision OCR failed, falling back if possible: %s", exc)
             warnings.append(WARNING_LLM_FAILED)
@@ -386,4 +418,4 @@ def recognize_image(data: bytes, settings: Settings | None = None) -> OcrResult:
                     detail=str(exc),
                 ) from exc
 
-    return _recognize_with_local(image, width, height, warnings)
+    return _recognize_with_local(image, width, height, warnings, return_image)

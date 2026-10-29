@@ -1,7 +1,7 @@
 # Caddyfile.multisite —— 一个反代同时服务「我们的应用」和「NAS 自己的界面」
 #
 # 场景：你自己占住 80/443（飞牛的 80/443 重定向已关闭），想两个域名都无端口访问：
-#   · english.dreamsearch.top  → 英语练习应用（公信证书，HTTPS）
+#   · coach.example.com  → 英语练习应用（公信证书，HTTPS）
 #   · nas.home                 → 飞牛 NAS 界面（HTTP 跳转到它自己的 5667）
 #
 # 为什么 `nas.home` 走 80 而不是 443：
@@ -14,7 +14,7 @@
 #   CADDYFILE=Caddyfile.multisite
 #   CADDY_HTTP_PORT=80                  # 宿主 80 必须空闲
 #   CADDY_HTTPS_PORT=443                # 宿主 443 必须空闲
-#   SITE_ADDRESS=english.dreamsearch.top  # 应用域名（证书必须覆盖它）
+#   SITE_ADDRESS=coach.example.com  # 应用域名（证书必须覆盖它）
 #   NAS_HOST=nas.home                   # NAS 界面的私有域名
 #   NAS_UI_PORT=5667                    # 飞牛界面的实际端口（以它重定向到的端口为准）
 #   COOKIE_SECURE=1
@@ -31,7 +31,7 @@
 }
 
 # ── 主站：英语练习应用（公信证书 + 反向代理到 web 容器）────────────────────────
-{$SITE_ADDRESS:english.dreamsearch.top} {
+{$SITE_ADDRESS:coach.example.com} {
 	tls /certs/fullchain.pem /certs/privkey.pem
 
 	encode zstd gzip

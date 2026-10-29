@@ -23,7 +23,8 @@
     "check:diagnosis": "node scripts/check-diagnosis.mjs",
     "check:chat-speech": "node scripts/check-chat-speech.mjs",
     "check:suggestions": "node scripts/check-suggestions.mjs",
-    "check:flow": "node scripts/check-flow.mjs"
+    "check:flow": "node scripts/check-flow.mjs",
+    "check:materials": "node scripts/check-materials.mjs"
   },
   "dependencies": {
     "bcryptjs": "^3.0.2",

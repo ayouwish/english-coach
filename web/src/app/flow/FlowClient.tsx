@@ -6,6 +6,7 @@ import { Recorder } from "@/components/Recorder";
 import { FeedbackCard, IssuesSection } from "@/components/ResultSections";
 import { ScoreRadar } from "@/components/ScoreRadar";
 import { WordBars } from "@/components/WordBars";
+import { splitSentences } from "@/lib/sentence-split";
 import type { FeedbackResult, PronounceIssue, PronounceResult } from "@/lib/types";
 
 interface CorpusSentence {
@@ -37,25 +38,6 @@ type Phase = "setup" | "running" | "summary";
 
 const COUNTS = [5, 10, 15];
 
-/** 把一段文本按 . ! ? 。！？ 切成句子（过滤空句；保留句末标点） */
-export function splitSentences(raw: string): string[] {
-  const text = (raw ?? "").replace(/\r\n/g, "\n").trim();
-  if (!text) return [];
-  const out: string[] = [];
-  let buf = "";
-  for (const ch of text) {
-    buf += ch;
-    if (/[.!?。！？]/.test(ch)) {
-      const t = buf.trim();
-      if (t) out.push(t);
-      buf = "";
-    }
-  }
-  const tail = buf.trim();
-  if (tail) out.push(tail);
-  return out.filter((s) => s.replace(/[^\p{L}\p{N}]/gu, "").length > 0);
-}
-
 /**
  * 连读模式（task-24）：录完一句立刻进入下一句，评分在后台排队；右侧列表轮询更新。
  * - 复用现有 Recorder（不改它）
@@ -77,7 +59,7 @@ export function FlowClient({
   ocrAvailable: boolean;
 }) {
   const [phase, setPhase] = useState<Phase>("setup");
-  const [mode, setMode] = useState<"corpus" | "custom">("corpus");
+  const [mode, setMode] = useState<"corpus" | "materials" | "custom">("corpus");
   const [level, setLevel] = useState(userLevel || "A1");
   const [start, setStart] = useState(0);
   const [count, setCount] = useState(5);
@@ -99,6 +81,166 @@ export function FlowClient({
   const [ocrInfo, setOcrInfo] = useState<{ provider: string; lines: number; elapsedMs: number | null } | null>(null);
   const ocrInputRef = useRef<HTMLInputElement | null>(null);
   const lastImageRef = useRef<File | null>(null);
+  /** voice 返回的预处理 JPEG（base64）——保存"我的书页"时一起存；null 表示这次只保存文字 */
+  const [ocrImageB64, setOcrImageB64] = useState<string | null>(null);
+  const [saveTitle, setSaveTitle] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [saveError, setSaveError] = useState<string | null>(null);
+  const [savedId, setSavedId] = useState<string | null>(null);
+
+  // ── 我的书页（task-29）─────────────────────────────────────────────────────
+  interface MaterialItem {
+    id: string;
+    title: string;
+    sentence_count: number;
+    has_image: boolean;
+    source: string;
+    created_at: string;
+  }
+  const [materials, setMaterials] = useState<MaterialItem[]>([]);
+  const [materialsLoading, setMaterialsLoading] = useState(false);
+  const [materialsError, setMaterialsError] = useState<string | null>(null);
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [editTitle, setEditTitle] = useState("");
+  const [editText, setEditText] = useState("");
+  const [materialBusy, setMaterialBusy] = useState<string | null>(null);
+
+  const loadMaterials = useCallback(async () => {
+    setMaterialsLoading(true);
+    setMaterialsError(null);
+    try {
+      const res = await fetch("/api/materials?limit=50");
+      const data = (await res.json().catch(() => null)) as
+        | { items?: MaterialItem[]; error?: { message?: string } }
+        | null;
+      if (!res.ok) {
+        setMaterialsError(data?.error?.message ?? `加载书页失败（HTTP ${res.status}）`);
+        return;
+      }
+      setMaterials(data?.items ?? []);
+    } catch (err) {
+      setMaterialsError(`加载书页失败：${(err as Error).message}`);
+    } finally {
+      setMaterialsLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (mode === "materials") void loadMaterials();
+  }, [mode, loadMaterials]);
+
+  function startFromText(text: string, source: "corpus" | "custom") {
+    const list = splitSentences(text);
+    if (list.length === 0) {
+      setError(isChild ? "这一页没有找到句子" : "这一页没有可读的句子");
+      return;
+    }
+    setItems(
+      list.map((t, i) => ({
+        index: i,
+        text: t,
+        sentenceId: null,
+        source,
+        attemptId: null,
+        status: "unsent" as const,
+        error: null,
+        result: null,
+      })),
+    );
+    beginRun();
+  }
+
+  async function startMaterial(id: string) {
+    setMaterialBusy(id);
+    setMaterialsError(null);
+    try {
+      const res = await fetch(`/api/materials/${id}`);
+      const data = (await res.json().catch(() => null)) as
+        | { text?: string; error?: { message?: string } }
+        | null;
+      if (!res.ok || !data?.text) {
+        setMaterialsError(data?.error?.message ?? `载入失败（HTTP ${res.status}）`);
+        return;
+      }
+      startFromText(data.text, "custom");
+    } catch (err) {
+      setMaterialsError(`载入失败：${(err as Error).message}`);
+    } finally {
+      setMaterialBusy(null);
+    }
+  }
+
+  async function saveMaterial() {
+    setSaving(true);
+    setSaveError(null);
+    try {
+      const res = await fetch("/api/materials", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          title: saveTitle.trim() || "未命名书页",
+          text: customText,
+          image_b64: ocrImageB64,
+          source: ocrImageB64 ? "photo" : "text",
+        }),
+      });
+      const data = (await res.json().catch(() => null)) as
+        | { id?: string; has_image?: boolean; error?: { message?: string } }
+        | null;
+      if (!res.ok || !data?.id) {
+        setSaveError(data?.error?.message ?? `保存失败（HTTP ${res.status}），请重试`);
+        return;
+      }
+      setSavedId(data.id);
+      void loadMaterials();
+    } catch (err) {
+      setSaveError(`保存失败：${(err as Error).message}`);
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function patchMaterial(id: string, patch: { title?: string; text?: string }) {
+    setMaterialBusy(id);
+    setMaterialsError(null);
+    try {
+      const res = await fetch(`/api/materials/${id}`, {
+        method: "PATCH",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(patch),
+      });
+      const data = (await res.json().catch(() => null)) as { error?: { message?: string } } | null;
+      if (!res.ok) {
+        setMaterialsError(data?.error?.message ?? `保存失败（HTTP ${res.status}）`);
+        return;
+      }
+      setEditingId(null);
+      void loadMaterials();
+    } catch (err) {
+      setMaterialsError(`保存失败：${(err as Error).message}`);
+    } finally {
+      setMaterialBusy(null);
+    }
+  }
+
+  async function removeMaterial(id: string) {
+    if (typeof window !== "undefined" && !window.confirm("确定删除这个书页吗？（图片也会一起删掉）")) return;
+    setMaterialBusy(id);
+    setMaterialsError(null);
+    try {
+      const res = await fetch(`/api/materials/${id}`, { method: "DELETE" });
+      const data = (await res.json().catch(() => null)) as { error?: { message?: string } } | null;
+      if (!res.ok) {
+        setMaterialsError(data?.error?.message ?? `删除失败（HTTP ${res.status}）`);
+        return;
+      }
+      setMaterials((prev) => prev.filter((m) => m.id !== id));
+    } catch (err) {
+      setMaterialsError(`删除失败：${(err as Error).message}`);
+    } finally {
+      setMaterialBusy(null);
+    }
+  }
 
   useEffect(() => {
     // 卸载时释放缩略图的 object URL
@@ -142,9 +284,18 @@ export function FlowClient({
     try {
       const form = new FormData();
       form.append("image", file, file.name || "page.jpg");
+      // 让 voice 顺带返回预处理 JPEG（保存"我的书页"用）；voice 未实现时该字段为 null
+      form.append("return_image", "1");
       const res = await fetch("/api/ocr", { method: "POST", body: form });
       const data = (await res.json().catch(() => null)) as
-        | { text?: string; lines?: unknown[]; provider?: string; elapsed_ms?: number; error?: { message?: string } }
+        | {
+            text?: string;
+            lines?: unknown[];
+            provider?: string;
+            elapsed_ms?: number;
+            image_jpeg_b64?: string | null;
+            error?: { message?: string };
+          }
         | null;
       if (!res.ok || !data?.text) {
         setOcrError(data?.error?.message ?? `识别失败（HTTP ${res.status}）。可以换一张更清晰的照片，或改用「自己输入一段」。`);
@@ -156,6 +307,10 @@ export function FlowClient({
       setCustomText((prev) => (prev.trim() ? `${prev.trimEnd()}\n${text}` : text));
       setCustomSentences(splitSentences(text));
       setOcrInfo({ provider: data.provider ?? "-", lines: (data.lines ?? []).length, elapsedMs: data.elapsed_ms ?? null });
+      setOcrImageB64(typeof data.image_jpeg_b64 === "string" && data.image_jpeg_b64 ? data.image_jpeg_b64 : null);
+      setSaveTitle((text.split("\n")[0] ?? "").slice(0, 40) || "未命名书页");
+      setSavedId(null);
+      setSaveError(null);
       setOcrState("idle");
     } catch (err) {
       setOcrError(`识别失败：${(err as Error).message}。可以重试或改用「自己输入一段」。`);
@@ -417,13 +572,60 @@ export function FlowClient({
                 ) : null}
               </div>
               <p className="mt-2 text-xs text-[var(--ec-muted)]" data-testid="ocr-privacy">
-                🔒 照片<b>不会保存在服务器上</b>；识别时会临时上传到你配置的 AI 服务（DeepSeek）。不想上传就用下面的「✍️ 自己输入一段」。
+                🔒 照片会保存在<strong>你自己的 NAS 上</strong>（方便以后反复读）；识别时会上传到你配置的 AI 服务（DeepSeek）。
               </p>
               {!ocrAvailable ? (
                 <p className="mt-1 text-xs" data-testid="ocr-unavailable">
                   当前部署<strong>未启用</strong>拍照识别 —— 可以先用下面的「自己输入一段」。
                 </p>
               ) : null}
+              {/* 识别成功后：保存为「我的书页」（task-29） */}
+              {ocrInfo && customText.trim() ? (
+                <div className="mt-3 rounded-xl bg-white p-3" data-testid="save-material-panel">
+                  <p className="text-sm font-semibold">💾 {isChild ? "存起来以后还能读" : "保存为我的书页"}</p>
+                  {ocrImageB64 ? (
+                    <p className="mt-1 text-xs text-[var(--ec-muted)]">这次也拿到了书页图片，会一起保存。</p>
+                  ) : (
+                    <p className="mt-1 text-xs text-[#b45309]" data-testid="save-text-only">
+                      这次没拿到图片，只保存了文字（识别服务暂未返回图片）。
+                    </p>
+                  )}
+                  <div className="mt-2 flex flex-wrap items-center gap-2">
+                    <input
+                      value={saveTitle}
+                      onChange={(e) => setSaveTitle(e.target.value.slice(0, 60))}
+                      placeholder="书页标题（默认取第一行）"
+                      data-testid="save-material-title"
+                      className="min-w-0 flex-1 rounded-lg border border-[#d9dcf0] px-2 py-1 text-sm"
+                    />
+                    <button
+                      type="button"
+                      data-testid="save-material"
+                      disabled={saving || Boolean(savedId)}
+                      onClick={() => void saveMaterial()}
+                      className="ec-btn ec-btn-primary"
+                    >
+                      {saving ? "保存中…" : savedId ? "已保存 ✅" : isChild ? "💾 存起来" : "💾 保存为我的书页"}
+                    </button>
+                    {savedId ? (
+                      <button
+                        type="button"
+                        data-testid="save-then-read"
+                        onClick={() => startFromText(customText, "custom")}
+                        className="ec-btn ec-btn-ghost"
+                      >
+                        立即开始读 →
+                      </button>
+                    ) : null}
+                  </div>
+                  {saveError ? (
+                    <p className="mt-2 rounded-lg bg-red-50 p-2 text-sm text-red-700" role="alert" data-testid="save-material-error">
+                      {saveError}
+                    </p>
+                  ) : null}
+                </div>
+              ) : null}
+
               {ocrError ? (
                 <p className="mt-2 rounded-xl bg-red-50 p-2 text-sm text-red-700" role="alert" data-testid="ocr-error">
                   {ocrError}
@@ -453,12 +655,161 @@ export function FlowClient({
             </button>
             <button
               type="button"
+              data-testid="flow-mode-materials"
+              className={`ec-btn ${mode === "materials" ? "ec-btn-primary" : "ec-btn-ghost"}`}
+              onClick={() => setMode("materials")}
+            >
+              📚 {isChild ? "我的书页" : "我的书页"}
+            </button>
+            <button
+              type="button"
               className={`ec-btn ${mode === "custom" ? "ec-btn-primary" : "ec-btn-ghost"}`}
               onClick={() => setMode("custom")}
             >
               ✍️ 自己输入一段
             </button>
           </div>
+
+          {mode === "materials" ? (
+            <div className="mt-4 flex flex-col gap-3" data-testid="materials-panel">
+              <div className="flex flex-wrap items-center gap-2">
+                <p className="text-sm font-semibold">📚 我的书页（家里人的都在这里）</p>
+                <button type="button" className="ec-btn ec-btn-ghost !px-2 !py-0.5 text-xs" onClick={() => void loadMaterials()}>
+                  刷新
+                </button>
+                {materialsLoading ? <span className="text-xs text-[var(--ec-muted)]">加载中…</span> : null}
+              </div>
+              {materialsError ? (
+                <p className="rounded-xl bg-red-50 p-3 text-sm text-red-700" role="alert" data-testid="materials-error">
+                  {materialsError}
+                </p>
+              ) : null}
+              {materials.length === 0 && !materialsLoading ? (
+                <p className="text-sm text-[var(--ec-muted)]" data-testid="materials-empty">
+                  还没有保存的书页。可以先用「📷 {isChild ? "拍张照" : "拍照识别"}」拍一页，识别后点「💾 存起来」。
+                </p>
+              ) : null}
+              <div className="flex flex-col gap-2">
+                {materials.map((m) => (
+                  <div key={m.id} className="rounded-xl border border-[#e6e8f5] p-3" data-testid="material-card" data-id={m.id}>
+                    <div className="flex flex-wrap items-center gap-3">
+                      {m.has_image ? (
+                        // eslint-disable-next-line @next/next/no-img-element -- 本地 API 图片，无需 next/image
+                        <img
+                          src={`/api/materials/${m.id}/image`}
+                          alt={`${m.title} 的缩略图`}
+                          data-testid="material-thumb"
+                          className="h-14 w-14 rounded-lg border border-[#e6e8f5] object-cover"
+                        />
+                      ) : (
+                        <span className="flex h-14 w-14 items-center justify-center rounded-lg bg-[#eef0f8] text-xs text-[var(--ec-muted)]">
+                          只有文字
+                        </span>
+                      )}
+                      <button
+                        type="button"
+                        className="min-w-0 flex-1 text-left"
+                        data-testid="material-open"
+                        disabled={materialBusy === m.id}
+                        onClick={() => void startMaterial(m.id)}
+                      >
+                        <span className="block truncate font-semibold">{m.title}</span>
+                        <span className="block text-xs text-[var(--ec-muted)]">
+                          {m.sentence_count} 句 · {new Date(m.created_at).toLocaleDateString("zh-CN")}
+                          {m.has_image ? " · 有图片" : " · 仅文字"}
+                        </span>
+                      </button>
+                      <div className="flex flex-wrap gap-2">
+                        <button
+                          type="button"
+                          className="ec-btn ec-btn-ghost !px-2 !py-0.5 text-xs"
+                          data-testid="material-rename"
+                          onClick={() => {
+                            setEditingId(m.id);
+                            setEditTitle(m.title);
+                            setEditText("");
+                          }}
+                        >
+                          重命名
+                        </button>
+                        <button
+                          type="button"
+                          className="ec-btn ec-btn-ghost !px-2 !py-0.5 text-xs"
+                          data-testid="material-edit"
+                          onClick={async () => {
+                            setEditingId(m.id);
+                            setEditTitle("");
+                            try {
+                              const res = await fetch(`/api/materials/${m.id}`);
+                              const d = (await res.json().catch(() => null)) as { text?: string } | null;
+                              setEditText(d?.text ?? "");
+                            } catch {
+                              setMaterialsError("读取书页文本失败，请重试");
+                              setEditText("");
+                            }
+                          }}
+                        >
+                          编辑文本
+                        </button>
+                        <button
+                          type="button"
+                          className="ec-btn ec-btn-ghost !px-2 !py-0.5 text-xs"
+                          data-testid="material-delete"
+                          disabled={materialBusy === m.id}
+                          onClick={() => void removeMaterial(m.id)}
+                        >
+                          删除
+                        </button>
+                      </div>
+                    </div>
+
+                    {editingId === m.id ? (
+                      <div className="mt-2 flex flex-col gap-2">
+                        <input
+                          value={editTitle}
+                          onChange={(e) => setEditTitle(e.target.value.slice(0, 60))}
+                          placeholder="新标题（留空表示不改）"
+                          data-testid="material-title-input"
+                          className="rounded-lg border border-[#d9dcf0] px-2 py-1 text-sm"
+                        />
+                        <textarea
+                          value={editText}
+                          onChange={(e) => setEditText(e.target.value)}
+                          rows={4}
+                          data-testid="material-text-input"
+                          aria-label="编辑书页文本"
+                          className="w-full rounded-lg border border-[#d9dcf0] px-2 py-1 text-sm"
+                        />
+                        <div className="flex flex-wrap gap-2">
+                          <button
+                            type="button"
+                            className="ec-btn ec-btn-primary !px-2 !py-0.5 text-xs"
+                            data-testid="material-save"
+                            disabled={materialBusy === m.id}
+                            onClick={() =>
+                              void patchMaterial(m.id, {
+                                ...(editTitle.trim() ? { title: editTitle.trim() } : {}),
+                                ...(editText.trim() ? { text: editText } : {}),
+                              })
+                            }
+                          >
+                            保存修改
+                          </button>
+                          <button
+                            type="button"
+                            className="ec-btn ec-btn-ghost !px-2 !py-0.5 text-xs"
+                            onClick={() => setEditingId(null)}
+                          >
+                            取消
+                          </button>
+                        </div>
+                      </div>
+                    ) : null}
+                  </div>
+                ))}
+              </div>
+            </div>
+          ) : null}
 
           {mode === "corpus" ? (
             <div className="mt-4 flex flex-col gap-3">

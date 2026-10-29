@@ -144,6 +144,8 @@ export interface OcrLine {
 export interface OcrResult {
   provider: string;
   text: string;
+  /** voice 预处理后的 JPEG（base64，不含 data: 前缀）；voice 未实现时缺省 */
+  image_jpeg_b64?: string | null;
   lines: OcrLine[];
   width?: number | null;
   height?: number | null;

@@ -55,3 +55,7 @@ deploy/certs/*
 !deploy/certs/.gitkeep
 *.pem
 !*/caddy-root-ca.crt
+
+# 本地网络相关的文档/配置快照（含真实域名、局域网 IP、NAS 路径等）
+# ⚠️ 这些属于"我这套部署的实例信息"，不随开源仓库发布。
+/local/

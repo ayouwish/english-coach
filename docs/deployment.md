@@ -1,14 +1,20 @@
 # english-coach 部署手册
 
-> 版本 v1.2 ｜ 更新 2026-10-25 ｜ 适用 `deploy/docker-compose.yml`（205 行）
+> 版本 v1.3 ｜ 更新 2026-10-29 ｜ 适用 `deploy/docker-compose.yml`
 > 读者：能照着敲命令的家庭用户本人（不需要运维经验）
-> 配套：[NAS 部署（群晖/威联通）](nas-deployment.md) · [系统设计](architecture.md) · [接口契约](api-contract.md) · [硬件与成本](hardware-cost.md) · [验收记录](verification.md)
+> 配套：[NAS 部署（群晖/威联通）](nas-deployment.md) · [飞牛 fnOS 部署](fnos-deployment.md) · [系统设计](architecture.md) · [接口契约](api-contract.md) · [硬件与成本](hardware-cost.md) · [验收记录](verification.md)
 
 本文是**操作手册**：从上到下照着做，任何一步都有"怎么确认它成功了"。
 
 > **想部署到 NAS（群晖 DSM / 威联通 QNAP）？直接看 [docs/nas-deployment.md](nas-deployment.md)。**
 > 那份是 NAS 专属手册（架构差异、卷与 PUID/PGID 权限坑、反向代理、SQLite 一致性备份），
 > 本文则是通用手册 + 本机直跑路径。
+
+> **想给这个服务上一个域名 / 走 HTTPS 反代（Cloudflare + Nginx Proxy Manager）？**
+> **（本仓库不含"我这套部署"的实例化多域名文档 —— 它含真实域名/局域网 IP，按约定放在 `local/` 且不进 git。）**
+> 通用做法：新增一个域名的 7 步流程、
+> 橙云/灰云决策、**后端绑定（`WEB_BIND`）这个最容易错的一步**、以及真实踩过的坑与排查表。
+> 本文只讲"应用本身怎么起"，入口/TLS 那一层归那份文档管。
 
 > ## ⚠️ 本手册的诚实边界（先读这一段再动手）
 >

@@ -313,10 +313,30 @@ try {
   const flowHtml2 = await flowRes2.text();
   check("/flow 有「拍照识别」按钮", flowHtml2.includes('data-testid="ocr-button"'));
   check(
-    "★ 隐私提示在页面上",
-    flowHtml2.includes('data-testid="ocr-privacy"')
-      && flowHtml2.includes("不会保存在服务器上")
-      && flowHtml2.includes("DeepSeek"),
+    "★ 隐私提示已改成诚实版本（照片会保存到自己的 NAS + 会上传 AI 服务）",
+    flowHtml2.includes('data-testid="ocr-privacy"') &&
+      flowHtml2.includes("你自己的 NAS 上") &&
+      flowHtml2.includes("DeepSeek") &&
+      !flowHtml2.includes("不会保存在服务器上") &&
+      !flowHtml2.includes("不会保存"),
+  );
+  check("我的书页入口存在（第三个来源）", flowHtml2.includes('data-testid="flow-mode-materials"') && flowHtml2.includes("我的书页"));
+  const walkChunks = (dir) =>
+    fs.existsSync(dir)
+      ? fs.readdirSync(dir, { withFileTypes: true }).flatMap((e) => {
+          const full = path.join(dir, e.name);
+          if (e.isDirectory()) return walkChunks(full);
+          return e.name.endsWith(".js") ? [full] : [];
+        })
+      : [];
+  const bundleText = walkChunks(path.join(WEB_ROOT, ".next/static/chunks"))
+    .map((f) => fs.readFileSync(f, "utf8"))
+    .join("\n");
+  check(
+    "保存为我的书页的文案已进 bundle（client 状态渲染，SSR 断言不到）",
+    bundleText.includes("保存为我的书页") &&
+      bundleText.includes("存起来以后还能读") &&
+      bundleText.includes("这次没拿到图片"),
   );
   check("file input 带 accept=image/* 与 capture=environment", /accept="image\/\*"/.test(flowHtml2) && /capture="environment"/.test(flowHtml2));
   if (!ocrSupported) {

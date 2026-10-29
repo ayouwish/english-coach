@@ -189,14 +189,14 @@ SITE_ADDRESS=english.example.com
 **本项目要做的只有三件事**（之后归零）：
 
 ```bash
-cd /vol1/1000/project/english-coach/deploy
+cd /vol1/1000/docker/english-coach/deploy
 
 # ① 不再用项目自带的 caddy（它现在默认就不启动；若之前起过则删掉）
 docker compose --profile ingress rm -sf caddy 2>/dev/null || true
 
 # ② 让 web 暴露给反代：桥接网络的反代连不到宿主的 127.0.0.1，
 #    所以在 .env 里把 WEB_BIND 设成 NAS 的局域网 IP
-#      WEB_BIND=192.168.50.104
+#      WEB_BIND=192.168.1.10
 docker compose up -d --force-recreate voice web
 
 # ③ .env 里保持 COOKIE_SECURE=1（浏览器看到的是 https）
@@ -209,10 +209,10 @@ docker compose up -d --force-recreate voice web
 
 1. 容器本身占用 80/443（所以要先停掉项目 caddy），UI 端口通常 81
 2. **Proxy Hosts → Add Proxy Host**
-   - Domain Names：`english.dreamsearch.top`
-   - Forward Hostname：`192.168.50.104`，Port：`3000`，Scheme：`http`
+   - Domain Names：`coach.example.com`
+   - Forward Hostname：`192.168.1.10`，Port：`3000`，Scheme：`http`
    - 勾上 **Websockets Support** / **Block Common Exploits**
-   - SSL 页签：Request a new certificate（选 DNS Challenge，签 **通配符** `*.dreamsearch.top`
+   - SSL 页签：Request a new certificate（选 DNS Challenge，签 **通配符** `*.example.com`
      —— 以后任何新子域名都不用重签），勾 Force SSL
 3. **Redirection Hosts → Add**
    - Source：`nas.home`，Destination：`https://nas.home:5667`（还原飞牛界面的无端口入口）
@@ -230,7 +230,7 @@ docker compose up -d --force-recreate voice web
 **不需要**把证书装进 `/etc/ssl`，也**不要**去改飞牛自带的 nginx —— 直接让项目的 Caddy 用这些文件：
 
 ```bash
-cd /vol1/1000/project/english-coach
+cd /vol1/1000/docker/english-coach
 git pull                     # 拿到 Caddyfile.tls-files
 
 cd deploy
@@ -279,7 +279,7 @@ curl -v --resolve <你的域名>:8443:127.0.0.1 https://<你的域名>:8443/heal
 不用域名、不用公网、不碰飞牛的系统文件。一条命令搞定服务端：
 
 ```bash
-cd /vol1/1000/project/english-coach
+cd /vol1/1000/docker/english-coach
 ./scripts/lan-https-setup.sh            # 自动探测局域网 IP；也可 ./scripts/lan-https-setup.sh 192.168.1.50
 ```
 
@@ -576,7 +576,7 @@ crontab -l | grep acme.sh
 ### 日常运维
 
 ```bash
-cd /vol1/1000/project/english-coach/deploy
+cd /vol1/1000/docker/english-coach/deploy
 docker compose ps                     # 两个容器 healthy | caddy running
 docker compose logs --tail=50 voice   # 排查评测/合成问题
 ./scripts/check-deploy.sh             # 一键自检（EXTERNAL_URL= 可顺带验证外部入口）

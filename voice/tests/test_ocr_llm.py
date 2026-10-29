@@ -178,6 +178,36 @@ def test_llm_numbering_and_blank_lines_are_cleaned():
 
 
 # --------------------------------------------------------------------------------------
+# task-28：可选返回"实际送去识别的那张 JPEG"
+# --------------------------------------------------------------------------------------
+def test_llm_return_image_is_the_sent_jpeg(client, fake_vision):
+    calls, _queue = fake_vision
+    response = client.post(
+        "/v1/ocr",
+        files={"image": ("page.jpg", FIXTURE.read_bytes(), "image/jpeg")},
+        data={"return_image": "1"},
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert "image_jpeg_b64" in body
+
+    sent_url = calls[0]["body"]["messages"][0]["content"][1]["image_url"]["url"]
+    sent_b64 = sent_url.split(",", 1)[1]
+    assert body["image_jpeg_b64"] == sent_b64, "返回的必须是实际发给视觉模型的那张图（同一 base64）"
+
+    from PIL import Image
+
+    decoded = Image.open(io.BytesIO(base64.b64decode(body["image_jpeg_b64"])))
+    assert decoded.format == "JPEG"
+    assert decoded.size == (body["width"], body["height"])
+
+
+def test_llm_no_return_image_absent(client, fake_vision):
+    body = _post_image(client).json()
+    assert "image_jpeg_b64" not in body
+
+
+# --------------------------------------------------------------------------------------
 # 降级链
 # --------------------------------------------------------------------------------------
 def test_llm_failure_falls_back_to_local(client, fake_vision, fake_local):
