@@ -45,6 +45,7 @@ curl -s -X POST localhost:8100/v1/pronounce \
 | 6 | `POST /v1/dialogue` | 日常对话单轮推进（纠错 + 建议应答） |
 | 7 | `GET /v1/audio/{audio_id}` | 示范音频，只读，`Cache-Control: public, max-age=604800` |
 | 8 | `POST /v1/warmup` | v1.1：批量预热参考音 + 参考 F0 缓存（见 §8） |
+| 9 | `POST /v1/ocr` | v1.5：拍照识别书页英文（离线 rapidocr，见 §14）|
 
 统一错误格式：`{"error":{"code","message","detail"}}`，错误码为契约 §8 的固定集合。
 
@@ -110,6 +111,7 @@ routes(/v1/*) ──> ProviderSet{ asr, pa, tts } ──> 调用链: 主 provide
 | `MODEL_CACHE_DIR` | `/models`（不可写时退回 `<voice>/.model-cache`）| faster-whisper 等模型下载缓存 |
 | `DEFAULT_TTS_VOICE` | `en-US-JennyNeural` | |
 | `MAX_TTS_CHARS` | `2000` | 超限 → `413 payload_too_large` |
+| `MAX_OCR_BYTES` | `10485760`（10MB）| `/v1/ocr` 图片上限，超限 → `413 payload_too_large` |
 | `MAX_UPLOAD_BYTES` | `26214400` | 上传体积上限 → `413` |
 | `VOICE_MAX_AUDIO_SECONDS` | `120` | 超长音频 → `413 audio_too_long` |
 | `VOICE_GPU` | `false` | 上报到 `capabilities.gpu` |
@@ -611,16 +613,49 @@ WER **mean 0.295 / median 0.171**，RTF mean **0.371**（max 1.2）；词级时�
 (b) 用**时长/能量先验**改进对齐，(c) 用真实的"人工标注错误音素"做校准，而不是拿 Azure 分数当唯一真值。
 在那之前，`local` 模式下 PA 会自动回退到词级（`gop` 失败/关闭时），或直接用 `hybrid` 走 Azure。
 
-## 14. 已知限制 / 遗留
+## 14. 拍照 OCR：`POST /v1/ocr`（task-25 · 契约 v1.5）
 
-1. `azure` 代码路径**未做真机联调**（本机无 Azure 订阅、无 key）：SDK 调用逻辑按官方 API 编写并全部惰性导入，
-   但首次接入云环境时需要按实际返回核对一次 phoneme/nbest 字段。
-2. `local` provider 的模型仅在真正调用时加载；pytest 用 monkeypatch 覆盖，未做 tiny 模型的端到端推理验证。
-3. provider 超时用线程池 `future.result(timeout)` 实现：超时后请求立即降级，但被丢弃的线程会自然结束（V1 可接受）。
-4. `stress_misplaced` 目前是"斜率差异较大"的启发式，未做重音（能量/时长）建模。
-5. `unscripted` 模式下 `pron/accuracy/completeness` 为 `null`（无参考文本，不臆造分数）。
+连读模式的入口之一：拍书页照片 → 识别英文 → 前端切句 → 逐句跟读+异步评分。
+**离线、零密钥、零联网、不落盘**（书页照片可能涉及孩子隐私，只在内存里识别）。
 
----
+### 14.1 请求与响应
+
+`multipart/form-data`：`image`（必填，JPEG/PNG/WebP…，≤10MB）。
+
+```json
+{
+  "provider": "rapidocr",
+  "text": "Hello! My name is Lily.\nI like drawing cats and dogs.\nCan you see three birds in the tree?",
+  "lines": [
+    {"text": "Hello! My name is Lily.", "confidence": 0.982},
+    {"text": "I like drawing cats and dogs.", "confidence": 0.986},
+    {"text": "Can you see three birds in the tree?", "confidence": 0.981}
+  ],
+  "width": 900, "height": 400,
+  "elapsed_ms": 545,
+  "warnings": []
+}
+```
+
+- `text` 按**行序**用 `\n` 连接（前端可直接 `split("\n")` 切句）；`lines` 带每行置信度便于提示"重拍"。
+- **行序**：rapidocr 的文本框无序，服务端按"行高 60% 容差"把 y 相邻的框聚成一行（手机照片常有轻微旋转），行内再按 x 排。
+- `width`/`height` 是**预处理后**（EXIF 转正 + 缩放后）的尺寸。
+- `warnings`：`image_downscaled`（长边 >1600 被等比缩小）、`no_text_found`（空白页/未识别到文字）。
+
+### 14.2 预处理与错误语义
+
+- `ImageOps.exif_transpose`：手机照片常带 EXIF Orientation（如 6=90°），**不转正会整页识别失败**。
+- 转 RGB；**长边 >1600px 等比缩小**；解码前像素总量上限 40MP 防解压炸弹。
+- 错误码：非图片/无法解码 → **400 `bad_request`**；>10MB → **413 `payload_too_large`**；
+  依赖未安装 → **503 `provider_unavailable`**（message 里给 `pip install -r requirements.txt`）。
+- **懒加载单例**：引擎首次识别才加载（1–2s，不是卡死），之后复用；**服务启动不加载**。
+
+### 14.3 依赖与体积（实测）
+
+`requirements.txt` 已加入 `rapidocr-onnxruntime==1.4.4` + `pillow`，镜像增大约 **160MB**（实测安装体积：
+rapidocr 16MB + opencv 72MB + onnxruntime 63MB + pillow 7MB + shapely/pyclipper 6MB）。
+想省体积可用 `opencv-python-headless` 替换 `opencv-python`（服务端不需要 GUI，约省 20MB）。
+热启动单页识别实测 ~0.5–0.8s（900×400）；**首次识别有 1–2s 模型加载**（不是卡死）。
 
 ## 15. 当前采用的服务组合与预热（2026-10-25 决定）
 
@@ -666,3 +701,14 @@ Azure 合成新文本实测 **1–11 秒且波动极大**（服务端曾报 `RTF
 `DATA_DIR=./data` 会按**进程的 cwd** 解析。从仓库根目录跑脚本会读到一个空目录，
 看起来像"缓存全丢了"（作者本人就误判过一次）。跑任何直接读缓存的脚本前先 `cd voice`，
 或显式传绝对路径 `DATA_DIR=/abs/path/to/voice/data`。
+
+## 16. 已知限制 / 遗留
+
+1. `azure` 代码路径**未做真机联调**（本机无 Azure 订阅、无 key）：SDK 调用逻辑按官方 API 编写并全部惰性导入，
+   但首次接入云环境时需要按实际返回核对一次 phoneme/nbest 字段。
+2. `local` provider 的模型仅在真正调用时加载；pytest 用 monkeypatch 覆盖，未做 tiny 模型的端到端推理验证。
+3. provider 超时用线程池 `future.result(timeout)` 实现：超时后请求立即降级，但被丢弃的线程会自然结束（V1 可接受）。
+4. `stress_misplaced` 目前是"斜率差异较大"的启发式，未做重音（能量/时长）建模。
+5. `unscripted` 模式下 `pron/accuracy/completeness` 为 `null`（无参考文本，不臆造分数）。
+
+---

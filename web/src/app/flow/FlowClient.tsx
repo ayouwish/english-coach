@@ -67,11 +67,14 @@ export function FlowClient({
   userLevel,
   corpus,
   voiceReachable,
+  ocrAvailable,
 }: {
   isChild: boolean;
   userLevel: string;
   corpus: CorpusSentence[];
   voiceReachable: boolean;
+  /** voice 的 capabilities.ocr（未实现/未启用时为 false → 按钮置灰，不让用户白转圈） */
+  ocrAvailable: boolean;
 }) {
   const [phase, setPhase] = useState<Phase>("setup");
   const [mode, setMode] = useState<"corpus" | "custom">("corpus");
@@ -88,6 +91,77 @@ export function FlowClient({
   const [limitMessage, setLimitMessage] = useState<string | null>(null);
   const [expanded, setExpanded] = useState<number | null>(null);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  // ── 拍照识别（task-26）────────────────────────────────────────────────────
+  const [ocrState, setOcrState] = useState<"idle" | "uploading" | "error">("idle");
+  const [ocrPreviewUrl, setOcrPreviewUrl] = useState<string | null>(null);
+  const [ocrError, setOcrError] = useState<string | null>(null);
+  const [ocrInfo, setOcrInfo] = useState<{ provider: string; lines: number; elapsedMs: number | null } | null>(null);
+  const ocrInputRef = useRef<HTMLInputElement | null>(null);
+  const lastImageRef = useRef<File | null>(null);
+
+  useEffect(() => {
+    // 卸载时释放缩略图的 object URL
+    return () => {
+      if (ocrPreviewUrl) URL.revokeObjectURL(ocrPreviewUrl);
+    };
+  }, [ocrPreviewUrl]);
+
+  function clearOcr() {
+    if (ocrPreviewUrl) URL.revokeObjectURL(ocrPreviewUrl);
+    setOcrPreviewUrl(null);
+    setOcrInfo(null);
+    setOcrError(null);
+    setOcrState("idle");
+    lastImageRef.current = null;
+    if (ocrInputRef.current) ocrInputRef.current.value = "";
+  }
+
+  async function runOcr(file: File) {
+    if (!ocrAvailable) {
+      setOcrError("当前部署未启用拍照识别，可以先用「✍️ 自己输入一段」。");
+      setOcrState("error");
+      return;
+    }
+    if (!file.type.startsWith("image/")) {
+      setOcrError(`这不是图片（${file.type || "未知类型"}），请重新拍照或选择图片文件。`);
+      setOcrState("error");
+      return;
+    }
+    if (file.size > 10 * 1024 * 1024) {
+      setOcrError("照片太大（上限 10MB），请靠近一点拍或拍小一点。");
+      setOcrState("error");
+      return;
+    }
+    lastImageRef.current = file;
+    if (ocrPreviewUrl) URL.revokeObjectURL(ocrPreviewUrl);
+    const preview = URL.createObjectURL(file);
+    setOcrPreviewUrl(preview);
+    setOcrState("uploading");
+    setOcrError(null);
+    try {
+      const form = new FormData();
+      form.append("image", file, file.name || "page.jpg");
+      const res = await fetch("/api/ocr", { method: "POST", body: form });
+      const data = (await res.json().catch(() => null)) as
+        | { text?: string; lines?: unknown[]; provider?: string; elapsed_ms?: number; error?: { message?: string } }
+        | null;
+      if (!res.ok || !data?.text) {
+        setOcrError(data?.error?.message ?? `识别失败（HTTP ${res.status}）。可以换一张更清晰的照片，或改用「自己输入一段」。`);
+        setOcrState("error");
+        return;
+      }
+      const text = data.text.trim();
+      setMode("custom");
+      setCustomText((prev) => (prev.trim() ? `${prev.trimEnd()}\n${text}` : text));
+      setCustomSentences(splitSentences(text));
+      setOcrInfo({ provider: data.provider ?? "-", lines: (data.lines ?? []).length, elapsedMs: data.elapsed_ms ?? null });
+      setOcrState("idle");
+    } catch (err) {
+      setOcrError(`识别失败：${(err as Error).message}。可以重试或改用「自己输入一段」。`);
+      setOcrState("error");
+    }
+  }
 
   const levels = useMemo(() => [...new Set(corpus.map((s) => s.level))].sort(), [corpus]);
   const levelSentences = useMemo(() => corpus.filter((s) => s.level === level), [corpus, level]);
@@ -284,7 +358,92 @@ export function FlowClient({
         </section>
 
         <section className="ec-card">
-          <div className="flex flex-wrap gap-2">
+            {/* ── 拍照识别（task-26）────────────────────────────────────── */}
+            <div className="rounded-xl bg-[#f8f9ff] p-3" data-testid="ocr-panel">
+              <div className="flex flex-wrap items-center gap-2">
+                <button
+                  type="button"
+                  data-testid="ocr-button"
+                  aria-label={isChild ? "拍张照识别书上的句子" : "拍照识别书页"}
+                  disabled={!ocrAvailable || ocrState === "uploading"}
+                  onClick={() => ocrInputRef.current?.click()}
+                  className={`ec-btn ${ocrAvailable ? "ec-btn-primary" : "ec-btn-ghost"}`}
+                >
+                  📷 {isChild ? "拍张照" : "拍照识别"}
+                  {ocrInfo ? (isChild ? "（再拍一张）" : "（再拍一张追加）") : ""}
+                </button>
+                <input
+                  ref={ocrInputRef}
+                  type="file"
+                  accept="image/*"
+                  capture="environment"
+                  className="hidden"
+                  data-testid="ocr-input"
+                  onChange={(e) => {
+                    const f = e.target.files?.[0];
+                    if (f) void runOcr(f);
+                    e.target.value = "";
+                  }}
+                />
+                {ocrPreviewUrl ? (
+                  // eslint-disable-next-line @next/next/no-img-element -- 本地 object URL 缩略图，无需 next/image 优化
+                  <img
+                    src={ocrPreviewUrl}
+                    alt="待识别照片预览"
+                    data-testid="ocr-preview"
+                    className="h-16 w-16 rounded-lg border border-[#e6e8f5] object-cover"
+                  />
+                ) : null}
+                {ocrState === "uploading" ? (
+                  <span className="text-sm text-[var(--ec-muted)]" data-testid="ocr-uploading">
+                    ⏳ 正在识别…（第一次识别可能要等 1–2 秒，请不要离开本页）
+                  </span>
+                ) : null}
+                {ocrInfo ? (
+                  <span className="text-xs text-[var(--ec-muted)]" data-testid="ocr-info">
+                    已识别 {ocrInfo.lines} 行 · {ocrInfo.provider}
+                    {ocrInfo.elapsedMs !== null ? ` · ${ocrInfo.elapsedMs}ms` : ""}，已追加到下面的文本框
+                  </span>
+                ) : null}
+                {ocrPreviewUrl ? (
+                  <button
+                    type="button"
+                    className="ec-btn ec-btn-ghost !px-2 !py-0.5 text-xs"
+                    data-testid="ocr-clear"
+                    onClick={clearOcr}
+                  >
+                    清空重来
+                  </button>
+                ) : null}
+              </div>
+              <p className="mt-2 text-xs text-[var(--ec-muted)]" data-testid="ocr-privacy">
+                🔒 照片只在服务器内存里识别，不会被保存。
+              </p>
+              {!ocrAvailable ? (
+                <p className="mt-1 text-xs" data-testid="ocr-unavailable">
+                  当前部署<strong>未启用</strong>拍照识别 —— 可以先用下面的「自己输入一段」。
+                </p>
+              ) : null}
+              {ocrError ? (
+                <p className="mt-2 rounded-xl bg-red-50 p-2 text-sm text-red-700" role="alert" data-testid="ocr-error">
+                  {ocrError}
+                  <button
+                    type="button"
+                    className="ec-btn ec-btn-ghost ml-2 !px-2 !py-0.5 text-xs"
+                    data-testid="ocr-retry"
+                    onClick={() => {
+                      const f = lastImageRef.current;
+                      if (f) void runOcr(f);
+                      else ocrInputRef.current?.click();
+                    }}
+                  >
+                    重试
+                  </button>
+                </p>
+              ) : null}
+            </div>
+
+          <div className="mt-3 flex flex-wrap gap-2">
             <button
               type="button"
               className={`ec-btn ${mode === "corpus" ? "ec-btn-primary" : "ec-btn-ghost"}`}

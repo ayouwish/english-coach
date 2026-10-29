@@ -34,6 +34,7 @@ from .feedback_templates import (
 from .hints import dedupe_warnings
 from .intonation import compare_intonation, extract_f0, prosody_score_from_distance
 from .llm import LLMClient
+from .ocr import engine_available, recognize_image
 from .phonemes import PHONEME_SPACE_ID, canonicalize_pa_result
 from .providers.registry import get_providers
 from .schemas import DialogueRequest, FeedbackRequest, TTSRequest, WarmupRequest
@@ -79,6 +80,7 @@ async def health() -> dict:
     providers = get_providers()
     capabilities = providers.capabilities
     capabilities["gpu"] = bool(settings.gpu)
+    capabilities["ocr"] = engine_available()  # task-25：离线 OCR 能力（依赖是否可用）
     return {
         "status": "ok",
         "version": settings.version,
@@ -427,6 +429,19 @@ async def dialogue(payload: DialogueRequest) -> dict:
     # 返回体始终带 provider 与 degraded_llm（降级不伪装成大模型）。
     # httpx 是阻塞调用，放线程池避免卡住事件循环。
     return await run_in_threadpool(complete_dialogue, LLMClient(), body, execution.TIMEOUTS["dialogue"])
+
+
+# --------------------------------------------------------------------------------------
+# 9. ocr（task-25：拍照识别书页英文，离线 rapidocr，不落盘）
+# --------------------------------------------------------------------------------------
+@router.post("/ocr")
+async def ocr(image: UploadFile = File(...)) -> dict:
+    settings = get_settings()
+    data = await _read_upload(image, settings.max_ocr_bytes)
+    if not data:
+        raise BadRequest("empty image payload")
+    result = await run_in_threadpool(recognize_image, data, settings)
+    return result.to_contract()
 
 
 # --------------------------------------------------------------------------------------

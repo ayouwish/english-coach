@@ -32,6 +32,7 @@ export default async function FlowPage() {
       userLevel={user.cefrLevel}
       corpus={corpus}
       voiceReachable={caps.reachable}
+      ocrAvailable={caps.capabilities.ocr === true}
     />
   );
 }

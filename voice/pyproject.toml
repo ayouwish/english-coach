@@ -13,6 +13,9 @@ dependencies = [
     "av>=12.0",
     "praat-parselmouth>=0.4.3",
     "httpx>=0.27",
+    # 拍照 OCR（task-25：离线 PP-OCRv4，书页照片识别；见 README §14）
+    "rapidocr-onnxruntime>=1.4",
+    "pillow>=10.0",
 ]
 
 [project.optional-dependencies]

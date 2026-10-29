@@ -246,6 +246,7 @@ class Settings:
     default_tts_voice: str = "en-US-JennyNeural"
     max_tts_chars: int = 2000
     max_upload_bytes: int = 25 * 1024 * 1024
+    max_ocr_bytes: int = 10 * 1024 * 1024  # /v1/ocr 图片上限（10MB）
     max_audio_seconds: float = 120.0
 
     data_dir: Path = field(default_factory=_resolve_data_dir)
@@ -353,6 +354,7 @@ def get_settings() -> Settings:
         default_tts_voice=_env("DEFAULT_TTS_VOICE", "en-US-JennyNeural") or "en-US-JennyNeural",
         max_tts_chars=_env_int("MAX_TTS_CHARS", 2000),
         max_upload_bytes=_env_int("MAX_UPLOAD_BYTES", 25 * 1024 * 1024),
+        max_ocr_bytes=_env_int("MAX_OCR_BYTES", 10 * 1024 * 1024),
         max_audio_seconds=_env_float("VOICE_MAX_AUDIO_SECONDS", 120.0),
         data_dir=_resolve_data_dir(),
         model_cache_dir=_resolve_model_cache_dir(),

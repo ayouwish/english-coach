@@ -35,6 +35,8 @@ export type VoiceErrorCode =
 
 export interface VoiceCapabilities {
   phoneme_level: boolean;
+  /** OCR（拍照识别，task-26）：voice 未实现/未启用时可能缺省或 false */
+  ocr?: boolean;
   prosody: boolean;
   intonation_curve: boolean;
   nbest_phonemes: boolean;
@@ -132,6 +134,21 @@ export interface PronounceResult {
   intonation: Intonation;
   warnings: VoiceWarning[];
   provider_meta?: Record<string, unknown>;
+}
+
+export interface OcrLine {
+  text: string;
+  confidence?: number | null;
+}
+
+export interface OcrResult {
+  provider: string;
+  text: string;
+  lines: OcrLine[];
+  width?: number | null;
+  height?: number | null;
+  elapsed_ms?: number | null;
+  warnings?: string[];
 }
 
 export interface AsrResult {

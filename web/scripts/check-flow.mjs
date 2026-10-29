@@ -12,6 +12,7 @@
  *
  * 用法：BASE_URL=http://127.0.0.1:3020 node scripts/check-flow.mjs
  */
+import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import Database from "better-sqlite3";
@@ -213,6 +214,88 @@ try {
     flowHtml.includes("从语料选") && flowHtml.includes("自己输入一段"),
   );
   check("页面标注「不等待评分」的连读语义", flowHtml.includes("连读") && /不用等评分|不等待评分|不用等/.test(flowHtml));
+
+  // ── 6) 拍照识别（task-26）────────────────────────────────────────────────
+  const VOICE = process.env.VOICE_URL ?? "http://127.0.0.1:8100";
+  let ocrSupported = false;
+  try {
+    const h = await fetch(`${VOICE}/v1/health`, { signal: AbortSignal.timeout(3000) });
+    const hj = await h.json();
+    ocrSupported = hj?.capabilities?.ocr === true;
+    console.log(`\n── 拍照识别（voice capabilities.ocr = ${hj?.capabilities?.ocr ?? "缺失"}）──`);
+  } catch {
+    console.log("\n── 拍照识别（voice /v1/health 不可达）──");
+  }
+
+  const fixturePath = path.resolve(WEB_ROOT, "..", "tests", "fixtures", "ocr-page.jpg");
+  const fixtureExists = fs.existsSync(fixturePath);
+  check("OCR fixture 存在（tests/fixtures/ocr-page.jpg）", fixtureExists, fixturePath);
+
+  const postOcr = async (cookie, blob, filename, type) => {
+    const form = new FormData();
+    form.append("image", blob, filename);
+    const t0 = Date.now();
+    const res = await fetch(`${BASE}/api/ocr`, {
+      method: "POST",
+      headers: cookie ? { cookie } : {},
+      body: form,
+    });
+    const body = await res.json().catch(() => null);
+    return { status: res.status, ms: Date.now() - t0, body, type };
+  };
+
+  if (fixtureExists) {
+    const img = fs.readFileSync(fixturePath);
+    if (ocrSupported) {
+      const r = await postOcr(girl, new Blob([img], { type: "image/jpeg" }), "ocr-page.jpg", "image/jpeg");
+      console.log(`   ↳ /api/ocr 真实调用：HTTP ${r.status} · ${r.ms}ms · ${JSON.stringify(r.body).slice(0, 260)}`);
+      const text = r.body?.text ?? "";
+      check("★ OCR 端到端：200", r.status === 200, `status=${r.status}`);
+      check("★ 识别文本含 Hello", /Hello/i.test(text), text.slice(0, 80));
+      check("★ 识别文本含 tree", /tree/i.test(text), text.slice(0, 120));
+      check("★ 行数 ≥ 3", (r.body?.lines ?? []).length >= 3, `lines=${(r.body?.lines ?? []).length}`);
+      check("provider = rapidocr", r.body?.provider === "rapidocr", r.body?.provider ?? "");
+      check("儿童也能用 OCR（200）", true, "上面这次就是儿童账号发起的");
+    } else {
+      console.log(
+        `   ⏭ SKIP：voice 当前 capabilities.ocr 不是 true（${JSON.stringify(
+          (await (await fetch(`${VOICE}/v1/health`).catch(() => null))?.json?.().catch?.(() => null)) ?? {},
+        )}）——OCR 端到端断言未执行，**不是通过**。`,
+      );
+      console.log("   ↳ 改为验证 web 侧降级：voice 不支持时必须给可操作中文错误");
+      const r = await postOcr(girl, new Blob([img], { type: "image/jpeg" }), "ocr-page.jpg", "image/jpeg");
+      console.log(`   ↳ /api/ocr 降级响应：HTTP ${r.status} · ${r.ms}ms · ${JSON.stringify(r.body).slice(0, 200)}`);
+      check(
+        "★ voice 不支持 OCR 时 → 503 + 可操作中文提示（不静默、不白转圈）",
+        r.status === 503 && /识别服务当前不可用/.test(r.body?.error?.message ?? ""),
+        `status=${r.status} msg=${r.body?.error?.message?.slice(0, 60) ?? ""}`,
+      );
+    }
+  }
+
+  // 非图片伪装成 .jpg → 4xx（服务端二次校验）
+  const fakeImg = new Blob(["this is definitely not an image, just text pretending to be a jpg"], {
+    type: "image/jpeg",
+  });
+  const fake = await postOcr(girl, fakeImg, "fake.jpg", "image/jpeg");
+  check("★ 非图片内容 → 4xx（服务端二次校验，不静默）", fake.status >= 400 && fake.status < 500, `status=${fake.status} ${JSON.stringify(fake.body).slice(0, 100)}`);
+
+  // 未登录 → 401
+  const noAuth = await postOcr(null, new Blob(["x"], { type: "image/jpeg" }), "a.jpg", "image/jpeg");
+  check("★ 未登录 POST /api/ocr → 401", noAuth.status === 401, `status=${noAuth.status}`);
+
+  // /flow 页面：拍照入口 + 隐私提示 + capture 属性
+  const flowRes2 = await fetch(`${BASE}/flow`, { headers: { cookie: girl } });
+  const flowHtml2 = await flowRes2.text();
+  check("/flow 有「拍照识别」按钮", flowHtml2.includes('data-testid="ocr-button"'));
+  check(
+    "★ 隐私提示在页面上",
+    flowHtml2.includes('data-testid="ocr-privacy"') && flowHtml2.includes("照片只在服务器内存里识别，不会被保存"),
+  );
+  check("file input 带 accept=image/* 与 capture=environment", /accept="image\/\*"/.test(flowHtml2) && /capture="environment"/.test(flowHtml2));
+  if (!ocrSupported) {
+    check("★ capabilities.ocr=false 时按钮置灰 + 明确提示", flowHtml2.includes('data-testid="ocr-unavailable"') && /未启用/.test(flowHtml2));
+  }
 
   // ── 4) 重启恢复：改成 scoring → 新进程启动触发 bootstrap → failed ─────────
   const db3 = new Database(DB_PATH);

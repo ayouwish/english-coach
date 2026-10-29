@@ -36,6 +36,7 @@ def test_error_codes_are_frozen_set():
         "no_provider",
         "audio_not_found",
         "internal_error",
+        "provider_unavailable",  # 契约 v1.5（task-25）：/v1/ocr 依赖未安装
     }
 
 

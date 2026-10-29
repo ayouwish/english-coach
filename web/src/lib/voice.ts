@@ -6,6 +6,7 @@
  */
 import type {
   AsrResult,
+  OcrResult,
   DialogueResult,
   FeedbackResult,
   PronounceResult,
@@ -23,6 +24,8 @@ export const TIMEOUTS = {
   /** 预热是后台任务，契约 §12 的示例耗时 45s，给足余量；失败无副作用 */
   warmup: 120_000,
   asr: 30_000,
+  /** OCR：首次识别要加载模型（1–2s，最坏更久），给 60s；失败由调用方给可操作提示 */
+  ocr: 60_000,
   pronounce: 60_000,
   tts: 20_000,
   feedback: 40_000,
@@ -145,6 +148,16 @@ export async function callAsr(form: FormData): Promise<AsrResult> {
   return withRetry(() =>
     callVoice<AsrResult>("/v1/asr", { method: "POST", body: form }, TIMEOUTS.asr),
   );
+}
+
+/**
+ * 拍照识别（OCR）：`POST /v1/ocr`（multipart，字段 image）。
+ * voice 未实现该端点时会 404 / 503 —— 调用方必须给"可操作的中文提示"，不许静默失败。
+ */
+export async function callOcr(image: { data: Uint8Array; mime: string; filename: string }): Promise<OcrResult> {
+  const form = new FormData();
+  form.append("image", new Blob([new Uint8Array(image.data)], { type: image.mime }), image.filename);
+  return callVoice<OcrResult>("/v1/ocr", { method: "POST", body: form }, TIMEOUTS.ocr);
 }
 
 /** 契约 §5：40s 超时，1 次重试后由调用方降级到本地模板。 */

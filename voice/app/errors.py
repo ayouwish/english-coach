@@ -13,6 +13,7 @@ STATUS_BY_CODE: dict[str, int] = {
     "provider_error": 502,
     "provider_timeout": 504,
     "no_provider": 503,
+    "provider_unavailable": 503,  # task-25：/v1/ocr 依赖未安装（如未装 rapidocr）
     "internal_error": 500,
 }
 

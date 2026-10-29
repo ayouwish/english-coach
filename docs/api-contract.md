@@ -1,4 +1,4 @@
-# 接口契约 v1.4（FROZEN · 2026-10-24）
+# 接口契约 v1.5（FROZEN · 2026-10-29）
 
 > **本文件是唯一事实来源（single source of truth）。**
 
@@ -11,6 +11,7 @@
 | 2026-10-23 | v1.2 | **修正 §12.2 缓存 key**：加入 TTS provider 身份与 `"v2"` 版本前缀，避免跨 provider 命中错误缓存 | **缓存失效**（可再生，重新预热即可）；**接口形状不变**，客户端无感 |
 | 2026-10-23 | v1.3 | §12.2 缓存 key 再加 `fmt` 分量并升到 `"v3"`：TTS 格式设置修复后音频从 16kHz 变 24kHz，且 mp3/wav 是不同产物；`/v1/tts` 接入同一套缓存 | **缓存失效一次**（重新预热即可）；`/v1/tts` 响应新增 `X-Cache` 与 `X-Audio-Codec/Sample-Rate/Container` 观测头 |
 | 2026-10-24 | v1.4 | §6 `/v1/dialogue` 响应新增**可选**字段 `degraded_llm`（`true` = 本条不是大模型生成，走了模板降级）；修正 prompt 质量约束（年龄适配/连续性/纠错分级） | **向后兼容**：新字段可选，v1.3 客户端无感 |
+| 2026-10-29 | v1.5 | 新增 §14 `POST /v1/ocr`（拍照识别，离线 rapidocr）与 `capabilities.ocr`；错误码表新增 `provider_unavailable`(503) | **向后兼容**：新增接口/可选字段；`provider_unavailable` 仅 OCR 依赖缺失时出现 |
 > `web/` 与 `voice/` 两个模块并行开发，任何一方需要改本契约，必须先通知 Lead 并同步改本文件。
 > 冻结范围：路径、请求字段名、响应字段名、枚举值、错误码。
 > 未冻结范围：各 provider 内部实现、日志格式、额外字段（允许追加 `provider_meta` 等可选字段，不得删除或改名已有字段）。
@@ -51,13 +52,16 @@
     "intonation_curve": true,
     "nbest_phonemes": false,
     "ssml": false,
-    "gpu": false
+    "gpu": false,
+    "ocr": false
   }
 }
 ```
 
 - `mode` ∈ `mock` | `local` | `cloud` | `hybrid`。
-- `capabilities` 决定 UI 降级：`phoneme_level=false` 时前端只显示单词级热力图，不显示 IPA。
+- `capabilities` 决定 UI 降级：`phoneme_level=false` 时前端只显示单词级热力图，不显示 IPA；
+  **`ocr`（v1.5 新增，bool）**：拍照识别是否可用（离线 OCR 依赖是否装好）。`false` 时前端必须把「拍照识别」
+  按钮置灰或明确提示"未启用"，**不允许让用户点了一直转圈**。
   **UI 必须按 capabilities 自适应，不允许硬编码假设。**
 
 ---
@@ -334,7 +338,10 @@
 { "error": { "code": "provider_error", "message": "human readable", "detail": {} } }
 ```
 
-`code` ∈ `"bad_request"` `"unsupported_audio"` `"audio_too_long"` `"payload_too_large"` `"provider_error"` `"provider_timeout"` `"no_provider"` `"audio_not_found"` `"internal_error"`。
+`code` ∈ `"bad_request"` `"unsupported_audio"` `"audio_too_long"` `"payload_too_large"` `"provider_error"` `"provider_timeout"` `"no_provider"` `"audio_not_found"` `"internal_error"` `"provider_unavailable"`。
+
+> **`provider_unavailable`（503，v1.5 新增）**：**能力依赖未安装**（例如离线 OCR 的 rapidocr 没装）。
+> 与 `no_provider`（没配置任何 provider）语义不同：前者"装了就能用"，后者"没配"。`message` 必须给出可执行的安装提示。
 
 - 状态码：400 请求错误 / 404 / 413 / 422 音频无法解码 / 502 provider 失败 / 504 provider 超时 / 500。
 - **降级优先于报错**：provider 挂掉时应尽力返回模板/本地结果并带 `warnings`，只有在完全无法产出时才报错。
@@ -533,3 +540,31 @@ blind_tests
   "trend": { "current": {"avg_pron": 71.2}, "previous": {"avg_pron": 66.8}, "delta_pron": 4.4, "weeks": 3 }
 }
 ```
+
+---
+
+## 14. v1.5 新增：`POST /v1/ocr`（拍照识别）
+
+把书页照片里的英文转成文本，供「拍照 → 切句 → 连读」使用。
+
+`multipart/form-data`：`image`(file, 必填, ≤10MB)。
+
+```json
+200 {
+  "provider": "rapidocr",
+  "text": "Hello! My name is Lily.\nI like drawing cats and dogs.",
+  "lines": [{ "text": "Hello! My name is Lily.", "confidence": 0.982 }],
+  "width": 820, "height": 300,
+  "elapsed_ms": 584,
+  "warnings": []
+}
+```
+
+- **`text` 已按阅读顺序（从上到下）用 `\n` 连接**，前端可直接 `split("\n")` 切句；`lines[]` 给逐行置信度。
+- 契约层面可依赖的行为：
+  - **手机 EXIF 旋转会被修正**（竖拍照片不会识别成乱码）；
+  - 长边 >1600px 时等比缩小，并给 `warnings:["image_downscaled"]`；
+  - 空白页返回 `text=""` + `warnings:["no_text_found"]`；
+  - **图片只在内存处理、不落盘**（服务端不保存任何图片）。
+- 错误：非图片 **400** `bad_request`；>10MB **413** `payload_too_large`；依赖缺失 **503** `provider_unavailable`。
+- 性能参考（本机 CPU，与家庭 NAS 同级）：**热启动 0.5–0.8s/页**；首次有 1–2s 模型加载；常驻内存约 +165MB。
