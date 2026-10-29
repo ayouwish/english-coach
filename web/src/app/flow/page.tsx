@@ -33,6 +33,7 @@ export default async function FlowPage() {
       corpus={corpus}
       voiceReachable={caps.reachable}
       ocrAvailable={caps.capabilities.ocr === true}
+      heicAvailable={caps.capabilities.heic === true}
     />
   );
 }

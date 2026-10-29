@@ -51,6 +51,7 @@ export function FlowClient({
   corpus,
   voiceReachable,
   ocrAvailable,
+  heicAvailable,
 }: {
   isChild: boolean;
   userLevel: string;
@@ -58,6 +59,8 @@ export function FlowClient({
   voiceReachable: boolean;
   /** voice 的 capabilities.ocr（未实现/未启用时为 false → 按钮置灰，不让用户白转圈） */
   ocrAvailable: boolean;
+  /** voice 的 capabilities.heic（true = 服务端能解 HEIC，相册里的 HEIC 可直接上传） */
+  heicAvailable: boolean;
 }) {
   const [phase, setPhase] = useState<Phase>("setup");
   const [mode, setMode] = useState<"corpus" | "materials" | "custom">("corpus");
@@ -84,6 +87,9 @@ export function FlowClient({
   const [ocrError, setOcrError] = useState<string | null>(null);
   const [ocrInfo, setOcrInfo] = useState<{ provider: string; lines: number; elapsedMs: number | null } | null>(null);
   const ocrInputRef = useRef<HTMLInputElement | null>(null);
+  const ocrGalleryRef = useRef<HTMLInputElement | null>(null);
+  /** 多选相册时的进度（正在识别 k/N） */
+  const [ocrProgress, setOcrProgress] = useState<{ done: number; total: number } | null>(null);
   const lastImageRef = useRef<File | null>(null);
   /** voice 返回的预处理 JPEG（base64）——保存"我的书页"时一起存；null 表示这次只保存文字 */
   const [ocrImageB64, setOcrImageB64] = useState<string | null>(null);
@@ -263,28 +269,44 @@ export function FlowClient({
     if (ocrInputRef.current) ocrInputRef.current.value = "";
   }
 
-  async function runOcr(file: File) {
-    if (!ocrAvailable) {
-      setOcrError("当前部署未启用拍照识别，可以先用「✍️ 自己输入一段」。");
-      setOcrState("error");
-      return;
+  /** HEIC/HEIF 检测（iPhone 相册默认格式） */
+  function isHeicFile(file: File): boolean {
+    const type = (file.type || "").toLowerCase();
+    return (
+      type === "image/heic" ||
+      type === "image/heif" ||
+      type === "image/heic-sequence" ||
+      type === "image/heif-sequence" ||
+      /\.(heic|heif)$/i.test(file.name || "")
+    );
+  }
+
+  const HEIC_HINT =
+    "这是 iPhone 的 HEIC 格式照片，当前服务端还不能直接解码。建议：① 用「📷 拍照」按钮直接拍（会自动存成 JPEG）；② 或在相册里「存储为 JPEG」后再来选；③ 或先把它转成 JPEG/JPG 再上传。";
+
+  /** 选图前的本地校验：返回错误文案（null = 可以上传） */
+  function validatePicked(file: File): string | null {
+    if (isHeicFile(file) && !heicAvailable) return HEIC_HINT;
+    if (file.type && !file.type.startsWith("image/")) {
+      return `这不是图片（${file.type || "未知类型"}），请重新拍照或选择图片文件。`;
     }
-    if (!file.type.startsWith("image/")) {
-      setOcrError(`这不是图片（${file.type || "未知类型"}），请重新拍照或选择图片文件。`);
-      setOcrState("error");
-      return;
+    if (!file.type && !/\.(jpe?g|png|webp|gif|bmp)$/i.test(file.name || "")) {
+      return `无法识别的文件类型（${file.name || "未命名"}），请选择图片文件。`;
     }
-    if (file.size > 10 * 1024 * 1024) {
-      setOcrError("照片太大（上限 10MB），请靠近一点拍或拍小一点。");
-      setOcrState("error");
-      return;
-    }
-    lastImageRef.current = file;
-    if (ocrPreviewUrl) URL.revokeObjectURL(ocrPreviewUrl);
-    const preview = URL.createObjectURL(file);
-    setOcrPreviewUrl(preview);
-    setOcrState("uploading");
-    setOcrError(null);
+    if (file.size > 10 * 1024 * 1024) return "照片太大（上限 10MB），请靠近一点拍或拍小一点。";
+    return null;
+  }
+
+  type OcrOutcome =
+    | { ok: true; text: string; provider: string; lines: number; elapsedMs: number | null; imageB64: string | null }
+    | { ok: false; error: string };
+
+  /**
+   * 识别一张图（不碰 UI 状态，只发请求 + 归一化结果）。
+   * 错误语义保持 Lead 的版本：区分「请求失败」与「没识别到文字」，并透出 warnings。
+   * 拍照 / 相册单选 / 相册多选 三个入口都走这一个函数。
+   */
+  async function recognize(file: File): Promise<OcrOutcome> {
     try {
       const form = new FormData();
       form.append("image", file, file.name || "page.jpg");
@@ -305,49 +327,124 @@ export function FlowClient({
 
       // ① 真正的失败（网络错、服务不可用、图片被拒等）：用服务端的可操作提示
       if (!res.ok) {
-        setOcrError(
-          data?.error?.message ??
+        return {
+          ok: false,
+          error:
+            data?.error?.message ??
             `识别失败（HTTP ${res.status}）。可以换一张更清晰的照片，或改用「自己输入一段」。`,
-        );
-        setOcrState("error");
-        return;
+        };
       }
 
-      // ② 请求成功、但没识别出文字（HTTP 200 + text 为空）——这不是"请求失败"，
-      //    而是"这张图里没找到英文"。旧代码把它显示成「识别失败（HTTP 200）」，
-      //    看起来像 bug、还带着状态码，用户无法判断该怎么办。这里单独给出可操作的说法，
-      //    并把 voice 的 warnings 透出来（no_text_found / llm_empty_retried 等）方便排查。
+      // ② 请求成功、但没识别出文字（HTTP 200 + text 为空）——不是"请求失败"，
+      //    而是"这张图里没找到英文"。单独给出可操作的说法，并透出 voice 的 warnings 方便排查。
       const text = (data?.text ?? "").trim();
-      // 注意 `!data ||` 这个分支：它让 TS 在后面的代码里把 data 收窄为「非 null」
       if (!data || !text) {
         const warnings = (data?.warnings ?? []).filter(Boolean);
         const provider = data?.provider ?? "OCR";
-        if (isChild) {
-          setOcrError("这张图里没有找到英文句子。换一张更清楚的照片试试，或者用「✍️ 自己输入一段」。");
-        } else {
-          setOcrError(
-            `这张图里没有识别到英文文字（${provider}${warnings.length ? `，warnings: ${warnings.join(", ")}` : ""}）。\n` +
+        return {
+          ok: false,
+          error: isChild
+            ? "这张图里没有找到英文句子。换一张更清楚的照片试试，或者用「✍️ 自己输入一段」。"
+            : `这张图里没有识别到英文文字（${provider}${warnings.length ? `，warnings: ${warnings.join(", ")}` : ""}）。\n` +
               "多半是文字太小/太模糊/反光，或这张图里确实没有英文。可以换一张更清晰、文字更大的照片，或改用「自己输入一段」。",
-          );
-        }
-        setOcrState("error");
-        return;
+        };
       }
-      setMode("custom");
-      setCustomText((prev) => (prev.trim() ? `${prev.trimEnd()}\n${text}` : text));
-      setCustomSentences(splitSentences(text));
-      setOcrInfo({ provider: data?.provider ?? "-", lines: (data?.lines ?? []).length, elapsedMs: data?.elapsed_ms ?? null });
-      setOcrImageB64(typeof data?.image_jpeg_b64 === "string" && data.image_jpeg_b64 ? data.image_jpeg_b64 : null);
-      setSaveTitle((text.split("\n")[0] ?? "").slice(0, 40) || "未命名书页");
-      setSavedId(null);
-      setSaveError(null);
-      setOcrState("idle");
+
+      return {
+        ok: true,
+        text,
+        provider: data.provider ?? "-",
+        lines: (data.lines ?? []).length,
+        elapsedMs: data.elapsed_ms ?? null,
+        imageB64: typeof data.image_jpeg_b64 === "string" && data.image_jpeg_b64 ? data.image_jpeg_b64 : null,
+      };
     } catch (err) {
-      setOcrError(`识别失败：${(err as Error).message}。可以重试或改用「自己输入一段」。`);
+      return { ok: false, error: `识别失败：${(err as Error).message}。可以重试或改用「自己输入一段」。` };
+    }
+  }
+
+  /** 把识别出的文本追加到自定义文本框（与"再拍一张追加"语义一致） */
+  function appendOcrText(out: Extract<OcrOutcome, { ok: true }>) {
+    setMode("custom");
+    setCustomText((prev) => (prev.trim() ? `${prev.trimEnd()}\n${out.text}` : out.text));
+    setCustomSentences(splitSentences(out.text));
+    setOcrInfo({ provider: out.provider, lines: out.lines, elapsedMs: out.elapsedMs });
+    if (out.imageB64) setOcrImageB64(out.imageB64);
+    setSaveTitle((out.text.split("\n")[0] ?? "").slice(0, 40) || "未命名书页");
+    setSavedId(null);
+    setSaveError(null);
+  }
+
+  function setPreview(file: File) {
+    lastImageRef.current = file;
+    if (ocrPreviewUrl) URL.revokeObjectURL(ocrPreviewUrl);
+    setOcrPreviewUrl(URL.createObjectURL(file));
+  }
+
+  /** 单张入口（📷 拍照）：保持原有状态语义 */
+  async function runOcr(file: File) {
+    if (!ocrAvailable) {
+      setOcrError("当前部署未启用拍照识别，可以先用「✍️ 自己输入一段」。");
+      setOcrState("error");
+      return;
+    }
+    const invalid = validatePicked(file);
+    if (invalid) {
+      setOcrError(invalid);
+      setOcrState("error");
+      return;
+    }
+    setPreview(file);
+    setOcrState("uploading");
+    setOcrError(null);
+    const out = await recognize(file);
+    if (out.ok) {
+      appendOcrText(out);
+      setOcrState("idle");
+    } else {
+      setOcrError(out.error);
       setOcrState("error");
     }
   }
 
+  /** 多选入口（🖼️ 从相册选）：依次识别、文本追加，期间显示「正在识别 k/N」 */
+  async function runOcrMany(files: File[]) {
+    if (!ocrAvailable) {
+      setOcrError("当前部署未启用拍照识别，可以先用「✍️ 自己输入一段」。");
+      setOcrState("error");
+      return;
+    }
+    const valid: File[] = [];
+    const problems: string[] = [];
+    for (const f of files) {
+      const invalid = validatePicked(f);
+      if (invalid) problems.push(`${f.name || "未命名文件"}：${invalid}`);
+      else valid.push(f);
+    }
+    if (valid.length === 0) {
+      setOcrError(problems.join("\n"));
+      setOcrState("error");
+      return;
+    }
+    setOcrError(null);
+    setOcrState("uploading");
+    let okCount = 0;
+    for (let i = 0; i < valid.length; i++) {
+      setOcrProgress({ done: i, total: valid.length });
+      setPreview(valid[i]);
+      const out = await recognize(valid[i]);
+      if (out.ok) {
+        okCount += 1;
+        appendOcrText(out);
+      } else {
+        problems.push(`${valid[i].name || `第 ${i + 1} 张`}：${out.error}`);
+      }
+      setOcrProgress({ done: i + 1, total: valid.length });
+    }
+    setOcrProgress(null);
+    setOcrState(okCount > 0 ? "idle" : "error");
+    if (problems.length > 0) setOcrError(problems.join("\n"));
+  }
   const levels = useMemo(() => [...new Set(corpus.map((s) => s.level))].sort(), [corpus]);
   // level === "" 表示「全部」（随机时从 300 句里抽；非随机时按 sort_order 全量再 slice）
   const levelSentences = useMemo(
@@ -571,9 +668,10 @@ export function FlowClient({
                   onClick={() => ocrInputRef.current?.click()}
                   className={`ec-btn ${ocrAvailable ? "ec-btn-primary" : "ec-btn-ghost"}`}
                 >
-                  📷 {isChild ? "拍张照" : "拍照识别"}
+                  📷 {isChild ? "拍张照" : "拍照"}
                   {ocrInfo ? (isChild ? "（再拍一张）" : "（再拍一张追加）") : ""}
                 </button>
+                {/* 拍照：capture 会直接唤起后置相机 */}
                 <input
                   ref={ocrInputRef}
                   type="file"
@@ -584,6 +682,31 @@ export function FlowClient({
                   onChange={(e) => {
                     const f = e.target.files?.[0];
                     if (f) void runOcr(f);
+                    e.target.value = "";
+                  }}
+                />
+                <button
+                  type="button"
+                  data-testid="ocr-gallery-button"
+                  aria-label={isChild ? "从相册里选一张照片" : "从相册/文件里选择照片"}
+                  disabled={!ocrAvailable || ocrState === "uploading"}
+                  onClick={() => ocrGalleryRef.current?.click()}
+                  className={`ec-btn ${ocrAvailable ? "ec-btn-primary" : "ec-btn-ghost"}`}
+                >
+                  🖼️ {isChild ? "选一张照片" : "从相册选"}
+                </button>
+                {/* 相册/文件：**不带 capture**（否则手机只会唤起相机），支持一次多选 */}
+                <input
+                  ref={ocrGalleryRef}
+                  type="file"
+                  accept="image/*"
+                  multiple
+                  className="hidden"
+                  data-testid="ocr-input-gallery"
+                  onChange={(e) => {
+                    const files = Array.from(e.target.files ?? []);
+                    if (files.length === 1) void runOcr(files[0]);
+                    else if (files.length > 1) void runOcrMany(files);
                     e.target.value = "";
                   }}
                 />
@@ -598,7 +721,9 @@ export function FlowClient({
                 ) : null}
                 {ocrState === "uploading" ? (
                   <span className="text-sm text-[var(--ec-muted)]" data-testid="ocr-uploading">
-                    ⏳ 正在识别…（第一次识别可能要等 1–2 秒，请不要离开本页）
+                    {ocrProgress
+                      ? `⏳ 正在识别 ${Math.min(ocrProgress.done + 1, ocrProgress.total)}/${ocrProgress.total}…`
+                      : "⏳ 正在识别…（第一次识别可能要等 1–2 秒，请不要离开本页）"}
                   </span>
                 ) : null}
                 {ocrInfo ? (
@@ -618,6 +743,10 @@ export function FlowClient({
                   </button>
                 ) : null}
               </div>
+              <p className="mt-1 text-xs text-[var(--ec-muted)]" data-testid="ocr-heic-note">
+                📱 iPhone 相册如果存的是 HEIC：用「📷 拍照」拍会自动存成 JPEG，或先在相册里「存储为 JPEG」再来选。
+                {heicAvailable ? "（当前服务端支持 HEIC 解码，可直接上传。）" : ""}
+              </p>
               <p className="mt-2 text-xs text-[var(--ec-muted)]" data-testid="ocr-privacy">
                 🔒 照片会保存在<strong>你自己的 NAS 上</strong>（方便以后反复读）；识别时会上传到你配置的 AI 服务（DeepSeek）。
               </p>

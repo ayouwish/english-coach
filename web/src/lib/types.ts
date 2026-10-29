@@ -37,6 +37,8 @@ export interface VoiceCapabilities {
   phoneme_level: boolean;
   /** OCR（拍照识别，task-26）：voice 未实现/未启用时可能缺省或 false */
   ocr?: boolean;
+  /** 服务端能否解码 HEIC（task-37）：true 时相册里的 HEIC 可以直接上传 */
+  heic?: boolean;
   prosody: boolean;
   intonation_curve: boolean;
   nbest_phonemes: boolean;

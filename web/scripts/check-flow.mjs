@@ -338,7 +338,32 @@ try {
       bundleText.includes("存起来以后还能读") &&
       bundleText.includes("这次没拿到图片"),
   );
-  check("file input 带 accept=image/* 与 capture=environment", /accept="image\/\*"/.test(flowHtml2) && /capture="environment"/.test(flowHtml2));
+  // ── task-37：拍照 + 从相册选（两个基础入口）──────────────────────────────
+  const cameraInput = /<input[^>]*data-testid="ocr-input"[^>]*>/.exec(flowHtml2)?.[0] ?? "";
+  const galleryInput = /<input[^>]*data-testid="ocr-input-gallery"[^>]*>/.exec(flowHtml2)?.[0] ?? "";
+  check(
+    "★ 拍照入口：带 capture=\"environment\" 且 accept=image/*",
+    /capture="environment"/.test(cameraInput) && /accept="image\/\*"/.test(cameraInput),
+    cameraInput.replace(/\s+/g, " ").slice(0, 160),
+  );
+  check(
+    "★ 相册入口：**不带** capture（否则只能唤起相机）且 accept=image/*",
+    galleryInput.length > 0 && !/capture=/.test(galleryInput) && /accept="image\/\*"/.test(galleryInput),
+    galleryInput.replace(/\s+/g, " ").slice(0, 160),
+  );
+  check("相册入口支持多选（multiple）", /multiple/.test(galleryInput).toString() === "true" || galleryInput.includes("multiple"));
+  check(
+    "相册入口按钮存在（ocr-gallery-button）",
+    flowHtml2.includes('data-testid="ocr-gallery-button"'),
+  );
+  check(
+    "HEIC 提前提示在页面上（ocr-heic-note）",
+    flowHtml2.includes('data-testid="ocr-heic-note"') && /HEIC/.test(flowHtml2) && /存储为 JPEG/.test(flowHtml2),
+  );
+  const flowSrcMulti = fs.readFileSync(path.join(WEB_ROOT, "src/app/flow/FlowClient.tsx"), "utf8");
+  check("多选依次识别 + 追加（runOcrMany）", flowSrcMulti.includes("async function runOcrMany") && flowSrcMulti.includes("正在识别"));
+  check("bundle 含儿童相册文案「选一张照片」", bundleText.includes("选一张照片"));
+  check("bundle 含 HEIC 可操作提示", bundleText.includes("HEIC") && bundleText.includes("存储为 JPEG"));
   if (!ocrSupported) {
     check("★ capabilities.ocr=false 时按钮置灰 + 明确提示", flowHtml2.includes('data-testid="ocr-unavailable"') && /未启用/.test(flowHtml2));
   }
@@ -409,17 +434,18 @@ try {
   // 只看 runOcr 函数体：文件里另一处 `!res.ok || !data?.text` 属于「载入我的书页」，
   // 那里文本为空确实算失败，属正常；不能一刀切禁止整个文件出现该模式。
   {
+    // task-37 把请求逻辑抽到了 recognize()（拍照/相册多选共用），所以定位"识别链路"而不是只找 runOcr
     const ocrSrc = (() => {
-      const from = flowSrc.indexOf("async function runOcr");
+      const from = flowSrc.search(/async function (recognize|runOcr)\(/);
       if (from < 0) return "";
-      const rest = flowSrc.slice(from + 1);
-      const next = rest.search(/\n  (async function|function) /);
-      return next < 0 ? rest : rest.slice(0, next);
+      const tail = flowSrc.slice(from);
+      const stop = tail.search(/\n  (async function runOcrMany|function setPreview)/);
+      return stop < 0 ? tail : tail.slice(0, stop);
     })();
     check(
-      "★ OCR 空文本有专门提示（runOcr 内不再借用『识别失败(HTTP n)』）",
+      "★ OCR 空文本有专门提示（识别链路里不再借用『识别失败(HTTP n)』）",
       ocrSrc.includes("没有识别到英文文字") && !ocrSrc.includes("!res.ok || !data?.text"),
-      ocrSrc ? "已定位 runOcr 函数体" : "未找到 runOcr",
+      ocrSrc ? "已定位 recognize()/runOcr() 函数体" : "未找到识别函数",
     );
   }
   check(
