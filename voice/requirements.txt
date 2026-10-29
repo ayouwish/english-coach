@@ -54,8 +54,14 @@ numpy==2.5.4 ; python_full_version >= '3.12'
 opentelemetry-api==1.45.1
     # via fastapi
 pillow==12.3.0 ; python_full_version < '3.11'
-    # via english-coach-voice
+    # via
+    #   english-coach-voice
+    #   pillow-heif
 pillow==13.0.0 ; python_full_version >= '3.11'
+    # via
+    #   english-coach-voice
+    #   pillow-heif
+pillow-heif==1.8.1
     # via english-coach-voice
 praat-parselmouth==0.4.7
     # via english-coach-voice

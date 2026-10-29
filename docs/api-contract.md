@@ -64,6 +64,8 @@
   `false` 时前端必须把「拍照识别」按钮置灰或明确提示"未启用"，**不允许让用户点了一直转圈**。
   **`ocr_provider`（v1.5 新增，`"llm" | "local" | null`）**：实际首选的 OCR provider（自检/排查用）。
   默认 `llm`（DeepSeek 多模态为主），`local` 仅在装了本地依赖且 LLM 不可用时出现。
+  **`heic`（v1.5 新增，bool）**：是否支持 HEIC/HEIF 解码（iPhone 相册照片默认格式）。
+  `false` 时前端应在**上传前**拦下 HEIC 并提示改用「拍照」或先存为 JPEG。
   **UI 必须按 capabilities 自适应，不允许硬编码假设。**
 
 ---
@@ -586,6 +588,9 @@ blind_tests
   `（空字符串）` 或中文解释，而不是真空串），服务端会**用更宽容的提示词重试一次**（明确允许封面标题/标签/装饰字）；
   重试成功则返回正常结果（**不含** `no_text_found`），两次都空才返回 `text=""` + 上述 warnings。
   重试耗时**计入** `elapsed_ms`；`provider` 不变。
+- **HEIC/HEIF（v1.5）**：按 ISO BMFF 魔数（`ftyp` + heic/heix/heis/hevc/hevx/heim/hevm/mif1/msf1）识别，
+  首次遇到才懒加载 `pillow-heif`；解码后走同一套预处理。若服务端**未启用** HEIC 支持，
+  返回 **400** `bad_request`，`message` 为可操作文案（含「HEIC」并建议改用拍照或先转 JPEG），不会落到笼统的"无法解码"。
 - 错误：非图片 **400** `bad_request`；>10MB **413** `payload_too_large`；
   **503 `provider_unavailable`** = LLM 失败且无本地兜底，或两者都不可用。
 - 性能参考：LLM 路径实测 **0.7–1.5s/页**（偶发数秒；服务刚启动首次调用可能更慢）；本地兜底 0.5–0.8s/页（需额外 +157MB 依赖）。

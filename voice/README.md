@@ -642,6 +642,7 @@ WER **mean 0.295 / median 0.171**，RTF mean **0.371**（max 1.2）；词级时�
 
 - `text` 按**行序**用 `\n` 连接（前端可直接 `split("\n")` 切句），`lines` 是同一批行。
 - `lines[].confidence`：LLM 视觉**没有置信度 → `null`**（诚实，不编造）；本地 rapidocr 兜底时给真实分数。
+- `capabilities.heic`（`/v1/health`）：bool，是否支持 HEIC/HEIF 解码（前端据此决定相册是否允许选 HEIC）。
 - `warnings`：`image_downscaled`（缩放）、`no_text_found`（没识别到英文）、`llm_vision_failed`（LLM 失败已降级本地）、`image_encode_failed`（请求了返回图但编码失败）、`llm_empty_retried`（首次空、宽容提示词重试后仍空）、`llm_truncated`（重试后输出仍被 max_tokens 截断，返回的是部分内容）。
 - **空结果重试**（task-35）：模型首次返回空时，会用更宽容的提示词 `OCR_PROMPT_RETRY` 再试一次
   （明确允许封面大标题/标签/装饰字，只有整张图完全没有英文字母才允许空），第二次的耗时计入 `elapsed_ms`；
@@ -697,7 +698,7 @@ OCR 专用依赖已从**生产 `requirements.txt` 移除**（`rapidocr-onnxrunti
 
 | 组合 | 额外体积 | 说明 |
 |---|---|---|
-| 默认（LLM 视觉）| 0（只用基础依赖里的 pillow）| 只需要 `.env` 配 `LLM_BASE_URL`/`LLM_API_KEY`/`LLM_MODEL` |
+| 默认（LLM 视觉）| 基础依赖含 `pillow` + `pillow-heif`（≈26MB，libheif）| 只需要 `.env` 配 `LLM_BASE_URL`/`LLM_API_KEY`/`LLM_MODEL` |
 | 加离线兜底 | **≈ +157MB 镜像 / +165MB 常驻内存** | `pip install -r requirements-ocr-local.txt` 或 `uv sync --extra ocr-local` |
 
 #### 14.3.1 实测（本机，真实 key，`deepseek-flash`）

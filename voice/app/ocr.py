@@ -72,6 +72,15 @@ OCR_PROMPT_RETRY = (
 TRUNCATION_MAX_TOKENS_CAP = 4000  # 截断重试的上限（×3 但不超过它，避免被慢/贵）
 TRUNCATION_RETRY_FACTOR = 3
 
+# iPhone 相册照片默认 HEIC/HEIF（ISO BMFF 容器，major brand 在 ftyp 里）
+_HEIF_BRANDS = {
+    b"heic", b"heix", b"heis", b"hevc", b"hevx", b"heim", b"hevm", b"mif1", b"msf1",
+}
+HEIC_UNSUPPORTED_MESSAGE = (
+    "这张图是 iPhone 的 HEIC/HEIF 格式，当前服务端未启用 HEIC 支持。"
+    "请改用「拍照」按钮（会存成 JPEG），或在相册里用「存储为 JPEG / 导出为 JPEG」后再从相册选择。"
+)
+
 _ENGINE_LOCK = threading.Lock()
 _ENGINE: dict[str, object] = {}
 
@@ -121,6 +130,52 @@ def llm_vision_available() -> bool:
         return LLMClient().vision_available
     except Exception:  # pragma: no cover - 配置异常按不可用处理
         return False
+
+
+def heif_available() -> bool:
+    """HEIC/HEIF 解码是否可用（只查依赖是否存在，**不 import**，保证启动惰性）。"""
+    import importlib.util
+
+    try:
+        return importlib.util.find_spec("pillow_heif") is not None
+    except Exception:  # pragma: no cover - 环境异常按不可用处理
+        return False
+
+
+def looks_like_heif(data: bytes) -> bool:
+    """按 ISO BMFF 头判断是否 HEIC/HEIF：`....ftyp` + major brand。"""
+    if len(data) < 12 or data[4:8] != b"ftyp":
+        return False
+    return data[8:12].lower() in _HEIF_BRANDS
+
+
+_HEIF_LOCK = threading.Lock()
+_HEIF_REGISTERED = False
+
+
+def _register_heif_opener() -> None:
+    """首次遇到 HEIF 时才 import pillow_heif 并注册 PIL opener（线程安全、只做一次）。"""
+    global _HEIF_REGISTERED
+    with _HEIF_LOCK:
+        if _HEIF_REGISTERED:
+            return
+        try:
+            from pillow_heif import register_heif_opener  # 惰性导入：启动时不加载 libheif
+        except Exception as exc:
+            raise BadRequest(HEIC_UNSUPPORTED_MESSAGE) from exc
+        try:
+            register_heif_opener()
+        except Exception as exc:
+            raise BadRequest(f"HEIC/HEIF 解码器初始化失败：{type(exc).__name__}") from exc
+        _HEIF_REGISTERED = True
+        logger.info("pillow_heif opener registered (lazy, first HEIF input)")
+
+
+def reset_heif_state() -> None:
+    """测试用：重置懒加载状态（PIL 的 opener 注册是全局的，无法真正反注册）。"""
+    global _HEIF_REGISTERED
+    with _HEIF_LOCK:
+        _HEIF_REGISTERED = False
 
 
 def engine_available() -> bool:
@@ -216,6 +271,13 @@ def preprocess_image(data: bytes, settings: Settings | None = None, max_long_sid
         ) from exc
 
     warnings: list[str] = []
+    is_heif = looks_like_heif(data)
+    if is_heif:
+        # HEIC/HEIF：Pillow 默认解不了，需要 pillow_heif 的 opener（首次遇到才懒加载）
+        if not heif_available():
+            logger.warning("HEIC input rejected: pillow-heif not installed")
+            raise BadRequest(HEIC_UNSUPPORTED_MESSAGE)
+        _register_heif_opener()
     try:
         probe = Image.open(io.BytesIO(data))
         if probe.width * probe.height > MAX_PIXELS:
@@ -225,6 +287,11 @@ def preprocess_image(data: bytes, settings: Settings | None = None, max_long_sid
     except VoiceError:
         raise
     except Exception as exc:
+        if is_heif:
+            raise BadRequest(
+                f"这张 HEIC/HEIF 图片无法解码（文件可能损坏或使用了不支持的编码）。"
+                f"请改用在相册里「存储为 JPEG」后重试，或改用「拍照」按钮。原始错误：{type(exc).__name__}"
+            ) from exc
         raise BadRequest(f"cannot decode image: {type(exc).__name__}: {exc}") from exc
 
     width, height = image.size

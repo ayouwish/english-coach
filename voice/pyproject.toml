@@ -15,6 +15,8 @@ dependencies = [
     "httpx>=0.27",
     # 图片处理（OCR 预处理：EXIF 转正 / 缩放 / JPEG 编码）——LLM 视觉路径也需要，故留在基础依赖
     "pillow>=10.0",
+    # iPhone 相册照片默认 HEIC/HEIF，Pillow 默认解不了（带 libheif 的 wheel，约 26MB）
+    "pillow-heif>=1.0",
 ]
 
 [project.optional-dependencies]

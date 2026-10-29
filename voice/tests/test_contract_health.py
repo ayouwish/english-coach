@@ -5,7 +5,7 @@ from __future__ import annotations
 import sys
 
 MODES = {"mock", "local", "cloud", "hybrid"}
-CAPABILITY_KEYS = {"phoneme_level", "prosody", "intonation_curve", "nbest_phonemes", "ssml", "gpu", "ocr", "ocr_provider"}
+CAPABILITY_KEYS = {"phoneme_level", "prosody", "intonation_curve", "nbest_phonemes", "ssml", "gpu", "ocr", "ocr_provider", "heic"}
 PROVIDER_KEYS = {"asr", "pa", "tts", "llm"}
 
 

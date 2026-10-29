@@ -34,7 +34,7 @@ from .feedback_templates import (
 from .hints import dedupe_warnings
 from .intonation import compare_intonation, extract_f0, prosody_score_from_distance
 from .llm import LLMClient
-from .ocr import active_ocr_provider, ocr_available, recognize_image
+from .ocr import active_ocr_provider, heif_available, ocr_available, recognize_image
 from .phonemes import PHONEME_SPACE_ID, canonicalize_pa_result
 from .providers.registry import get_providers
 from .schemas import DialogueRequest, FeedbackRequest, TTSRequest, WarmupRequest
@@ -82,6 +82,7 @@ async def health() -> dict:
     capabilities["gpu"] = bool(settings.gpu)
     capabilities["ocr"] = ocr_available()  # task-27：任一 OCR provider 可用（LLM 视觉 或 本地 rapidocr）
     capabilities["ocr_provider"] = active_ocr_provider()  # "llm" | "local" | null（自检用）
+    capabilities["heic"] = heif_available()  # task-38：是否支持从相册选 iPhone HEIC/HEIF 照片
     return {
         "status": "ok",
         "version": settings.version,
