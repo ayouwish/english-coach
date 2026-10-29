@@ -297,21 +297,47 @@ export function FlowClient({
             lines?: unknown[];
             provider?: string;
             elapsed_ms?: number;
+            warnings?: string[];
             image_jpeg_b64?: string | null;
             error?: { message?: string };
           }
         | null;
-      if (!res.ok || !data?.text) {
-        setOcrError(data?.error?.message ?? `识别失败（HTTP ${res.status}）。可以换一张更清晰的照片，或改用「自己输入一段」。`);
+
+      // ① 真正的失败（网络错、服务不可用、图片被拒等）：用服务端的可操作提示
+      if (!res.ok) {
+        setOcrError(
+          data?.error?.message ??
+            `识别失败（HTTP ${res.status}）。可以换一张更清晰的照片，或改用「自己输入一段」。`,
+        );
         setOcrState("error");
         return;
       }
-      const text = data.text.trim();
+
+      // ② 请求成功、但没识别出文字（HTTP 200 + text 为空）——这不是"请求失败"，
+      //    而是"这张图里没找到英文"。旧代码把它显示成「识别失败（HTTP 200）」，
+      //    看起来像 bug、还带着状态码，用户无法判断该怎么办。这里单独给出可操作的说法，
+      //    并把 voice 的 warnings 透出来（no_text_found / llm_empty_retried 等）方便排查。
+      const text = (data?.text ?? "").trim();
+      // 注意 `!data ||` 这个分支：它让 TS 在后面的代码里把 data 收窄为「非 null」
+      if (!data || !text) {
+        const warnings = (data?.warnings ?? []).filter(Boolean);
+        const provider = data?.provider ?? "OCR";
+        if (isChild) {
+          setOcrError("这张图里没有找到英文句子。换一张更清楚的照片试试，或者用「✍️ 自己输入一段」。");
+        } else {
+          setOcrError(
+            `这张图里没有识别到英文文字（${provider}${warnings.length ? `，warnings: ${warnings.join(", ")}` : ""}）。\n` +
+              "多半是文字太小/太模糊/反光，或这张图里确实没有英文。可以换一张更清晰、文字更大的照片，或改用「自己输入一段」。",
+          );
+        }
+        setOcrState("error");
+        return;
+      }
       setMode("custom");
       setCustomText((prev) => (prev.trim() ? `${prev.trimEnd()}\n${text}` : text));
       setCustomSentences(splitSentences(text));
-      setOcrInfo({ provider: data.provider ?? "-", lines: (data.lines ?? []).length, elapsedMs: data.elapsed_ms ?? null });
-      setOcrImageB64(typeof data.image_jpeg_b64 === "string" && data.image_jpeg_b64 ? data.image_jpeg_b64 : null);
+      setOcrInfo({ provider: data?.provider ?? "-", lines: (data?.lines ?? []).length, elapsedMs: data?.elapsed_ms ?? null });
+      setOcrImageB64(typeof data?.image_jpeg_b64 === "string" && data.image_jpeg_b64 ? data.image_jpeg_b64 : null);
       setSaveTitle((text.split("\n")[0] ?? "").slice(0, 40) || "未命名书页");
       setSavedId(null);
       setSaveError(null);
@@ -648,7 +674,12 @@ export function FlowClient({
               ) : null}
 
               {ocrError ? (
-                <p className="mt-2 rounded-xl bg-red-50 p-2 text-sm text-red-700" role="alert" data-testid="ocr-error">
+                <p
+                  // whitespace-pre-line：错误文案里有多行（原因 + 怎么办），别让它们挤成一行
+                  className="mt-2 whitespace-pre-line rounded-xl bg-red-50 p-2 text-sm text-red-700"
+                  role="alert"
+                  data-testid="ocr-error"
+                >
                   {ocrError}
                   <button
                     type="button"

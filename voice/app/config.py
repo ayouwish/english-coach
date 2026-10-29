@@ -249,7 +249,8 @@ class Settings:
     max_ocr_bytes: int = 10 * 1024 * 1024  # /v1/ocr 图片上限（10MB）
     ocr_provider: str = "auto"  # auto | llm | local（task-27：LLM 视觉为主，本地 rapidocr 兜底）
     ocr_timeout_s: float = 30.0
-    ocr_max_tokens: int = 800
+    ocr_max_tokens: int = 1500  # 推理模型先输出 reasoning，800 会被思考吃光（task-36）
+    ocr_disable_thinking: bool = True  # 关思考：实测 1.0s vs 5.9s，token 也更少
     max_audio_seconds: float = 120.0
 
     data_dir: Path = field(default_factory=_resolve_data_dir)
@@ -360,7 +361,8 @@ def get_settings() -> Settings:
         max_ocr_bytes=_env_int("MAX_OCR_BYTES", 10 * 1024 * 1024),
         ocr_provider=_env("VOICE_OCR_PROVIDER", "auto") or "auto",
         ocr_timeout_s=_env_float("OCR_TIMEOUT_S", 30.0),
-        ocr_max_tokens=_env_int("OCR_MAX_TOKENS", 800),
+        ocr_max_tokens=_env_int("OCR_MAX_TOKENS", 1500),
+        ocr_disable_thinking=_env_bool("OCR_DISABLE_THINKING", True),
         max_audio_seconds=_env_float("VOICE_MAX_AUDIO_SECONDS", 120.0),
         data_dir=_resolve_data_dir(),
         model_cache_dir=_resolve_model_cache_dir(),

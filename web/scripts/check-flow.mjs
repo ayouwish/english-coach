@@ -374,15 +374,19 @@ try {
   const { drawRandomSentences, seededRng } = await import("../src/lib/random-pick.ts");
   const sentsRes = await fetch(`${BASE}/api/sentences`, { headers: { cookie: girl } });
   const sents = (await sentsRes.json()).sentences ?? [];
-  check("语料池 = 300 句", sents.length === 300, `count=${sents.length}`);
+  // 语料池不只是内置 300 句：家长自建语料（source='parent'，仅本人+其孩子可见）也会算进来。
+  // 所以断言"内置 300 句都在"，而不是写死总数——否则一旦有人录入自定义语料，守卫就误报。
+  const builtin = sents.filter((x) => (x.source ?? "builtin") === "builtin").length;
+  check("内置语料 = 300 句（且全部出现在语料池里）", builtin === 300, `builtin=${builtin} total=${sents.length}`);
+  check("语料池 ≥ 300 句", sents.length >= 300, `count=${sents.length}`);
   const draw5 = drawRandomSentences(sents, 5, seededRng(42));
   const draw15 = drawRandomSentences(sents, 15, seededRng(7));
-  const all = drawRandomSentences(sents, 300, seededRng(1));
+  const all = drawRandomSentences(sents, sents.length, seededRng(1));
   const uniq = new Set(draw15.map((x) => x.id));
   console.log(`   ↳ 抽 5：[${draw5.map((x) => x.id).join(", ")}]`);
   check("★ 随机抽 5 句：条数正确且无重复", draw5.length === 5 && new Set(draw5.map((x) => x.id)).size === 5);
   check("★ 随机抽 15 句：无重复（Set 大小 = 15）", draw15.length === 15 && uniq.size === 15, `unique=${uniq.size}`);
-  check("抽 300 句 = 全量且不重复（洗牌正确）", all.length === 300 && new Set(all.map((x) => x.id)).size === 300);
+  check("抽全量 = 全部且不重复（洗牌正确）", all.length === sents.length && new Set(all.map((x) => x.id)).size === sents.length);
   check("抽超过池子大小 → 截断为池子大小", drawRandomSentences(sents.slice(0, 3), 10, seededRng(2)).length === 3);
   check("抽到的句子都来自池子", draw5.every((x) => sents.some((c) => c.id === x.id)));
   const a = drawRandomSentences(sents, 10, seededRng(11)).map((x) => x.id).join(",");
@@ -399,6 +403,30 @@ try {
 
   // bundle 文案
   check("bundle 含「换一批」与儿童文案「随机来几句」", bundleText.includes("换一批") && bundleText.includes("随机来几句"));
+
+  // OCR 空文本的提示语义（2026-10-30）：HTTP 200 但没识别出文字时，
+  // 不能显示成「识别失败（HTTP 200）」——那是把"图里没有英文"说成了"请求失败"。
+  // 只看 runOcr 函数体：文件里另一处 `!res.ok || !data?.text` 属于「载入我的书页」，
+  // 那里文本为空确实算失败，属正常；不能一刀切禁止整个文件出现该模式。
+  {
+    const ocrSrc = (() => {
+      const from = flowSrc.indexOf("async function runOcr");
+      if (from < 0) return "";
+      const rest = flowSrc.slice(from + 1);
+      const next = rest.search(/\n  (async function|function) /);
+      return next < 0 ? rest : rest.slice(0, next);
+    })();
+    check(
+      "★ OCR 空文本有专门提示（runOcr 内不再借用『识别失败(HTTP n)』）",
+      ocrSrc.includes("没有识别到英文文字") && !ocrSrc.includes("!res.ok || !data?.text"),
+      ocrSrc ? "已定位 runOcr 函数体" : "未找到 runOcr",
+    );
+  }
+  check(
+    "OCR 错误提示会透出 voice 的 warnings（便于排查是 no_text_found 还是别的原因）",
+    flowSrc.includes("warnings") && flowSrc.includes('data-testid="ocr-error"'),
+  );
+  check("bundle 含 OCR 空文本提示文案", bundleText.includes("没有识别到英文文字"));
 
   // ── 4) 重启恢复：改成 scoring → 新进程启动触发 bootstrap → failed ─────────
   const db3 = new Database(DB_PATH);

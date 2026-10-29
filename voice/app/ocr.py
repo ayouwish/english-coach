@@ -42,6 +42,8 @@ WARNING_LLM_FAILED = "llm_vision_failed"
 WARNING_NO_TEXT = "no_text_found"
 WARNING_DOWNSCALED = "image_downscaled"
 WARNING_ENCODE_FAILED = "image_encode_failed"
+WARNING_EMPTY_RETRIED = "llm_empty_retried"  # task-35：首次空、宽容提示词重试后仍空
+WARNING_TRUNCATED = "llm_truncated"  # task-36：重试后仍被 max_tokens 截断
 
 OCR_PROMPT = (
     "请逐行输出图片中的英文原文：\n"
@@ -52,6 +54,23 @@ OCR_PROMPT = (
     "5. 如果图片里没有英文，返回空字符串。\n"
     "只输出识别到的英文文本本身。"
 )
+
+# 首次返回空时用的**宽容版**提示词（task-35：模型可能过度遵守"没有英文就返回空"，
+# 把绘本封面标题、标签、装饰字误判成"没有可读英文"）。
+OCR_PROMPT_RETRY = (
+    "这张图片是一本书页/绘本封面/练习页的照片，请尽可能读出其中所有可见的英文内容。\n"
+    "请逐行输出，按从上到下的顺序：\n"
+    "1. 包括标题、封面文字、标签、说明文字、装饰字、单词、短语、标点符号；\n"
+    "2. 即使只有一两个英文单词，也请原样输出；\n"
+    "3. 不要编号、不要加解释、不要翻译、不要加引号；\n"
+    "4. 保留原文的标点与大小写；\n"
+    "5. 忽略中文注释、页码、页眉页脚。\n"
+    "只有在图片里**完全没有任何英文字母**时，才返回空字符串。\n"
+    "只输出识别到的英文文本本身。"
+)
+
+TRUNCATION_MAX_TOKENS_CAP = 4000  # 截断重试的上限（×3 但不超过它，避免被慢/贵）
+TRUNCATION_RETRY_FACTOR = 3
 
 _ENGINE_LOCK = threading.Lock()
 _ENGINE: dict[str, object] = {}
@@ -246,9 +265,35 @@ def jpeg_data_url(image, quality: int = LLM_JPEG_QUALITY) -> str | None:
 # --------------------------------------------------------------------------------------
 _NUMBERING_RE = re.compile(r"^\s*(?:\d+[.)、]|[-•*])\s+")
 
+# 模型对"没有可读文字"的图片可能返回字面量占位符（实测空白页返回 `` `<empty string>` ``），
+# 这类返回必须当成"空"处理，否则会被当作英文原文展示给用户。
+_PLACEHOLDER_RE = re.compile(r"^[`'\"\u2018\u2019\u201c\u201d\s]*(.*?)[`'\"\u2018\u2019\u201c\u201d\s]*$")
+_PLACEHOLDERS = {
+    "<empty string>", "<empty>", "<no text>", "<none>", "[empty]", "(empty)",
+    "empty", "empty string", "n/a", "none", "null", "无", "（无）", "(无)",
+}
+
+
+def _normalize_llm_text(text: str | None) -> str:
+    """把模型的占位符返回（如 `` `<empty string>` ``）归一成空串；正常文本原样返回。"""
+    raw = (text or "").strip()
+    if not raw:
+        return ""
+    match = _PLACEHOLDER_RE.match(raw)
+    inner = (match.group(1) if match else raw).strip().lower()
+    return "" if inner in _PLACEHOLDERS else raw
+
+
+_LATIN_RE = re.compile(r"[A-Za-z]")
+
 
 def lines_from_llm_text(text: str | None) -> list[str]:
-    """把视觉模型返回的纯文本切成行：去首尾空白、丢空行、防御性去掉编号。"""
+    """把视觉模型返回的纯文本切成行：去首尾空白、丢空行、防御性去掉编号。
+
+    额外过滤**不含任何拉丁字母**的行：本接口是"识别英文原文"，而模型偶尔会用中文
+    解释（实测空白页返回"（注：由于原图几乎为空白，未识别到任何清晰的英文文本…）"），
+    这类说明文字不是 OCR 结果，必须当空处理，否则会被 web 当成书页内容展示。
+    """
     out: list[str] = []
     for raw in (text or "").splitlines():
         line = raw.strip()
@@ -257,6 +302,8 @@ def lines_from_llm_text(text: str | None) -> list[str]:
         stripped = _NUMBERING_RE.sub("", line).strip()
         if stripped:
             line = stripped
+        if not _LATIN_RE.search(line):
+            continue
         out.append(line)
     return out
 
@@ -315,6 +362,30 @@ def _to_float(value) -> float:
 # --------------------------------------------------------------------------------------
 # 两个 provider 的实现
 # --------------------------------------------------------------------------------------
+def _log_truncation(prefix: str, outcome, requested_tokens: int) -> None:
+    logger.warning(
+        "%s: finish_reason=length, requested max_tokens=%d, completion_tokens=%s, "
+        "reasoning_tokens=%s, content_len=%d, reasoning_len=%d, thinking_disabled=%s",
+        prefix,
+        requested_tokens,
+        outcome.completion_tokens,
+        outcome.reasoning_tokens,
+        len(outcome.text or ""),
+        outcome.reasoning_len,
+        outcome.thinking_disabled,
+    )
+
+
+def _call_llm(client: LLMClient, data_url: str, prompt: str, settings: Settings, max_tokens: int, disable_thinking: bool):
+    return client.read_image(
+        data_url,
+        prompt,
+        timeout_s=settings.ocr_timeout_s,
+        max_tokens=max_tokens,
+        disable_thinking=disable_thinking,
+    )
+
+
 def _recognize_with_llm(
     image, width: int, height: int, warnings: list[str], settings: Settings, return_image: bool
 ) -> OcrResult:
@@ -324,19 +395,65 @@ def _recognize_with_llm(
         raise _LlmVisionFailed("image_encode_failed")
     data_url = f"data:image/jpeg;base64,{encoded}"
     started = time.perf_counter()
-    outcome = client.read_image(
-        data_url,
-        OCR_PROMPT,
-        timeout_s=settings.ocr_timeout_s,
-        max_tokens=settings.ocr_max_tokens,
-    )
-    elapsed_ms = int(round((time.perf_counter() - started) * 1000))
+    max_tokens = max(1, int(settings.ocr_max_tokens))
+    disable_thinking = bool(settings.ocr_disable_thinking)
+    outcome = _call_llm(client, data_url, OCR_PROMPT, settings, max_tokens, disable_thinking)
     if not outcome.ok:
         raise _LlmVisionFailed(outcome.error or "unknown_error")
 
-    texts = lines_from_llm_text(outcome.text)
+    # task-36：推理模型会把 max_tokens 吃在 reasoning 上（finish_reason=length，content 空/残缺）。
+    # 检测到截断 → WARNING（含 completion/reasoning/content_len）+ 重试一次（×3，上限 4000，关思考）。
+    if outcome.truncated:
+        _log_truncation("LLM vision OCR truncated (root cause: reasoning tokens ate max_tokens)", outcome, max_tokens)
+        bumped = min(max_tokens * TRUNCATION_RETRY_FACTOR, TRUNCATION_MAX_TOKENS_CAP)
+        retried = _call_llm(client, data_url, OCR_PROMPT, settings, bumped, True)
+        if retried.ok:
+            logger.info(
+                "LLM vision OCR truncation retry: max_tokens %d -> %d, thinking_disabled=%s, finish_reason=%s",
+                max_tokens,
+                bumped,
+                retried.thinking_disabled,
+                retried.finish_reason,
+            )
+            outcome = retried
+            max_tokens = bumped
+            if retried.truncated:
+                _log_truncation("LLM vision OCR still truncated after retry", retried, bumped)
+                warnings.append(WARNING_TRUNCATED)
+
+    raw_text = _normalize_llm_text(outcome.text)
+    texts = lines_from_llm_text(raw_text)
+
     if not texts:
-        warnings.append(WARNING_NO_TEXT)
+        # task-35：模型对"没有英文就返回空"过度遵守（绘本封面/强反光等）→ 诊断日志 + 宽容重试一次。
+        # 日志只打模型的**文本**返回前 200 字符（不含 base64 / 图片数据），用于区分：
+        # 真空串 / 只有换行空白 / 拒答话术（"I'm sorry, I can't read this image."）。
+        logger.warning(
+            "LLM vision OCR returned empty text (provider=%s, raw_len=%d): raw_prefix=%r original_prefix=%r",
+            outcome.provider,
+            len(raw_text),
+            raw_text[:200],
+            (outcome.text or "")[:200],
+        )
+        retry = _call_llm(client, data_url, OCR_PROMPT_RETRY, settings, max_tokens, True)
+        if not retry.ok:
+            raise _LlmVisionFailed(retry.error or "unknown_error")
+        retry_raw = _normalize_llm_text(retry.text)
+        retry_texts = lines_from_llm_text(retry_raw)
+        if not retry_texts:
+            logger.warning(
+                "LLM vision OCR still empty after lenient retry (raw_len=%d): raw_prefix=%r original_prefix=%r",
+                len(retry_raw),
+                retry_raw[:200],
+                (retry.text or "")[:200],
+            )
+            warnings.append(WARNING_NO_TEXT)
+            warnings.append(WARNING_EMPTY_RETRIED)
+            texts = []
+        else:
+            logger.info("LLM vision OCR recovered %d line(s) on lenient retry", len(retry_texts))
+            texts = retry_texts
+    elapsed_ms = int(round((time.perf_counter() - started) * 1000))
     lines = [{"text": text, "confidence": None} for text in texts]  # 视觉模型没有置信度，不编造
     return OcrResult(
         provider=f"{outcome.provider} vision",

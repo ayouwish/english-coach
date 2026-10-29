@@ -642,7 +642,14 @@ WER **mean 0.295 / median 0.171**，RTF mean **0.371**（max 1.2）；词级时�
 
 - `text` 按**行序**用 `\n` 连接（前端可直接 `split("\n")` 切句），`lines` 是同一批行。
 - `lines[].confidence`：LLM 视觉**没有置信度 → `null`**（诚实，不编造）；本地 rapidocr 兜底时给真实分数。
-- `warnings`：`image_downscaled`（缩放）、`no_text_found`（没识别到英文）、`llm_vision_failed`（LLM 失败已降级本地）、`image_encode_failed`（请求了返回图但编码失败）。
+- `warnings`：`image_downscaled`（缩放）、`no_text_found`（没识别到英文）、`llm_vision_failed`（LLM 失败已降级本地）、`image_encode_failed`（请求了返回图但编码失败）、`llm_empty_retried`（首次空、宽容提示词重试后仍空）、`llm_truncated`（重试后输出仍被 max_tokens 截断，返回的是部分内容）。
+- **空结果重试**（task-35）：模型首次返回空时，会用更宽容的提示词 `OCR_PROMPT_RETRY` 再试一次
+  （明确允许封面大标题/标签/装饰字，只有整张图完全没有英文字母才允许空），第二次的耗时计入 `elapsed_ms`；
+  首次就非空则**只调用一次**。每次空返回都会打 WARNING 日志（含模型原始返回的长度与前 200 字符 `repr`，不含图片/base64），
+  便于排查"真空串 / 只有空白 / 拒答话术"。
+  另外两条防御（实测发现）：模型对"没有文字"的图**不会返回真正的空串**，而是返回字面量占位符
+  （`<empty string>`、`（空字符串）`）或中文解释（"（注：由于原图几乎为空白…）"）——这些一律按空处理
+  （占位符归一化 + **只保留含拉丁字母的行**），再触发宽容重试；否则会被 web 当成书页文字展示。
 - **可选返回预处理图**（task-28）：请求加 `return_image=1`（或 `true`）时，响应多一个 `image_jpeg_b64`
   ——**纯 base64（不含 `data:` 前缀）**，就是实际送去识别的那张图（EXIF 已转正、长边 ≤1280、JPEG q85，fixture 900×400 约 100KB）。
   用于 web 存"我的书页"反复复读，避免存 3–8MB 手机原图。未请求时字段**缺失**（不是 `null`）；
@@ -664,6 +671,24 @@ WER **mean 0.295 / median 0.171**，RTF mean **0.371**（max 1.2）；词级时�
 - 发本地 rapidocr 前：EXIF 转正 → RGB → 长边 ≤1600（CPU 与精度都不需要更高）。
 - 提示词要求"逐行输出英文原文、不编号不解释、保留标点、无英文返回空"，并防御性去掉模型自带的编号。
 - 错误：非图片 → **400 `bad_request`**；>10MB → **413 `payload_too_large`**；LLM 失败且无本地兜底 → **503 `provider_unavailable`**。
+
+#### 14.2.1 推理模型（`deepseek-flash`）的坑：reasoning 吃光 max_tokens（task-36）
+
+`deepseek-flash` 是推理模型：先输出 `reasoning_content` 再输出 `content`。默认配置下（`max_tokens=800`）
+思考会吃光全部额度 → `finish_reason=length`、`content` 为空/残缺 → 表现为"拍照识别返回空文字"。
+实测同一张真实绘本照片（4160×3120）：
+
+| 配置 | finish_reason | content | 耗时 |
+|---|---|---|---|
+| max_tokens=800（旧默认）| length | `"By the time they got"`（截断）| — |
+| max_tokens=1500 + `thinking:disabled`（**新默认**）| stop | 完整 8 行 | **≈0.8–1.2s** |
+
+所以 OCR 默认：
+- `OCR_DISABLE_THINKING=1`：请求体带 `"thinking": {"type": "disabled"}`（实测 1010ms vs 5.9s，token 也更少）；
+  若端点不认这个参数返回 **400**，自动降级为"不带该参数"重试一次，不报 500。
+- `OCR_MAX_TOKENS=1500`（reasoning-off 后正文 + 余量）。
+- **截断检测**：`finish_reason == "length"` 时打 WARNING（含 `completion_tokens` / `reasoning_tokens` / `content_len`），
+  自动重试一次（`max_tokens` ×3、上限 4000、强制关思考）；仍截断 → `warnings:["llm_truncated"]` 并返回已拿到的部分内容。
 
 ### 14.3 依赖与体积（task-27 精简）
 
