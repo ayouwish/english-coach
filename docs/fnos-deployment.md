@@ -173,6 +173,57 @@ SITE_ADDRESS=english.example.com
 **这意味着**：从手机/平板打开 `http://192.168.1.x:3000` 时，**录音按钮会直接失败**
 （"无法访问麦克风"）。所以在 NAS 上部署，HTTPS 是硬要求。
 
+### 【推荐】把入口交给 NAS 上的通用反代（Nginx Proxy Manager / Lucky）
+
+**为什么推荐这个**：反向代理是"整个 NAS 的入口"，属于基础设施层。
+如果让每个应用各自带一个反代，那以后每加一个服务/域名都要改那个应用的配置 —— 方向反了。
+装一个**带 Web UI 的通用网关**，之后加域名就是点几下，**再也不用碰任何项目**。
+
+两个可选（都支持多域名 + 自动证书 + 反代）：
+
+| 工具 | 特点 |
+|---|---|
+| **Nginx Proxy Manager（NPM）** | 最主流；Proxy Host / Redirection Host / SSL 全在 UI 里；支持 DNS-01 通配符证书 |
+| **Lucky** | 国内社区常用；中文界面；反代 + 证书 + DDNS 一体 |
+
+**本项目要做的只有三件事**（之后归零）：
+
+```bash
+cd /vol1/1000/project/english-coach/deploy
+
+# ① 不再用项目自带的 caddy（它现在默认就不启动；若之前起过则删掉）
+docker compose --profile ingress rm -sf caddy 2>/dev/null || true
+
+# ② 让 web 暴露给反代：桥接网络的反代连不到宿主的 127.0.0.1，
+#    所以在 .env 里把 WEB_BIND 设成 NAS 的局域网 IP
+#      WEB_BIND=192.168.50.104
+docker compose up -d --force-recreate voice web
+
+# ③ .env 里保持 COOKIE_SECURE=1（浏览器看到的是 https）
+```
+
+> 3000 现在会在局域网 IP 上明文可访问 —— 这是"反代内部那一跳"，属预期；
+> **不要在路由器上把 3000 转发到公网**。
+
+**NPM 侧的配置**（Web UI，约 3 分钟）：
+
+1. 容器本身占用 80/443（所以要先停掉项目 caddy），UI 端口通常 81
+2. **Proxy Hosts → Add Proxy Host**
+   - Domain Names：`english.dreamsearch.top`
+   - Forward Hostname：`192.168.50.104`，Port：`3000`，Scheme：`http`
+   - 勾上 **Websockets Support** / **Block Common Exploits**
+   - SSL 页签：Request a new certificate（选 DNS Challenge，签 **通配符** `*.dreamsearch.top`
+     —— 以后任何新子域名都不用重签），勾 Force SSL
+3. **Redirection Hosts → Add**
+   - Source：`nas.home`，Destination：`https://nas.home:5667`（还原飞牛界面的无端口入口）
+
+以后新增任何服务：在 NPM 里加一条 Proxy Host 即可，**本项目完全不用动**。
+
+**只在一种情况下需要项目自带 caddy**：你没有别的反代、且只想让这个应用独占 80/443。
+那时用 `docker compose --profile ingress up -d`，并参考 `Caddyfile.multisite`。
+
+---
+
 ### 已经有证书了（acme.sh / 商业证书）？用文件模式
 
 如果你用 `acme.sh` 之类的工具已经签好了 PEM（`fullchain.pem` + `privkey.pem`），

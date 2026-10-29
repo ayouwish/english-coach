@@ -25,7 +25,7 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 DEPLOY="$ROOT/deploy"
 ENV_FILE="$DEPLOY/.env"
 # 只用一个 compose 文件：端口/Caddyfile 都由 .env 变量决定（见 deploy/docker-compose.yml 注释）
-COMPOSE=(-f "$DEPLOY/docker-compose.yml")
+COMPOSE=(--profile ingress -f "$DEPLOY/docker-compose.yml")
 HTTPS_PORT="${HTTPS_PORT:-8443}"
 CA_OUT="${CA_OUT:-$DEPLOY/caddy-root-ca.crt}"
 

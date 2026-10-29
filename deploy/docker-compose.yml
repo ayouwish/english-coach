@@ -113,7 +113,10 @@ services:
         source: ../data
         target: /data
     ports:
-      - "127.0.0.1:3000:3000"   # 仅本机调试用；局域网/公网访问请走 https://<SITE_ADDRESS>
+      # 默认只绑回环（交给"同机反代"用：NPM/Lucky 若以 host 网络运行可直接连 127.0.0.1:3000）。
+      # 若反代是**桥接网络**的容器（默认的 NPM/Lucky 部署就是这样），它连不到宿主的 127.0.0.1，
+      # 这时设 WEB_BIND=192.168.x.x（NAS 的局域网 IP）或 0.0.0.0，让反代通过宿主 IP 访问。
+      - "${WEB_BIND:-127.0.0.1}:${WEB_PORT:-3000}:3000"
     depends_on:
       voice:
         condition: service_started
@@ -146,6 +149,11 @@ services:
   # localhost 是唯一例外。局域网/公网访问必须 TLS，否则麦克风直接不可用。
   # ────────────────────────────────────────────────────────────────────────────
   caddy:
+    # ★ 可选：默认**不启动**。反向代理属于"整个 NAS 的入口"，应该由 NAS 上的通用网关
+    #   （Nginx Proxy Manager / Lucky / 系统 nginx）统一管理，而不是每个应用各带一个。
+    #   这样以后加新域名只要在网关 UI 里点几下，不用改任何项目。
+    #   需要内置入口时： docker compose --profile ingress up -d
+    profiles: [ingress]
     image: caddy:2-alpine
     restart: unless-stopped
     env_file:
