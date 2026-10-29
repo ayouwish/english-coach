@@ -1,0 +1,79 @@
+# Caddyfile.multisite —— 一个反代同时服务「我们的应用」和「NAS 自己的界面」
+#
+# 场景：你自己占住 80/443（飞牛的 80/443 重定向已关闭），想两个域名都无端口访问：
+#   · english.dreamsearch.top  → 英语练习应用（公信证书，HTTPS）
+#   · nas.home                 → 飞牛 NAS 界面（HTTP 跳转到它自己的 5667）
+#
+# 为什么 `nas.home` 走 80 而不是 443：
+#   `nas.home` 是私有域名，**拿不到公信证书**。若让它走 443，就必须给它签一张自签证书，
+#   家里每台设备都得装一次 CA，还会偶尔出警告。
+#   而 http://nas.home → 302 → https://nas.home:5667 完全不需要证书，
+#   体验和飞牛自带的重定向一模一样。
+#
+# 启用方式（deploy/.env）：
+#   CADDYFILE=Caddyfile.multisite
+#   CADDY_HTTP_PORT=80                  # 宿主 80 必须空闲
+#   CADDY_HTTPS_PORT=443                # 宿主 443 必须空闲
+#   SITE_ADDRESS=english.dreamsearch.top  # 应用域名（证书必须覆盖它）
+#   NAS_HOST=nas.home                   # NAS 界面的私有域名
+#   NAS_UI_PORT=5667                    # 飞牛界面的实际端口（以它重定向到的端口为准）
+#   COOKIE_SECURE=1
+#
+# 证书：deploy/certs/{fullchain,privkey}.pem（acme.sh 签发后拷进来）
+#
+# 前置检查：`ss -ltn | grep -E ':(80|443)\b'` 应该没有输出。
+
+{
+	admin 127.0.0.1:2019
+	servers {
+		protocols h1 h2 h3
+	}
+}
+
+# ── 主站：英语练习应用（公信证书 + 反向代理到 web 容器）────────────────────────
+{$SITE_ADDRESS:english.dreamsearch.top} {
+	tls /certs/fullchain.pem /certs/privkey.pem
+
+	encode zstd gzip
+
+	handle /healthz {
+		respond "ok" 200
+	}
+
+	handle {
+		reverse_proxy web:3000 {
+			header_up X-Real-IP {remote_host}
+			header_up X-Forwarded-Proto {scheme}
+			transport http {
+				read_timeout 90s
+				write_timeout 90s
+			}
+		}
+	}
+
+	header {
+		X-Content-Type-Options "nosniff"
+		Referrer-Policy "same-origin"
+		Permissions-Policy "microphone=(self), camera=(), geolocation=()"
+		-Server
+	}
+
+	# 确认所有设备都信任证书后再开（HSTS 进过浏览器就很难撤回）
+	# header Strict-Transport-Security "max-age=31536000"
+
+	log {
+		output stdout
+		format console
+		level INFO
+	}
+}
+
+# ── NAS 界面：私有域名走 80，跳到它自己的端口（不需要证书）────────────────────
+# 注意：浏览器输入 `nas.home` 默认走 http（.home 不在 HSTS 预载列表里），
+# 所以这条能生效；跳转目标是 https + 飞牛界面端口。
+http://{$NAS_HOST:nas.home} {
+	redir https://{$NAS_HOST:nas.home}:{$NAS_UI_PORT:5667}{uri} permanent
+}
+# 说明：主站（HTTPS 站点）**不需要**再显式写 http:// 跳转块 ——
+# Caddy 会自动为所有带 TLS 的站点建立 HTTP→HTTPS 跳转；
+# 显式再写一个 http://同域名 的块反而会被判定为重复站点定义。
