@@ -412,6 +412,7 @@ app/
   degrade.py      最终兜底（永不失败）
   providers/      base / mock / azure / local / registry
 scripts/warmup.py 批量预热 CLI
+scripts/trim_cache.py 原地裁剪旧 TTS 缓存 WAV 的首尾静音（task-41，幂等、保留文件名）
 tests/            494 个用例（契约字段、mock 全链路、合成信号语调、降级、缓存/预热/并发、音素归一化、跨 provider key、反馈质量、TTS 格式与 /v1/tts 缓存、对话 prompt/健壮性）
 ```
 
@@ -424,6 +425,38 @@ tests/            494 个用例（契约字段、mock 全链路、合成信号�
 > （`DATA_DIR=$(mktemp -d)` 或 `voice/.verify-tmp-*/`），并且只删自己刚建的那个路径。
 
 ---
+
+### 9.4 升级后一次性裁剪旧 TTS 缓存（task-39/41）
+
+task-39 起 `/v1/tts` 的 WAV 输出会裁掉首尾静音（Azure 短词尾部有 ~1.3s 低电平噪声）。
+但**升级前写入的缓存文件仍是未裁剪的**，用户听到的"拖沓/浑浊"主要来自这些旧缓存；
+而缓存 key 是 `sha1(...)`（无反向映射），升 `KEY_VERSION` 会让全部缓存失效、必须重新预热（花 Azure 费用 + 时间）。
+所以提供**原地裁剪**脚本：只改文件内容、**保留原文件名/key**，缓存继续命中，不调任何 API。
+
+```bash
+# 建议先 dry-run 看统计（不写文件）
+docker compose exec -T voice python scripts/trim_cache.py --dry-run
+# 确认后原地裁剪（一次即可；幂等，重复跑 trimmed=0）
+docker compose exec -T voice python scripts/trim_cache.py
+
+# 只看前 N 个 / 指定数据目录
+docker compose exec -T voice python scripts/trim_cache.py --limit 20
+docker compose exec -T voice python scripts/trim_cache.py --data-dir /data
+```
+
+输出示例（真实临时目录）：
+
+```
+结果     : scanned=2 trimmed=2 skipped=0 failed=0（另有 1 个 mp3 未处理）
+总时长   : 3.32s -> 0.82s （节省 2.50s = 2500ms，平均每个裁剪 1250ms）
+```
+
+- **只处理 `cache/audio/*.wav`**：不碰 mp3（无 ffmpeg，不重编码）、不碰 `cache/f0/`（F0 由音频实时计算，无需改）。
+- **幂等**：第二次运行 `trimmed=0`；`--dry-run` 不写任何文件。
+- **原子写回**：临时文件 + `os.replace`，保留原文件名（缓存 key 不变）。单文件失败（损坏 WAV）计入 `failed` 并继续，
+  有失败时退出码 1；符号链接不会被跟随/改写。
+- **不跑也能用**：只是旧缓存音频仍带尾部静音；跑一次就全部变干净（一次性，不调 API、不花钱）。
+- **不影响 F0 / 评测**：F0 是对音频实时分析（静音段本来不产生 F0）；评测用上传音频，与本缓存无关。
 
 ## 10. 测试
 
