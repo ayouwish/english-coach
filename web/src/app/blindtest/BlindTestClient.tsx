@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Recorder } from "@/components/Recorder";
 
 interface BlindSentence {
@@ -17,7 +17,7 @@ interface BlindData {
   plannedTotal: number;
   practicedCount: number;
   sentences: BlindSentence[];
-  progress: { done: number; total: number };
+  progress: { done: number; total: number; submitted?: number; pending?: number };
 }
 
 /**
@@ -37,15 +37,54 @@ export function BlindTestClient({
   const [blindTestId, setBlindTestId] = useState<string | null>(data.blindTestId ?? null);
   const [sentences] = useState<BlindSentence[]>(data.sentences);
   const [total, setTotal] = useState(data.progress.total || data.plannedTotal);
-  const [done, setDone] = useState(data.progress.done);
+  /** 已提交的句子数（= 下一句的下标；异步提交，立刻进下一句） */
+  const [submitted, setSubmitted] = useState(data.progress.submitted ?? data.progress.done);
+  /** 已评分数（异步后台算；只用于进度提示，绝不显示分数） */
+  const [scored, setScored] = useState(data.progress.done);
+  const [pending, setPending] = useState(data.progress.pending ?? 0);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [limitMessage, setLimitMessage] = useState<string | null>(null);
-  const [finished, setFinished] = useState<{ avg_pron: number | null; delta_pron: number | null } | null>(
-    null,
-  );
+  const [finished, setFinished] = useState<{
+    avg_pron: number | null;
+    delta_pron: number | null;
+    scored?: number;
+    pending?: number;
+    notice?: string | null;
+  } | null>(null);
 
-  const current = sentences[done] ?? null;
+  const current = sentences[submitted] ?? null;
+  const allSubmitted = total > 0 && submitted >= total;
+  const allScored = submitted > 0 && scored >= submitted;
+
+  /** 轮询后台评分进度（2s）：只更新计数，不拉任何分数 */
+  useEffect(() => {
+    if (!blindTestId || finished) return;
+    if (pending <= 0 && submitted === 0) return;
+    let stop = false;
+    const tick = async () => {
+      try {
+        const res = await fetch("/api/blind-tests");
+        const body = (await res.json()) as {
+          in_progress?: { id: string; scored?: number; pending?: number } | null;
+        };
+        if (stop) return;
+        const cur = body?.in_progress;
+        if (cur && cur.id === blindTestId) {
+          if (typeof cur.scored === "number") setScored(cur.scored);
+          if (typeof cur.pending === "number") setPending(cur.pending);
+        }
+      } catch {
+        /* 轮询失败下一轮再试 */
+      }
+    };
+    void tick();
+    const timer = setInterval(() => void tick(), 2000);
+    return () => {
+      stop = true;
+      clearInterval(timer);
+    };
+  }, [blindTestId, pending, submitted, finished]);
 
   async function start() {
     setBusy(true);
@@ -64,7 +103,9 @@ export function BlindTestClient({
       }
       setBlindTestId(body.blind_test_id);
       setTotal(body.total ?? body.sentence_ids?.length ?? 0);
-      setDone(0);
+      setSubmitted(0);
+      setScored(0);
+      setPending(0);
       setInProgress(true);
       // 句子文本由服务端页面提供；若本次是“重新开始”（例如上一批已作废），刷新页面即可
       if (sentences.length === 0) {
@@ -91,11 +132,13 @@ export function BlindTestClient({
       form.append("duration_ms", String(Math.round(durationMs)));
       form.append("blind_test_id", blindTestId);
 
-      const res = await fetch("/api/attempts", { method: "POST", body: form });
+      // task-33：异步提交 —— 写完 pending 行就返回，不等待评测
+      const res = await fetch("/api/attempts/async", { method: "POST", body: form });
       const body = (await res.json()) as {
         attempt_id?: string;
         blind?: boolean;
-        progress?: { done: number; total: number };
+        status?: string;
+        progress?: { done: number; total: number; submitted?: number; pending?: number };
         error?: { message?: string };
       };
       if (res.status === 429) {
@@ -106,12 +149,12 @@ export function BlindTestClient({
         setError(body?.error?.message ?? "提交失败");
         return;
       }
-      // 服务端只回 attempt_id / blind / progress —— 这里也不做任何分数展示
-      const nextDone = body.progress?.done ?? done + 1;
-      setDone(nextDone);
-      if (nextDone >= (body.progress?.total ?? total)) {
-        await finish();
-      }
+      // 服务端只回 attempt_id / blind / status / progress —— 这里也绝不展示分数
+      const p = body.progress;
+      setSubmitted(p?.submitted ?? submitted + 1);
+      setScored(p?.done ?? scored);
+      setPending(p?.pending ?? Math.max(0, (p?.submitted ?? submitted + 1) - (p?.done ?? scored)));
+      setError(null);
     } catch (err) {
       setError((err as Error).message);
     } finally {
@@ -119,20 +162,38 @@ export function BlindTestClient({
     }
   }
 
-  async function finish() {
+  async function finish(force = false) {
     if (!blindTestId) return;
+    if (!force && pending > 0) {
+      const ok =
+        typeof window === "undefined"
+          ? true
+          : window.confirm(
+              `还有 ${pending} 条在后台评分，报告里会显示为「待评分」，不影响已评完的平均分。现在结束吗？`,
+            );
+      if (!ok) return;
+    }
     try {
       const res = await fetch(`/api/blind-tests/${blindTestId}/finish`, { method: "POST" });
       const body = (await res.json()) as {
         avg_pron?: number | null;
         delta_pron?: number | null;
+        scored?: number;
+        pending?: number;
+        notice?: string | null;
         error?: { message?: string };
       };
       if (!res.ok) {
         setError(body?.error?.message ?? "结束盲测失败");
         return;
       }
-      setFinished({ avg_pron: body.avg_pron ?? null, delta_pron: body.delta_pron ?? null });
+      setFinished({
+        avg_pron: body.avg_pron ?? null,
+        delta_pron: body.delta_pron ?? null,
+        scored: body.scored,
+        pending: body.pending,
+        notice: body.notice ?? null,
+      });
     } catch (err) {
       setError((err as Error).message);
     }
@@ -151,6 +212,17 @@ export function BlindTestClient({
               ? "这次的成绩已经记到你的周报里了，去看看吧！"
               : "本次盲测成绩已写入周报（与上次的对比也在里面）。"}
           </p>
+          {finished?.notice ? (
+            <p className="mt-2 rounded-xl bg-[#fff3d6] p-3 text-xs text-[#7a4d00]" data-testid="blind-finish-notice">
+              {finished.notice}
+            </p>
+          ) : null}
+          {typeof finished?.scored === "number" ? (
+            <p className="mt-2 text-xs text-[var(--ec-muted)]" data-testid="blind-score-scope">
+              本次平均分基于 <strong>{finished.scored}</strong> 条已评分记录
+              {finished.pending ? `（另有 ${finished.pending} 条待评分，未计入）` : ""}。
+            </p>
+          ) : null}
           <div className="mt-4 flex justify-center gap-2">
             <Link href="/blindtest/report" className="ec-btn ec-btn-primary">
               📈 去看周报
@@ -214,16 +286,30 @@ export function BlindTestClient({
             {isChild ? "🎯 小测验进行中" : "🎯 盲测进行中"}
           </h1>
           <span className="rounded-full bg-[var(--ec-primary-soft)] px-3 py-1 text-sm font-semibold text-[var(--ec-primary)]">
-            第 {Math.min(done + 1, total)} / {total} 句
+            第 {Math.min(submitted + 1, total)} / {total} 句
           </span>
         </div>
         <div className="mt-3 h-3 w-full overflow-hidden rounded-full bg-[#eef0f8]">
           <div
             className="h-full rounded-full bg-[var(--ec-primary)] transition-all"
-            style={{ width: `${total > 0 ? (done / total) * 100 : 0}%` }}
+            style={{ width: `${total > 0 ? (submitted / total) * 100 : 0}%` }}
             data-testid="blind-progress"
           />
         </div>
+        <p className="mt-2 text-xs text-[var(--ec-muted)]" data-testid="blind-progress-text">
+          已读 <strong>{submitted}</strong>/{total} 句{submitted > scored ? ` · 评分中 ${submitted - scored} 句` : ""}
+          {scored > 0 ? `（已评完 ${scored} 句）` : ""}
+        </p>
+        {allSubmitted && !allScored ? (
+          <p className="mt-1 text-xs text-[#7a4d00]" data-testid="blind-waiting">
+            全部读完了，后台还在评分（剩 {Math.max(0, submitted - scored)} 条）。可以先结束，报告里会标成「待评分」。
+          </p>
+        ) : null}
+        {allScored ? (
+          <p className="mt-1 text-xs text-[#166534]" data-testid="blind-all-scored">
+            全部评完啦，可以结束看报告了 ✅
+          </p>
+        ) : null}
         <p className="mt-2 text-xs text-[var(--ec-muted)]">
           这一轮不会有任何分数和反馈，读完 {total} 句才看得到结果 —— 这样才测得准 🙂
         </p>
@@ -242,7 +328,7 @@ export function BlindTestClient({
             <Recorder onRecorded={submit} disabled={busy} isChild={isChild} recording={busy} />
           </div>
           <div className="mt-4 flex items-center gap-3">
-            <button type="button" className="ec-btn ec-btn-ghost" onClick={finish} disabled={busy}>
+            <button type="button" className="ec-btn ec-btn-ghost" onClick={() => void finish()} disabled={busy}>
               提前结束
             </button>
             <span className="text-xs text-[var(--ec-muted)]">
@@ -253,8 +339,10 @@ export function BlindTestClient({
         </section>
       ) : (
         <section className="ec-card">
-          <p className="text-sm">这一批的句子已经读完了。</p>
-          <button type="button" className="ec-btn ec-btn-primary mt-3" onClick={finish}>
+          <p className="text-sm" data-testid="blind-done-text">
+            这一批的句子已经读完了{pending > 0 ? `，还有 ${pending} 条在后台评分` : "，评分也完成了"}。
+          </p>
+          <button type="button" className="ec-btn ec-btn-primary mt-3" data-testid="blind-finish" onClick={() => void finish()}>
             结束并查看周报
           </button>
         </section>

@@ -40,11 +40,34 @@ export default async function BlindTestReportPage() {
         </p>
       </section>
 
+      {(data.pending_total ?? 0) > 0 ? (
+        <section className="ec-card" data-testid="blind-pending-banner">
+          <p className="rounded-xl bg-[#fff3d6] p-3 text-sm">
+            ⏳ 还有<strong> {data.pending_total} 条</strong>暂时显示为<strong>待评分</strong>
+            （后台<strong>评分中</strong>；盲测是异步评分的，不需要等它）。报告里的平均分只基于<strong>已评完</strong>的记录，不会被待评分条目拉低。
+          </p>
+        </section>
+      ) : null}
+
       {data.in_progress ? (
         <section className="ec-card">
           <p className="rounded-xl bg-[#fff3d6] p-3 text-sm">
-            有一次盲测还没结束（{data.in_progress.item_count} 句）—— 结束之前不会显示分数，这样才测得准。
+            有一次盲测还没结束（{data.in_progress.item_count} 句，已评分 {data.in_progress.scored ?? 0} 条）
+            —— 结束之前不会显示分数，这样才测得准。
           </p>
+          {(data.in_progress.pending ?? 0) > 0 ? (
+            <ul className="mt-2 flex flex-col gap-1 text-sm" data-testid="blind-pending-items">
+              {Array.from({ length: data.in_progress.pending ?? 0 }).map((_, i) => (
+                <li key={i} className="flex items-center gap-2 text-[var(--ec-muted)]">
+                  <span aria-hidden>•</span>
+                  <span data-testid="blind-pending-item">
+                    第 {data.in_progress!.scored + i + 1} 句：<strong>评分中</strong>
+                    （若服务重启过会显示「评分失败（服务重启）」，该句不计入平均分）
+                  </span>
+                </li>
+              ))}
+            </ul>
+          ) : null}
           <Link href="/blindtest" className="ec-btn ec-btn-primary mt-3">
             继续这次盲测
           </Link>
@@ -62,6 +85,7 @@ export default async function BlindTestReportPage() {
               </p>
               <p className="mt-1 text-xs text-[var(--ec-muted)]">
                 {current.ended_at ? new Date(current.ended_at).toLocaleString("zh-CN") : ""}
+                {current.avg_pron === null ? " · 这条还没有已评分的记录" : " · 仅统计已评分记录"}
               </p>
             </div>
             <div>

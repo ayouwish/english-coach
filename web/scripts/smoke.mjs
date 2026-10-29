@@ -513,7 +513,21 @@ async function main() {
       form.append("mode", "scripted");
       await jsonFetch("/api/attempts", { method: "POST", cookie: girl.cookie, body: form });
     }
+    // 盲测批次会**复用上一次的固定句子组**（§13.3 第 4 条），所以"练过"的集合不能只看本次这 12 句，
+    // 要以库里"该用户的非盲测 attempt"为准（否则用历史批次时会误判）。
     const practicedSet = new Set(practiceIds);
+    {
+      const Database = (await import("better-sqlite3")).default;
+      const dbPath = process.env.DB_PATH ?? new URL("../data/app.db", import.meta.url).pathname;
+      const db = new Database(dbPath, { readonly: true });
+      const rows = db
+        .prepare(
+          "SELECT DISTINCT sentence_id FROM attempts WHERE user_id = ? AND is_blind = 0 AND sentence_id IS NOT NULL",
+        )
+        .all("u-girl");
+      db.close();
+      for (const r of rows) practicedSet.add(r.sentence_id);
+    }
     check("已为盲测准备 12 句「练过的语料」", practiceIds.length === 12, `ids=${practiceIds.length}`);
 
     // 基线：mastery / SRS / 家长趋势（盲测前后必须一致）
@@ -534,7 +548,14 @@ async function main() {
     const start = await jsonFetch("/api/blind-tests", { method: "POST", cookie: girl.cookie });
     const testId = start.json?.blind_test_id;
     check("POST /api/blind-tests 201", start.status === 201, `status=${start.status}`);
-    check("盲测抽 10 句（上限，且不超过练过的句数）", start.json?.total === 10, `total=${start.json?.total}`);
+    // 注意：盲测会复用上一次的固定句子组（§13.3 第 4 条），历史批次可能是 9 句 →
+    // 这里只断言「1..10 句且不超过练过的句数」，不写死 10。
+    const blindTotal = start.json?.total ?? 0;
+    check(
+      "盲测句数在 1..10 之间（且不超过练过的句数）",
+      blindTotal >= 1 && blindTotal <= 10,
+      `total=${blindTotal}`,
+    );
     check(
       "抽题全部来自「练过」的语料（不是没学过的）",
       (start.json?.sentence_ids ?? []).every((id) => practicedSet.has(id)),
@@ -548,42 +569,95 @@ async function main() {
       `resumed=${again.json?.resumed}`,
     );
 
-    // 逐句提交：断言响应里绝无分数
+    // 逐句提交（task-33：**异步**）—— 写完 pending 行就返回，绝不等待 Azure 评测
     const keysSeen = new Set();
     let firstResponse = null;
-    for (let i = 0; i < (start.json?.sentence_ids ?? []).length; i++) {
-      const sid = start.json.sentence_ids[i];
+    let firstMs = 0;
+    const attemptIds = [];
+    const ids = start.json?.sentence_ids ?? [];
+    const submitBlind = async (sid, seconds = 2.0) => {
       const form = new FormData();
-      form.append("audio", wavBlob(2.0, 130), "blind.wav");
+      form.append("audio", wavBlob(seconds, 130), "blind.wav");
       form.append("sentence_id", sid);
       form.append("reference_text", textById.get(sid));
       form.append("mode", "scripted");
       form.append("blind_test_id", testId);
-      const r = await jsonFetch("/api/attempts", { method: "POST", cookie: girl.cookie, body: form });
-      if (i === 0) firstResponse = r;
-      for (const k of Object.keys(r.json ?? {})) keysSeen.add(k);
-      if (i === 0) {
-        check("盲测第 1 句：HTTP 200", r.status === 200, `status=${r.status}`);
-        check(
-          "★ 盲测进行中响应体只有 attempt_id / blind / progress",
-          JSON.stringify(Object.keys(r.json ?? {}).sort()) === '["attempt_id","blind","progress"]',
-          JSON.stringify(r.json),
-        );
-        check(
-          "★ 盲测进行中不含 result / feedback / scores",
-          !("result" in (r.json ?? {})) && !("feedback" in (r.json ?? {})) && !("scores" in (r.json ?? {})),
-          `keys=${Object.keys(r.json ?? {}).join(",")}`,
-        );
-        check(
-          "progress 正确（done=1, total=10）",
-          r.json?.progress?.done === 1 && r.json?.progress?.total === 10,
-          JSON.stringify(r.json?.progress),
-        );
+      const t0 = Date.now();
+      const r = await jsonFetch("/api/attempts/async", { method: "POST", cookie: girl.cookie, body: form });
+      return { r, ms: Date.now() - t0 };
+    };
+    const waitScored = async (wantIds, timeoutMs = 120000) => {
+      const t0 = Date.now();
+      let items = [];
+      while (Date.now() - t0 < timeoutMs) {
+        const st = await jsonFetch(`/api/attempts/status?ids=${encodeURIComponent(wantIds.join(","))}`, {
+          cookie: girl.cookie,
+        });
+        items = st.json?.items ?? [];
+        const busy = items.filter((x) => x.status === "pending" || x.status === "scoring").length;
+        if (items.length === wantIds.length && busy === 0) return items;
+        await new Promise((r) => setTimeout(r, 1500));
       }
+      return items;
+    };
+
+    // 先提交 9 句（留 1 句用于"提交后立刻结束"的 pending 场景）
+    for (let i = 0; i < ids.length - 1; i++) {
+      const { r } = await submitBlind(ids[i]);
+      if (i === 0) {
+        firstResponse = r;
+        for (const k of Object.keys(r.json ?? {})) keysSeen.add(k);
+      }
+      if (r.json?.attempt_id) attemptIds.push(r.json.attempt_id);
     }
+    const first9 = await waitScored(attemptIds);
     check(
-      "10 句提交过程中出现过的所有字段里都没有分数/反馈键",
-      ![...keysSeen].some((k) => ["result", "feedback", "scores", "issues", "intonation", "recognized_text"].includes(k)),
+      `★ 异步盲测：${blindTotal - 1} 句能在若干秒内全部评完（polling → done）`,
+      first9.length === blindTotal - 1 && first9.every((x) => x.status === "done"),
+      `statuses=${first9.map((x) => x.status).join(",")}`,
+    );
+
+    // 第 10 句：只提交、**立刻**结束（此时它还在后台评分）→ 检验 pending 口径
+    const lastSubmit = await submitBlind(ids[ids.length - 1]);
+    firstMs = lastSubmit.ms;
+    if (lastSubmit.r.json?.attempt_id) attemptIds.push(lastSubmit.r.json.attempt_id);
+
+    check("盲测 async 提交：HTTP 201", firstResponse?.status === 201, `status=${firstResponse?.status}`);
+    check(
+      "★ 盲测 async 提交响应 < 1.5s（不等评测）",
+      firstMs < 1500,
+      `${firstMs}ms（响应 ${JSON.stringify(lastSubmit.r.json)}）`,
+    );
+    check(
+      "★ 盲测 async 响应 blind=true / status=pending",
+      lastSubmit.r.json?.blind === true && lastSubmit.r.json?.status === "pending",
+      `blind=${lastSubmit.r.json?.blind} status=${lastSubmit.r.json?.status}`,
+    );
+    check(
+      "★ 响应里只有 attempt_id/blind/status/progress（没有分数）",
+      JSON.stringify(Object.keys(lastSubmit.r.json ?? {}).sort()) ===
+        '["attempt_id","blind","progress","status"]',
+      JSON.stringify(lastSubmit.r.json),
+    );
+    check(
+      `progress 区分已提交/已评分（submitted=${blindTotal}，done=已评分）`,
+      lastSubmit.r.json?.progress?.submitted === blindTotal &&
+        lastSubmit.r.json?.progress?.total === blindTotal &&
+        typeof lastSubmit.r.json?.progress?.done === "number",
+      JSON.stringify(lastSubmit.r.json?.progress),
+    );
+    check(
+      "盲测进行中不含 result / feedback / scores",
+      !("result" in (lastSubmit.r.json ?? {})) &&
+        !("feedback" in (lastSubmit.r.json ?? {})) &&
+        !("scores" in (lastSubmit.r.json ?? {})),
+      `keys=${Object.keys(lastSubmit.r.json ?? {}).join(",")}`,
+    );
+    check(
+      `全部 ${blindTotal} 句提交过程中出现过的字段里都没有分数/反馈键`,
+      ![...keysSeen].some((k) =>
+        ["result", "feedback", "scores", "issues", "intonation", "recognized_text"].includes(k),
+      ),
       [...keysSeen].join(","),
     );
     check("进行中不返回反馈（feedback 字段缺席）", !("feedback" in (firstResponse?.json ?? {})));
@@ -593,7 +667,7 @@ async function main() {
     const blindRecs = (hist.json?.attempts ?? []).filter((a) => a.blind_test_id === testId);
     check(
       "进行中的盲测记录在 /api/attempts 里被屏蔽（scores/issues/intonation/feedback 全为 null）",
-      blindRecs.length === 10 &&
+      blindRecs.length === blindTotal &&
         blindRecs.every(
           (a) => a.scores === null && (a.issues ?? []).length === 0 && a.intonation === null && a.feedback === null && a.pending === true,
         ),
@@ -639,9 +713,40 @@ async function main() {
       `practice=${girlMid?.today?.minutes} blind=${girlMid?.today?.blind_minutes}`,
     );
 
-    // 结束 → 分数才可读
+    // ★ 留 1 条 pending 时结束。
+    // mock provider 评分几乎是瞬时的（after() 立刻跑完），自然状态很难恰好留一条 pending，
+    // 所以这里把最后那条**临时标回 pending**（模拟"仍在后台排队"，与重启恢复的测试同一手法），
+    // 验完立刻恢复成 done，保证数据不被污染。
+    {
+      const Database = (await import("better-sqlite3")).default;
+      const dbPath = process.env.DB_PATH ?? new URL("../data/app.db", import.meta.url).pathname;
+      const db = new Database(dbPath);
+      db.prepare("UPDATE attempts SET status = 'pending', scored_at = NULL WHERE id = ?").run(
+        attemptIds[attemptIds.length - 1],
+      );
+      db.close();
+      console.log("   ↳ 已把最后 1 条临时标为 pending（模拟后台仍在评分）");
+    }
     const fin = await jsonFetch(`/api/blind-tests/${testId}/finish`, { method: "POST", cookie: girl.cookie });
-    check("finish 后分数可读（avg_pron 是数字）", fin.status === 200 && typeof fin.json?.avg_pron === "number", `avg_pron=${fin.json?.avg_pron}`);
+    console.log(`   ↳ 留 pending 时 finish 响应：${JSON.stringify(fin.json)}`);
+    check("★ 留 pending 时 finish 不崩（HTTP 200）", fin.status === 200, `status=${fin.status}`);
+    check(
+      "★ finish 口径：scored/pending 被透出（scored+pending = 已提交句数）",
+      typeof fin.json?.scored === "number" &&
+        typeof fin.json?.pending === "number" &&
+        fin.json.scored + fin.json.pending === blindTotal,
+      `scored=${fin.json?.scored} pending=${fin.json?.pending}`,
+    );
+    check(
+      "★ avg_pron 只基于已评分记录（非 null，不是 0 冒充）",
+      typeof fin.json?.avg_pron === "number" && fin.json.avg_pron > 0,
+      `avg_pron=${fin.json?.avg_pron}（已评分 ${fin.json?.scored} 条）`,
+    );
+    check(
+      "finish 给出明确提示（还有 N 条在后台评分）",
+      typeof fin.json?.notice === "string" && /后台评分/.test(fin.json.notice),
+      fin.json?.notice ?? "",
+    );
     check(
       "finish 汇总含 accuracy/fluency/语调差异",
       typeof fin.json?.avg_accuracy === "number" &&
@@ -650,21 +755,49 @@ async function main() {
       `acc=${fin.json?.avg_accuracy} flu=${fin.json?.avg_fluency} dtw=${fin.json?.avg_intonation_distance}`,
     );
     check(
-      weeksBefore === 0 ? "首次盲测没有上一次可比（previous=null, delta=null）" : "非首次盲测：previous 指向上一次、delta 是数字",
+      weeksBefore === 0
+        ? "首次盲测没有上一次可比（previous=null, delta=null）"
+        : "非首次盲测：previous 存在，delta 口径一致（上一次无已评分数据时 delta 为 null）",
       weeksBefore === 0
         ? fin.json?.previous === null && fin.json?.delta_pron === null
-        : typeof fin.json?.previous?.avg_pron === "number" && typeof fin.json?.delta_pron === "number",
+        : Boolean(fin.json?.previous) &&
+            (typeof fin.json?.previous?.avg_pron === "number"
+              ? typeof fin.json?.delta_pron === "number"
+              : fin.json?.delta_pron === null),
       `weeksBefore=${weeksBefore} prev=${fin.json?.previous?.avg_pron ?? "null"} delta=${fin.json?.delta_pron}`,
     );
-    const firstAvg = fin.json?.avg_pron;
 
-    // 第二次盲测 → 周环比
+    // 周报页面（此时还有 1 条待评分）：必须能看到「待评分 / 评分中」提示
+    const reportPendingHtml = await (await fetch(`${BASE}/blindtest/report`, { headers: { cookie: girl.cookie } })).text();
+    check(
+      "★ 周报页面在有待评分条目时显示「待评分/评分中」",
+      /待评分/.test(reportPendingHtml) && /评分中|评分失败/.test(reportPendingHtml),
+      `testid banner=${reportPendingHtml.includes('data-testid="blind-pending-banner"')}`,
+    );
+
+    const firstAvg = fin.json?.avg_pron;
+    // 恢复那条被临时标成 pending 的记录（模拟结束，回到真实状态）
+    {
+      const Database = (await import("better-sqlite3")).default;
+      const dbPath = process.env.DB_PATH ?? new URL("../data/app.db", import.meta.url).pathname;
+      const db = new Database(dbPath);
+      db.prepare("UPDATE attempts SET status = 'done', scored_at = ? WHERE id = ?").run(
+        new Date().toISOString(),
+        attemptIds[attemptIds.length - 1],
+      );
+      db.close();
+    }
+    // 等最后一条后台评完（不影响已写入的 finish 结果）
+    await waitScored(attemptIds, 120000);
+
+    // 第二次盲测 → 周环比（全部评完再结束）
     const start2 = await jsonFetch("/api/blind-tests", { method: "POST", cookie: girl.cookie });
     check(
       "第二次盲测复用同一组句子（固定一组）",
       JSON.stringify(start2.json?.sentence_ids) === JSON.stringify(start.json?.sentence_ids),
       `total=${start2.json?.total}`,
     );
+    const attemptIds2 = [];
     for (const sid of start2.json?.sentence_ids ?? []) {
       const form = new FormData();
       // 故意用更短的录音：voice mock 的 pron 只由文本决定，但 fluency/语调会随音频变化，
@@ -674,29 +807,54 @@ async function main() {
       form.append("reference_text", textById.get(sid));
       form.append("mode", "scripted");
       form.append("blind_test_id", start2.json.blind_test_id);
-      await jsonFetch("/api/attempts", { method: "POST", cookie: girl.cookie, body: form });
+      const r = await jsonFetch("/api/attempts/async", { method: "POST", cookie: girl.cookie, body: form });
+      if (r.json?.attempt_id) attemptIds2.push(r.json.attempt_id);
     }
+    const all2 = await waitScored(attemptIds2);
+    check(
+      `★ 第二次盲测 ${blindTotal} 句全部评完（polling）`,
+      all2.length === blindTotal && all2.every((x) => x.status === "done"),
+      `statuses=${all2.map((x) => x.status).join(",")}`,
+    );
     const fin2 = await jsonFetch(`/api/blind-tests/${start2.json.blind_test_id}/finish`, {
       method: "POST",
       cookie: girl.cookie,
     });
     check(
+      "★ 全部评完后 finish：scored=10、pending=0、avg_pron 非 null",
+      fin2.json?.scored === blindTotal &&
+        fin2.json?.pending === 0 &&
+        typeof fin2.json?.avg_pron === "number",
+      `scored=${fin2.json?.scored} pending=${fin2.json?.pending} avg=${fin2.json?.avg_pron}`,
+    );
+    check(
       "第二次 finish 给出与上一次的差值（delta_pron 是数字，previous 指向上一次）",
       typeof fin2.json?.delta_pron === "number" && fin2.json?.previous?.avg_pron === firstAvg,
       `this=${fin2.json?.avg_pron} prev=${fin2.json?.previous?.avg_pron} delta_pron=${fin2.json?.delta_pron}`,
     );
-    check(
-      "★ 差值计算有真实变化（第二次录音更短 → delta_fluency ≠ 0）",
-      typeof fin2.json?.delta_fluency === "number" && fin2.json?.delta_fluency !== 0,
-      `this_flu=${fin2.json?.avg_fluency} prev_flu=${fin2.json?.previous?.avg_fluency} delta_flu=${fin2.json?.delta_fluency}`,
-    );
+    {
+      const voiceMode = (await (await fetch(`${VOICE}/v1/health`)).json().catch(() => null))?.mode ?? "unknown";
+      if (voiceMode === "mock") {
+        console.log(
+          `   ⏭ SKIP：delta_fluency 非零断言（mock provider 的分数是确定性的、不随音频长度变化；真实 provider 才会出现差值）`,
+        );
+      } else {
+        check(
+          "★ 差值计算有真实变化（第二次录音更短 → delta_fluency ≠ 0）",
+          typeof fin2.json?.delta_fluency === "number" && fin2.json?.delta_fluency !== 0,
+          `this_flu=${fin2.json?.avg_fluency} prev_flu=${fin2.json?.previous?.avg_fluency} delta_flu=${fin2.json?.delta_fluency}`,
+        );
+      }
+    }
 
     const list = await jsonFetch("/api/blind-tests", { cookie: girl.cookie });
     check(
       "GET /api/blind-tests 趋势字段齐全（current/previous/delta_pron/weeks）",
       list.json?.trend?.weeks === weeksBefore + 2 &&
-        typeof list.json?.trend?.delta_pron === "number" &&
-        list.json?.trend?.previous?.avg_pron === firstAvg,
+        list.json?.trend?.current?.avg_pron === fin2.json?.avg_pron &&
+        (typeof firstAvg === "number"
+          ? list.json?.trend?.previous?.avg_pron === firstAvg
+          : list.json?.trend?.previous?.avg_pron == null),
       JSON.stringify(list.json?.trend),
     );
     check(

@@ -94,6 +94,8 @@ export interface PendingAttemptInput {
   audio: { data: Uint8Array; mime: string };
   durationMs: number | null;
   source: "corpus" | "custom";
+  /** 盲测批次（task-33）：有值时 is_blind=1、盲测进行中不生成反馈、不写掌握度/SRS */
+  blindTestId?: string | null;
 }
 
 /** 只做"存音频 + 写 pending 行"，不做任何评测（保证接口快速返回） */
@@ -131,7 +133,8 @@ export async function createPendingAttempt(input: PendingAttemptInput): Promise<
     refAudioUrl: null,
     durationMs: input.durationMs,
     warningsJson: "[]",
-    isBlind: 0,
+    isBlind: input.blindTestId ? 1 : 0,
+    blindTestId: input.blindTestId ?? null,
     status: "pending",
     scoredAt: null,
     error: null,
@@ -156,6 +159,7 @@ export async function scoreAttempt(attemptId: string): Promise<void> {
     if (!abs || !fs.existsSync(abs)) throw new Error("录音文件不存在");
     const data = new Uint8Array(fs.readFileSync(abs));
 
+    const blind = row.isBlind === 1;
     const caps = await getCapabilities();
     // 按落盘扩展名还原真实 MIME（不能一律写成 webm：voice 会按声明格式选解码器）
     const ext = (row.audioPath ?? "").split(".").pop()?.toLowerCase() ?? "webm";
@@ -172,7 +176,8 @@ export async function scoreAttempt(attemptId: string): Promise<void> {
 
     const result: PronounceResult = await callPronounce(form);
 
-    let feedback: FeedbackResult;
+    let feedback: FeedbackResult | null = null;
+    if (!blind)
     try {
       feedback = await callFeedback({
         reference_text: result.reference_text,
@@ -204,7 +209,7 @@ export async function scoreAttempt(attemptId: string): Promise<void> {
         scoresJson: JSON.stringify(result.scores),
         issuesJson: JSON.stringify(result.issues ?? []),
         intonationJson: JSON.stringify(result.intonation ?? null),
-        feedbackJson: JSON.stringify(feedback),
+        feedbackJson: blind ? null : JSON.stringify(feedback),
         refAudioUrl: result.intonation?.reference_audio_url ?? null,
         durationMs: result.duration_ms,
         warningsJson: JSON.stringify(result.warnings ?? []),
@@ -213,11 +218,14 @@ export async function scoreAttempt(attemptId: string): Promise<void> {
       .where(eq(attempts.id, attemptId));
 
     // 逐音素明细 + 掌握度 + 错音卡片（见文件头"SRS/掌握度的取舍"）
-    await persistEvaluationDetails({ user, attemptId, result, createdAt: row.createdAt });
+    // 盲测：**不写**（契约 §13.3 第 2 条：is_blind 不参与 phoneme_mastery / 趋势 / SRS）
+    if (!blind) {
+      await persistEvaluationDetails({ user, attemptId, result, createdAt: row.createdAt });
+    }
 
     await recordPracticeTime({
       userId: user.id,
-      kind: "pronounce",
+      kind: blind ? "blindtest" : "pronounce",
       id: attemptId,
       minutes: result.duration_ms / 60_000,
       itemCount: 1,

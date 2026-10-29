@@ -7,7 +7,7 @@
  *   3) 抽题必须来自"该学习者练过的语料"，并且固定同一组句子（才能和上周比）。
  */
 import { createHash } from "node:crypto";
-import { and, asc, desc, eq, inArray, isNotNull, isNull } from "drizzle-orm";
+import { and, asc, desc, eq, inArray, isNotNull, isNull, sql } from "drizzle-orm";
 import { getDb } from "@/db";
 import { attempts, blindTests, sentences } from "@/db/schema";
 import { HttpError, type SessionUser } from "./auth";
@@ -151,16 +151,24 @@ export async function requireOpenBlindTest(user: SessionUser, blindTestId: strin
   return toView(row);
 }
 
+/**
+ * 盲测进度（task-33 异步口径）：
+ *   - `done` = **已评分数**（status='done'）
+ *   - `submitted` = 已提交条数（含评分中/失败）
+ *   - `pending` = 未评完条数（pending/scoring/failed）
+ */
 export async function blindProgress(
   blindTestId: string,
   total: number,
-): Promise<{ done: number; total: number }> {
+): Promise<{ done: number; total: number; submitted: number; pending: number }> {
   const db = getDb();
   const rows = await db
-    .select({ id: attempts.id })
+    .select({ id: attempts.id, status: attempts.status })
     .from(attempts)
     .where(and(eq(attempts.blindTestId, blindTestId), eq(attempts.isBlind, 1)));
-  return { done: rows.length, total };
+  const submitted = rows.length;
+  const done = rows.filter((r) => r.status === "done").length;
+  return { done, total, submitted, pending: submitted - done };
 }
 
 function round1(v: number | null): number | null {
@@ -181,19 +189,30 @@ function safeArray(raw: string): string[] {
   }
 }
 
-/** 用盲测批次的 attempts 计算平均分（只统计已提交的句子）。 */
+/**
+ * 用盲测批次的 attempts 计算平均分。
+ * **只统计 status='done'（已评分）的记录** —— 未评完的不参与平均，也不当作 0 分（task-33）。
+ */
 export async function computeBlindAverages(blindTestId: string): Promise<{
   submitted: number;
+  scored: number;
+  pending: number;
   avgPron: number | null;
   avgAccuracy: number | null;
   avgFluency: number | null;
   avgIntonationDistance: number | null;
 }> {
   const db = getDb();
-  const rows = await db
-    .select({ scoresJson: attempts.scoresJson, intonationJson: attempts.intonationJson })
+  const allRows = await db
+    .select({
+      id: attempts.id,
+      status: attempts.status,
+      scoresJson: attempts.scoresJson,
+      intonationJson: attempts.intonationJson,
+    })
     .from(attempts)
     .where(and(eq(attempts.blindTestId, blindTestId), eq(attempts.isBlind, 1)));
+  const rows = allRows.filter((r) => r.status === "done");
 
   const pron: number[] = [];
   const accuracy: number[] = [];
@@ -221,7 +240,9 @@ export async function computeBlindAverages(blindTestId: string): Promise<{
   }
 
   return {
-    submitted: rows.length,
+    submitted: allRows.length,
+    scored: rows.length,
+    pending: allRows.length - rows.length,
     avgPron: avg(pron),
     avgAccuracy: avg(accuracy),
     avgFluency: avg(fluency),
@@ -236,11 +257,14 @@ export async function finishBlindTest(user: SessionUser, blindTestId: string) {
   if (!row || row.userId !== user.id) throw new HttpError(404, "not_found", "盲测批次不存在");
 
   let view = toView(row);
+  let lastStats: Awaited<ReturnType<typeof computeBlindAverages>> | null = null;
   if (!row.endedAt) {
     const stats = await computeBlindAverages(blindTestId);
     if (stats.submitted === 0) {
       throw new HttpError(409, "no_attempts", "这次盲测还没有提交任何一句，无法结束");
     }
+    // 异步评分：未评完的条目不参与平均（avg_* 保持 null，不返回 0 冒充数据）
+    lastStats = stats;
     const endedAt = new Date().toISOString();
     await db
       .update(blindTests)
@@ -273,13 +297,26 @@ export async function finishBlindTest(user: SessionUser, blindTestId: string) {
   const delta = (a: number | null, b: number | null) =>
     a !== null && b !== null ? round1(a - b) : null;
 
+  const stats = lastStats ?? (await computeBlindAverages(blindTestId));
+  const notice =
+    stats.scored === 0
+      ? `本次没有任何一条评完的句子（已提交 ${stats.submitted} 条，其中 ${stats.pending} 条仍在后台评分/失败），所以平均分暂缺；等评分完成后再看报告。`
+      : stats.pending > 0
+        ? `有 ${stats.pending} 条仍在后台评分，本次平均分只基于已评完的 ${stats.scored} 条。`
+        : null;
+
   return {
     blind_test_id: view.id,
     user_id: view.user_id,
     started_at: view.started_at,
     ended_at: view.ended_at,
     item_count: view.item_count,
-    submitted: view.item_count,
+    submitted: stats.submitted,
+    /** 已评分数（avg_* 的口径：只基于这些） */
+    scored: stats.scored,
+    /** 未评完数（含 pending/scoring/failed）；>0 时 avg_* 只代表已评完部分 */
+    pending: stats.pending,
+    notice,
     avg_pron: view.avg_pron,
     avg_accuracy: view.avg_accuracy,
     avg_fluency: view.avg_fluency,
@@ -312,7 +349,31 @@ export async function listBlindTests(userId: string) {
     .from(blindTests)
     .where(eq(blindTests.userId, userId))
     .orderBy(desc(blindTests.startedAt));
-  const tests = rows.map(toView);
+  // 每个批次的评分进度（异步口径）：scored = 已评分条数，pending = 未评完条数
+  const counts = await db
+    .select({
+      blindTestId: attempts.blindTestId,
+      status: attempts.status,
+      c: sql<number>`count(*)`,
+    })
+    .from(attempts)
+    .where(and(eq(attempts.userId, userId), eq(attempts.isBlind, 1)))
+    .groupBy(attempts.blindTestId, attempts.status);
+  const scoredById = new Map<string, number>();
+  const pendingById = new Map<string, number>();
+  for (const row of counts) {
+    const id = row.blindTestId;
+    if (!id) continue;
+    const n = Number(row.c);
+    if (row.status === "done") scoredById.set(id, (scoredById.get(id) ?? 0) + n);
+    else pendingById.set(id, (pendingById.get(id) ?? 0) + n);
+  }
+  const withCounts = (t: ReturnType<typeof toView>) => ({
+    ...t,
+    scored: scoredById.get(t.id) ?? 0,
+    pending: pendingById.get(t.id) ?? 0,
+  });
+  const tests = rows.map(toView).map(withCounts);
   const finished = tests.filter((t) => t.ended_at !== null);
   const current = finished[0] ?? null;
   const previous = finished[1] ?? null;
@@ -323,6 +384,8 @@ export async function listBlindTests(userId: string) {
     user_id: userId,
     tests,
     in_progress: tests.find((t) => t.ended_at === null) ?? null,
+    /** 所有未评完的盲测条目总数（周报顶部「待评分 N 条」） */
+    pending_total: [...pendingById.values()].reduce((a, b) => a + b, 0),
     trend: {
       current: current
         ? {
