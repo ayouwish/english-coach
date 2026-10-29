@@ -6,6 +6,7 @@ import { Recorder } from "@/components/Recorder";
 import { FeedbackCard, IssuesSection } from "@/components/ResultSections";
 import { ScoreRadar } from "@/components/ScoreRadar";
 import { WordBars } from "@/components/WordBars";
+import { drawRandomSentences } from "@/lib/random-pick";
 import { splitSentences } from "@/lib/sentence-split";
 import type { FeedbackResult, PronounceIssue, PronounceResult } from "@/lib/types";
 
@@ -63,6 +64,9 @@ export function FlowClient({
   const [level, setLevel] = useState(userLevel || "A1");
   const [start, setStart] = useState(0);
   const [count, setCount] = useState(5);
+  /** 🎲 随机抽句（task-31）：结果只在事件回调里生成并存 state，**绝不在 render 里随机** */
+  const [randomMode, setRandomMode] = useState(false);
+  const [randomPick, setRandomPick] = useState<CorpusSentence[] | null>(null);
   const [customText, setCustomText] = useState("");
   const [customSentences, setCustomSentences] = useState<string[]>([]);
   const [items, setItems] = useState<FlowItem[]>([]);
@@ -319,11 +323,28 @@ export function FlowClient({
   }
 
   const levels = useMemo(() => [...new Set(corpus.map((s) => s.level))].sort(), [corpus]);
-  const levelSentences = useMemo(() => corpus.filter((s) => s.level === level), [corpus, level]);
-  const preview = useMemo(
-    () => levelSentences.slice(start, start + count),
-    [levelSentences, start, count],
+  // level === "" 表示「全部」（随机时从 300 句里抽；非随机时按 sort_order 全量再 slice）
+  const levelSentences = useMemo(
+    () => (level === "" ? corpus : corpus.filter((s) => s.level === level)),
+    [corpus, level],
   );
+  const preview = useMemo(
+    () => (randomMode && randomPick ? randomPick : levelSentences.slice(start, start + count)),
+    [randomMode, randomPick, levelSentences, start, count],
+  );
+
+  /** 抽一批（只在事件回调里调用：切换随机 / 换一批 / 改级别 / 改条数） */
+  function drawRandom(nextCount: number = count, nextLevel: string = level) {
+    const pool = nextLevel === "" ? corpus : corpus.filter((s) => s.level === nextLevel);
+    setRandomPick(drawRandomSentences(pool, nextCount));
+  }
+
+  function toggleRandom() {
+    const next = !randomMode;
+    setRandomMode(next);
+    if (next) drawRandom();
+    else setRandomPick(null); // 关闭：回到确定的 start/count 行为
+  }
 
   function startCorpus() {
     if (preview.length === 0) {
@@ -818,9 +839,12 @@ export function FlowClient({
                   级别
                   <select
                     value={level}
+                    data-testid="corpus-level"
                     onChange={(e) => {
-                      setLevel(e.target.value);
+                      const next = e.target.value;
+                      setLevel(next);
                       setStart(0);
+                      if (randomMode) drawRandom(count, next);
                     }}
                     className="rounded-xl border border-[#d9dcf0] px-2 py-1"
                   >
@@ -829,25 +853,34 @@ export function FlowClient({
                         {l}
                       </option>
                     ))}
+                    <option value="">全部（{corpus.length} 句）</option>
                   </select>
                 </label>
-                <label className="flex items-center gap-2">
-                  从第
-                  <input
-                    type="number"
-                    min={0}
-                    max={Math.max(0, levelSentences.length - 1)}
-                    value={start}
-                    onChange={(e) => setStart(Math.max(0, Number(e.target.value) || 0))}
-                    className="w-16 rounded-xl border border-[#d9dcf0] px-2 py-1"
-                  />
-                  句开始
-                </label>
+                {!randomMode ? (
+                  <label className="flex items-center gap-2" data-testid="corpus-start-label">
+                    从第
+                    <input
+                      type="number"
+                      min={0}
+                      max={Math.max(0, levelSentences.length - 1)}
+                      value={start}
+                      onChange={(e) => setStart(Math.max(0, Number(e.target.value) || 0))}
+                      className="w-16 rounded-xl border border-[#d9dcf0] px-2 py-1"
+                      data-testid="corpus-start-input"
+                    />
+                    句开始
+                  </label>
+                ) : null}
                 <label className="flex items-center gap-2">
                   读
                   <select
                     value={count}
-                    onChange={(e) => setCount(Number(e.target.value))}
+                    data-testid="corpus-count"
+                    onChange={(e) => {
+                      const n = Number(e.target.value);
+                      setCount(n);
+                      if (randomMode) drawRandom(n, level);
+                    }}
                     className="rounded-xl border border-[#d9dcf0] px-2 py-1"
                   >
                     {COUNTS.map((n) => (
@@ -858,10 +891,38 @@ export function FlowClient({
                   </select>
                   句
                 </label>
+                <button
+                  type="button"
+                  data-testid="corpus-random-toggle"
+                  aria-pressed={randomMode}
+                  aria-label={randomMode ? "关闭随机抽句" : "开启随机抽句"}
+                  onClick={toggleRandom}
+                  className={`ec-btn ${randomMode ? "ec-btn-primary" : "ec-btn-ghost"}`}
+                >
+                  🎲 {isChild ? "随机来几句" : "随机"}
+                </button>
+                {randomMode ? (
+                  <button
+                    type="button"
+                    data-testid="corpus-reshuffle"
+                    aria-label="换一批随机句子"
+                    onClick={() => drawRandom()}
+                    className="ec-btn ec-btn-ghost"
+                  >
+                    🔀 换一批
+                  </button>
+                ) : null}
               </div>
+              {randomMode ? (
+                <p className="text-xs text-[var(--ec-muted)]" data-testid="corpus-random-hint">
+                  {isChild
+                    ? "每次都随机来几句，不会重复；想换就点「🔀 换一批」。"
+                    : "从当前级别的句子里随机抽取、不重复；点「🔀 换一批」重新抽。"}
+                </p>
+              ) : null}
               <ol className="list-decimal pl-6 text-sm" data-testid="flow-preview">
                 {preview.map((s) => (
-                  <li key={s.id} className="py-0.5">
+                  <li key={s.id} className="py-0.5" data-testid="corpus-preview-item" data-id={s.id}>
                     {s.text}
                   </li>
                 ))}

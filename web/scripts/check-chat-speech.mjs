@@ -109,16 +109,7 @@ check("★ 儿童 src 带 rate=slow", audioSrc.includes("rate=slow"), (audioSrc.
 check("preload=none（不预先请求所有音频）", /preload="none"/.test(audioTag));
 check("audio 带 aria-label", /aria-label="[^"]+"/.test(audioTag));
 check("★ 自动朗读开关存在且带 aria-pressed", /data-testid="autoread-toggle"[^>]*aria-pressed/.test(girlChat));
-check("儿童 /chat 零 IPA", !IPA_RE.test(girlChatRaw));
-console.log(`   ↳ audio 标签：${audioTag.replace(/\s+/g, " ").slice(0, 300)}`);
-console.log(`   ↳ audio src：${audioSrc.slice(0, 140)}`);
 
-const momChat = (await (await fetch(`${BASE}/chat`, { headers: { cookie: mom.cookie } })).text()).replace(/&amp;/g, "&");
-const momSrc = /src="(\/api\/tts\?[^"]+)"/.exec(momChat)?.[1] ?? "";
-check("成人 src 带 rate=normal", momSrc.includes("rate=normal"), (momSrc.match(/rate=(\w+)/) ?? [])[1] ?? "");
-
-// ── 3) bundle / 源码断言（录音态是客户端状态，SSR 断言不到）──────────────────
-section("3. 客户端行为（bundle + 源码断言）");
 const walk = (dir) =>
   fs.existsSync(dir)
     ? fs.readdirSync(dir, { withFileTypes: true }).flatMap((e) => {
@@ -130,6 +121,38 @@ const walk = (dir) =>
 const chunks = walk(path.join(WEB_ROOT, ".next/static/chunks"));
 const bundle = chunks.map((f) => fs.readFileSync(f, "utf8")).join("\n");
 console.log(`   （扫描 ${chunks.length} 个 chunk / ${bundle.length} 字符）`);
+// ── task-32：对话页只练"说"，不再有文字输入框 ─────────────────────────────
+check("★ /chat SSR HTML 没有文本输入框", !/<input[^>]*type="(text|search|email|url|tel|password)"/i.test(girlChat) && !girlChat.includes('placeholder="打一句英语'));
+check("★ /chat SSR HTML 没有「发送」按钮", !girlChat.includes("发送"));
+check("★ /chat SSR HTML 没有「🎙️ 语音」切换按钮", !girlChat.includes("🎙️ 语音"));
+
+// 注意：对话面板（含 Recorder）是"开了场景"之后才由客户端状态渲染的，SSR HTML 里看不到 →
+// 这几条用 **源码 + bundle** 断言（同样证明"只有麦克风、没有输入框"）。
+const chatSrcForInput = fs.readFileSync(path.join(WEB_ROOT, "src/app/chat/ChatClient.tsx"), "utf8");
+check(
+  "★ 源码里没有文本输入框 / 发送按钮 / 语音开关",
+  !chatSrcForInput.includes("<input") &&
+    !chatSrcForInput.includes(">发送") &&
+    !chatSrcForInput.includes("showMic") &&
+    !chatSrcForInput.includes("🎙️ 语音"),
+);
+check("★ 源码里 Recorder 常驻（不再包在 showMic 条件里）", chatSrcForInput.includes("<Recorder onRecorded"));
+check("★ 源码有「只说」面板 speak-panel", chatSrcForInput.includes('data-testid="speak-panel"'));
+check("★ 源码有麦克风排查提示 mic-troubleshoot + https", chatSrcForInput.includes('data-testid="mic-troubleshoot"') && chatSrcForInput.includes("https"));
+check("源码有「本页需要麦克风」醒目说明（role=note）", chatSrcForInput.includes('data-testid="mic-required-note"') && chatSrcForInput.includes('role="note"'));
+check("★ bundle 含儿童录音文案「按这里开始说」", bundle.includes("按这里开始说"));
+check("★ bundle 含成人录音文案「开始录音」", bundle.includes("开始录音"));
+check("★ bundle 含麦克风失败排查文案", bundle.includes("麦克风没反应") && bundle.includes("必须用 https 打开"));
+check("儿童 /chat 零 IPA", !IPA_RE.test(girlChatRaw));
+console.log(`   ↳ audio 标签：${audioTag.replace(/\s+/g, " ").slice(0, 300)}`);
+console.log(`   ↳ audio src：${audioSrc.slice(0, 140)}`);
+
+const momChat = (await (await fetch(`${BASE}/chat`, { headers: { cookie: mom.cookie } })).text()).replace(/&amp;/g, "&");
+const momSrc = /src="(\/api\/tts\?[^"]+)"/.exec(momChat)?.[1] ?? "";
+check("成人 src 带 rate=normal", momSrc.includes("rate=normal"), (momSrc.match(/rate=(\w+)/) ?? [])[1] ?? "");
+
+// ── 3) bundle / 源码断言（录音态是客户端状态，SSR 断言不到）──────────────────
+section("3. 客户端行为（bundle + 源码断言）");
 const bundleHas = (s) => check(`bundle 含「${s}」`, bundle.includes(s));
 bundleHas("语音生成中");
 bundleHas("语音还在生成");

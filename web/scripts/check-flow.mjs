@@ -343,6 +343,63 @@ try {
     check("★ capabilities.ocr=false 时按钮置灰 + 明确提示", flowHtml2.includes('data-testid="ocr-unavailable"') && /未启用/.test(flowHtml2));
   }
 
+  // ── 7) 🎲 随机抽句（task-31）──────────────────────────────────────────────
+  const flowRandom = await fetch(`${BASE}/flow`, { headers: { cookie: girl } });
+  const flowRandomHtml = await flowRandom.text();
+  check("★ /flow 含「🎲 随机」入口（corpus-random-toggle）", flowRandomHtml.includes('data-testid="corpus-random-toggle"'));
+  check("随机入口有 aria-pressed（可访问性/状态可断言）", /data-testid="corpus-random-toggle"[^>]*aria-pressed/.test(flowRandomHtml));
+  check("★ 预览条目带 corpus-preview-item（初始为确定的固定 slice）", flowRandomHtml.includes('data-testid="corpus-preview-item"'));
+  check(
+    "★ 非随机模式（初始）不出现「🔀 换一批」—— 回归保护",
+    !flowRandomHtml.includes('data-testid="corpus-reshuffle"'),
+  );
+  check(
+    "非随机模式保留「从第 N 句」输入",
+    flowRandomHtml.includes('data-testid="corpus-start-input"') && /从第/.test(flowRandomHtml),
+  );
+  check("级别下拉有「全部」选项", /value=""[^>]*>[^<]*全部/.test(flowRandomHtml) || flowRandomHtml.includes("全部（300 句）"));
+
+  // 同一页面连续渲染两次：初始 preview 必须完全一致（没有 render 期随机）
+  const flowRandomHtml2 = await (await fetch(`${BASE}/flow`, { headers: { cookie: girl } })).text();
+  const previewOf = (html) => (html.match(/<li[^>]*data-testid="corpus-preview-item"[^>]*>[\s\S]*?<\/li>/g) ?? []).join("");
+  const p1 = previewOf(flowRandomHtml);
+  const p2 = previewOf(flowRandomHtml2);
+  check(
+    "★ SSR 两次渲染的预览完全相同（render 期间没有随机 → 不会 hydration mismatch）",
+    p1.length > 0 && p1 === p2,
+    `len=${p1.length}`,
+  );
+
+  // 随机抽句的**逻辑**断言（直接调用实现，可复现随机源）
+  const { drawRandomSentences, seededRng } = await import("../src/lib/random-pick.ts");
+  const sentsRes = await fetch(`${BASE}/api/sentences`, { headers: { cookie: girl } });
+  const sents = (await sentsRes.json()).sentences ?? [];
+  check("语料池 = 300 句", sents.length === 300, `count=${sents.length}`);
+  const draw5 = drawRandomSentences(sents, 5, seededRng(42));
+  const draw15 = drawRandomSentences(sents, 15, seededRng(7));
+  const all = drawRandomSentences(sents, 300, seededRng(1));
+  const uniq = new Set(draw15.map((x) => x.id));
+  console.log(`   ↳ 抽 5：[${draw5.map((x) => x.id).join(", ")}]`);
+  check("★ 随机抽 5 句：条数正确且无重复", draw5.length === 5 && new Set(draw5.map((x) => x.id)).size === 5);
+  check("★ 随机抽 15 句：无重复（Set 大小 = 15）", draw15.length === 15 && uniq.size === 15, `unique=${uniq.size}`);
+  check("抽 300 句 = 全量且不重复（洗牌正确）", all.length === 300 && new Set(all.map((x) => x.id)).size === 300);
+  check("抽超过池子大小 → 截断为池子大小", drawRandomSentences(sents.slice(0, 3), 10, seededRng(2)).length === 3);
+  check("抽到的句子都来自池子", draw5.every((x) => sents.some((c) => c.id === x.id)));
+  const a = drawRandomSentences(sents, 10, seededRng(11)).map((x) => x.id).join(",");
+  const b = drawRandomSentences(sents, 10, seededRng(12)).map((x) => x.id).join(",");
+  check("不同随机源抽出的这一批不同（真的在抽，不是固定 slice）", a !== b);
+
+  // 结构性保证：组件里不出现 Math.random（随机只在事件回调里调用 lib）
+  const flowSrc = fs.readFileSync(path.join(WEB_ROOT, "src/app/flow/FlowClient.tsx"), "utf8");
+  check("★ FlowClient 源码里没有 Math.random / 渲染期洗牌", !flowSrc.includes("Math.random") && !flowSrc.includes("shuffle("));
+  check(
+    "随机抽取只在事件回调里触发（toggleRandom / drawRandom 定义存在）",
+    flowSrc.includes("function drawRandom(") && flowSrc.includes("onClick={() => drawRandom()}"),
+  );
+
+  // bundle 文案
+  check("bundle 含「换一批」与儿童文案「随机来几句」", bundleText.includes("换一批") && bundleText.includes("随机来几句"));
+
   // ── 4) 重启恢复：改成 scoring → 新进程启动触发 bootstrap → failed ─────────
   const db3 = new Database(DB_PATH);
   db3.prepare("UPDATE attempts SET status = 'scoring', error = NULL WHERE id = ?").run(corpusId);

@@ -79,7 +79,6 @@ export function ChatClient({
   const [active, setActive] = useState<ScenarioItem | null>(null);
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [messages, setMessages] = useState<Message[]>([]);
-  const [input, setInput] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [limitMessage, setLimitMessage] = useState<string | null>(null);
@@ -89,8 +88,6 @@ export function ChatClient({
   const [degradedLlm, setDegradedLlm] = useState(false);
   const [usage, setUsage] = useState(initialUsage);
   const [done, setDone] = useState(false);
-  // 儿童默认展开语音输入：孩子不用找按钮（task-18 #10）
-  const [showMic, setShowMic] = useState(isChild);
   const listEndRef = useRef<HTMLDivElement | null>(null);
 
   // ── 语音朗读：以**原生 <audio controls>** 为主路径（task-19 修"没声音"）────
@@ -267,7 +264,6 @@ export function ChatClient({
     stopAllAudio();
     setBusy(true);
     setError(null);
-    setInput("");
     const assistantIndex = messages.length + 1; // 用户消息后的那条
     setMessages((prev) => [...prev, { role: "user", text, audioUrl: audioUrl ?? null }]);
     try {
@@ -581,38 +577,45 @@ export function ChatClient({
                 </div>
               ) : null}
 
-              <form
-                className="mt-3 flex flex-wrap items-center gap-2"
-                onSubmit={(e) => {
-                  e.preventDefault();
-                  send(input);
-                }}
-              >
-                <input
-                  value={input}
-                  onChange={(e) => setInput(e.target.value)}
-                  placeholder={isChild ? "打一句英语，或者点上面的句子" : "Type your reply in English…"}
-                  className="min-w-0 flex-1 rounded-xl border border-[#d9dcf0] px-3 py-2"
-                  disabled={busy}
-                />
-                <button type="submit" className="ec-btn ec-btn-primary" disabled={busy || !input.trim()}>
-                  发送
-                </button>
-                <button
-                  type="button"
-                  className="ec-btn ec-btn-ghost"
-                  onClick={() => setShowMic((v) => !v)}
-                  disabled={busy}
-                >
-                  🎙️ 语音
-                </button>
-              </form>
-
-              {showMic ? (
-                <div className="mt-2 rounded-xl bg-[#f8f9ff] p-3">
+              {/* 对话练习只练"说"：保留录音，不要文字输入框（task-32） */}
+              <div className="mt-3 rounded-xl bg-[#f8f9ff] p-3" data-testid="speak-panel">
+                <p className={isChild ? "text-lg font-extrabold" : "text-sm font-extrabold"}>
+                  🎤 {isChild ? "直接说出来就好 🙂" : "说英语（开口练习）"}
+                </p>
+                <p className="mt-1 text-xs text-[var(--ec-muted)]">
+                  {isChild
+                    ? "点一下大按钮，看到「说完啦」就可以开始说英语啦；说完再点一次。"
+                    : "点下面的按钮开始录音，说完再点一次停止；不需要打字，练的就是开口说。"}
+                </p>
+                <div className="mt-2">
                   <Recorder onRecorded={(blob) => voiceToText(blob)} disabled={busy} isChild={isChild} />
                 </div>
-              ) : null}
+                {busy ? (
+                  <p className="mt-2 text-sm text-[var(--ec-muted)]" data-testid="speak-busy">
+                    {isChild ? "听到啦，正在想怎么回你… ⏳" : "识别 / 回复中…请稍候 ⏳"}
+                  </p>
+                ) : null}
+              </div>
+
+              {/* 没有文字输入框了 → 麦克风不可用时必须给可操作的排查步骤（不许静默） */}
+              <p
+                className="mt-2 rounded-xl bg-[#fff3d6] p-3 text-xs text-[#7a4d00]"
+                data-testid="mic-required-note"
+                role="note"
+              >
+                🎤 本页需要<strong>麦克风</strong>才能对话（没有输入框）。如果点了没反应，请展开下面的排查步骤。
+              </p>
+              <details className="mt-2 rounded-xl bg-white p-3 text-xs" data-testid="mic-troubleshoot">
+                <summary className="cursor-pointer font-semibold text-[#7a4d00]">
+                  麦克风没反应？点这里看排查步骤
+                </summary>
+                <ol className="mt-2 list-decimal space-y-1 pl-5 text-[var(--ec-muted)]">
+                  <li>浏览器地址栏左侧点锁图标 → 把「麦克风」设为「允许」，然后刷新页面。</li>
+                  <li>必须用 https 打开（本地 http://localhost 例外）；局域网 http 地址拿不到麦克风。</li>
+                  <li>换 Chrome / Edge / Safari 再试；耳机或会议软件占用麦克风时先关掉。</li>
+                  <li>仍然不行：请家长检查系统麦克风权限，或换一台设备试试。</li>
+                </ol>
+              </details>
             </>
           )}
 
