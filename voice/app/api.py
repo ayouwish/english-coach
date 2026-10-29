@@ -34,7 +34,7 @@ from .feedback_templates import (
 from .hints import dedupe_warnings
 from .intonation import compare_intonation, extract_f0, prosody_score_from_distance
 from .llm import LLMClient
-from .ocr import engine_available, recognize_image
+from .ocr import active_ocr_provider, ocr_available, recognize_image
 from .phonemes import PHONEME_SPACE_ID, canonicalize_pa_result
 from .providers.registry import get_providers
 from .schemas import DialogueRequest, FeedbackRequest, TTSRequest, WarmupRequest
@@ -80,7 +80,8 @@ async def health() -> dict:
     providers = get_providers()
     capabilities = providers.capabilities
     capabilities["gpu"] = bool(settings.gpu)
-    capabilities["ocr"] = engine_available()  # task-25：离线 OCR 能力（依赖是否可用）
+    capabilities["ocr"] = ocr_available()  # task-27：任一 OCR provider 可用（LLM 视觉 或 本地 rapidocr）
+    capabilities["ocr_provider"] = active_ocr_provider()  # "llm" | "local" | null（自检用）
     return {
         "status": "ok",
         "version": settings.version,

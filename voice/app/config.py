@@ -247,6 +247,9 @@ class Settings:
     max_tts_chars: int = 2000
     max_upload_bytes: int = 25 * 1024 * 1024
     max_ocr_bytes: int = 10 * 1024 * 1024  # /v1/ocr 图片上限（10MB）
+    ocr_provider: str = "auto"  # auto | llm | local（task-27：LLM 视觉为主，本地 rapidocr 兜底）
+    ocr_timeout_s: float = 30.0
+    ocr_max_tokens: int = 800
     max_audio_seconds: float = 120.0
 
     data_dir: Path = field(default_factory=_resolve_data_dir)
@@ -355,6 +358,9 @@ def get_settings() -> Settings:
         max_tts_chars=_env_int("MAX_TTS_CHARS", 2000),
         max_upload_bytes=_env_int("MAX_UPLOAD_BYTES", 25 * 1024 * 1024),
         max_ocr_bytes=_env_int("MAX_OCR_BYTES", 10 * 1024 * 1024),
+        ocr_provider=_env("VOICE_OCR_PROVIDER", "auto") or "auto",
+        ocr_timeout_s=_env_float("OCR_TIMEOUT_S", 30.0),
+        ocr_max_tokens=_env_int("OCR_MAX_TOKENS", 800),
         max_audio_seconds=_env_float("VOICE_MAX_AUDIO_SECONDS", 120.0),
         data_dir=_resolve_data_dir(),
         model_cache_dir=_resolve_model_cache_dir(),

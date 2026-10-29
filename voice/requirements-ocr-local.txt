@@ -1,0 +1,20 @@
+# 离线 OCR 兜底依赖（task-27）
+#
+# 默认 OCR 走 **LLM 视觉**（DeepSeek 多模态，见 README §14）：只要 .env 配了
+# LLM_BASE_URL / LLM_API_KEY / LLM_MODEL 就不需要这些包。
+# 只有在**完全离线**（无 LLM）或想让 LLM 失败后能降级本地识别时，才装这个文件：
+#
+#   uv pip install --python .venv/bin/python \
+#     --index-url https://mirrors.aliyun.com/pypi/simple/ -r requirements-ocr-local.txt
+#   # 或（uv 项目）: uv sync --extra ocr-local
+#
+# 体积代价：约 +157MB 镜像 / +165MB 常驻内存（rapidocr 16MB + opencv 72MB +
+# onnxruntime 63MB + shapely/pyclipper 6MB）。
+# 注意：**pillow 不在这里**——OCR 预处理（EXIF/缩放/JPEG 编码）LLM 视觉路径也要用，
+# 它在基础 requirements.txt 里。
+# 生产 requirements.txt **不含** rapidocr/opencv/onnxruntime（task-27 已拆分）。
+
+rapidocr-onnxruntime==1.4.4
+opencv-python==5.0.0.93
+onnxruntime==1.31.0 ; python_full_version >= '3.11'
+onnxruntime==1.24.3 ; python_full_version < '3.11'

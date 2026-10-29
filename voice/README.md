@@ -45,7 +45,7 @@ curl -s -X POST localhost:8100/v1/pronounce \
 | 6 | `POST /v1/dialogue` | 日常对话单轮推进（纠错 + 建议应答） |
 | 7 | `GET /v1/audio/{audio_id}` | 示范音频，只读，`Cache-Control: public, max-age=604800` |
 | 8 | `POST /v1/warmup` | v1.1：批量预热参考音 + 参考 F0 缓存（见 §8） |
-| 9 | `POST /v1/ocr` | v1.5：拍照识别书页英文（离线 rapidocr，见 §14）|
+| 9 | `POST /v1/ocr` | v1.5/v1.6：拍照识别书页英文（LLM 视觉为主、本地兜底，见 §14）|
 
 统一错误格式：`{"error":{"code","message","detail"}}`，错误码为契约 §8 的固定集合。
 
@@ -112,6 +112,8 @@ routes(/v1/*) ──> ProviderSet{ asr, pa, tts } ──> 调用链: 主 provide
 | `DEFAULT_TTS_VOICE` | `en-US-JennyNeural` | |
 | `MAX_TTS_CHARS` | `2000` | 超限 → `413 payload_too_large` |
 | `MAX_OCR_BYTES` | `10485760`（10MB）| `/v1/ocr` 图片上限，超限 → `413 payload_too_large` |
+| `VOICE_OCR_PROVIDER` | `auto` | `auto`（LLM 优先）\|`llm`\|`local`（强制离线 rapidocr）|
+| `OCR_TIMEOUT_S` / `OCR_MAX_TOKENS` | `30` / `800` | 视觉 OCR 调用参数 |
 | `MAX_UPLOAD_BYTES` | `26214400` | 上传体积上限 → `413` |
 | `VOICE_MAX_AUDIO_SECONDS` | `120` | 超长音频 → `413 audio_too_long` |
 | `VOICE_GPU` | `false` | 上报到 `capabilities.gpu` |
@@ -613,10 +615,11 @@ WER **mean 0.295 / median 0.171**，RTF mean **0.371**（max 1.2）；词级时�
 (b) 用**时长/能量先验**改进对齐，(c) 用真实的"人工标注错误音素"做校准，而不是拿 Azure 分数当唯一真值。
 在那之前，`local` 模式下 PA 会自动回退到词级（`gop` 失败/关闭时），或直接用 `hybrid` 走 Azure。
 
-## 14. 拍照 OCR：`POST /v1/ocr`（task-25 · 契约 v1.5）
+## 14. 拍照 OCR：`POST /v1/ocr`（task-25/27 · 契约 v1.5/v1.6）
 
 连读模式的入口之一：拍书页照片 → 识别英文 → 前端切句 → 逐句跟读+异步评分。
-**离线、零密钥、零联网、不落盘**（书页照片可能涉及孩子隐私，只在内存里识别）。
+默认走 **DeepSeek 多模态（LLM 视觉）**；本地 `rapidocr` 仅作**可选离线兜底**（默认不安装）。
+**不落盘**：照片只在内存里识别，不留任何文件（可能涉及孩子隐私）。
 
 ### 14.1 请求与响应
 
@@ -624,38 +627,58 @@ WER **mean 0.295 / median 0.171**，RTF mean **0.371**（max 1.2）；词级时�
 
 ```json
 {
-  "provider": "rapidocr",
+  "provider": "deepseek vision",
   "text": "Hello! My name is Lily.\nI like drawing cats and dogs.\nCan you see three birds in the tree?",
   "lines": [
-    {"text": "Hello! My name is Lily.", "confidence": 0.982},
-    {"text": "I like drawing cats and dogs.", "confidence": 0.986},
-    {"text": "Can you see three birds in the tree?", "confidence": 0.981}
+    {"text": "Hello! My name is Lily.", "confidence": null},
+    {"text": "I like drawing cats and dogs.", "confidence": null},
+    {"text": "Can you see three birds in the tree?", "confidence": null}
   ],
   "width": 900, "height": 400,
-  "elapsed_ms": 545,
+  "elapsed_ms": 1307,
   "warnings": []
 }
 ```
 
-- `text` 按**行序**用 `\n` 连接（前端可直接 `split("\n")` 切句）；`lines` 带每行置信度便于提示"重拍"。
-- **行序**：rapidocr 的文本框无序，服务端按"行高 60% 容差"把 y 相邻的框聚成一行（手机照片常有轻微旋转），行内再按 x 排。
-- `width`/`height` 是**预处理后**（EXIF 转正 + 缩放后）的尺寸。
-- `warnings`：`image_downscaled`（长边 >1600 被等比缩小）、`no_text_found`（空白页/未识别到文字）。
+- `text` 按**行序**用 `\n` 连接（前端可直接 `split("\n")` 切句），`lines` 是同一批行。
+- `lines[].confidence`：LLM 视觉**没有置信度 → `null`**（诚实，不编造）；本地 rapidocr 兜底时给真实分数。
+- `warnings`：`image_downscaled`（缩放）、`no_text_found`（没识别到英文）、`llm_vision_failed`（LLM 失败已降级本地）。
+- `width`/`height` 是**发送给识别引擎前**的尺寸（EXIF 转正 + 缩放后）。
 
-### 14.2 预处理与错误语义
+### 14.2 Provider 链与预处理
 
-- `ImageOps.exif_transpose`：手机照片常带 EXIF Orientation（如 6=90°），**不转正会整页识别失败**。
-- 转 RGB；**长边 >1600px 等比缩小**；解码前像素总量上限 40MP 防解压炸弹。
-- 错误码：非图片/无法解码 → **400 `bad_request`**；>10MB → **413 `payload_too_large`**；
-  依赖未安装 → **503 `provider_unavailable`**（message 里给 `pip install -r requirements.txt`）。
-- **懒加载单例**：引擎首次识别才加载（1–2s，不是卡死），之后复用；**服务启动不加载**。
+`VOICE_OCR_PROVIDER=auto|llm|local`（默认 `auto`）：
 
-### 14.3 依赖与体积（实测）
+| 值 | 行为 |
+|---|---|
+| `auto` | LLM 已配置 → `llm`；否则本地依赖可用 → `local`；都不可用 → 503 |
+| `llm` | LLM 视觉为主；失败/超时（30s）→ 降级本地（若已装） |
+| `local` | 只用本地 rapidocr（完全离线） |
 
-`requirements.txt` 已加入 `rapidocr-onnxruntime==1.4.4` + `pillow`，镜像增大约 **160MB**（实测安装体积：
-rapidocr 16MB + opencv 72MB + onnxruntime 63MB + pillow 7MB + shapely/pyclipper 6MB）。
-想省体积可用 `opencv-python-headless` 替换 `opencv-python`（服务端不需要 GUI，约省 20MB）。
-热启动单页识别实测 ~0.5–0.8s（900×400）；**首次识别有 1–2s 模型加载**（不是卡死）。
+- 发给 LLM 前：`ImageOps.exif_transpose` → RGB → **长边缩到 ≤1280**（1600→1280 约省 40% token）→ JPEG q85 → base64 data URL
+  （900×400 实测 data URL 仅 26KB）。
+- 发本地 rapidocr 前：EXIF 转正 → RGB → 长边 ≤1600（CPU 与精度都不需要更高）。
+- 提示词要求"逐行输出英文原文、不编号不解释、保留标点、无英文返回空"，并防御性去掉模型自带的编号。
+- 错误：非图片 → **400 `bad_request`**；>10MB → **413 `payload_too_large`**；LLM 失败且无本地兜底 → **503 `provider_unavailable`**。
+
+### 14.3 依赖与体积（task-27 精简）
+
+OCR 专用依赖已从**生产 `requirements.txt` 移除**（`rapidocr-onnxruntime` / `opencv-python` / `onnxruntime`；
+`pillow` 保留，因为 LLM 路径也要用它做 EXIF/缩放/JPEG 编码）：
+
+| 组合 | 额外体积 | 说明 |
+|---|---|---|
+| 默认（LLM 视觉）| 0（只用基础依赖里的 pillow）| 只需要 `.env` 配 `LLM_BASE_URL`/`LLM_API_KEY`/`LLM_MODEL` |
+| 加离线兜底 | **≈ +157MB 镜像 / +165MB 常驻内存** | `pip install -r requirements-ocr-local.txt` 或 `uv sync --extra ocr-local` |
+
+#### 14.3.1 实测（本机，真实 key，`deepseek-flash`）
+
+| 场景 | provider | 耗时 | 结果 |
+|---|---|---|---|
+| `/v1/ocr`（fixture 900×400，3 行）| `deepseek vision` | HTTP 总 1.48s / 识别 1307ms | 3/3 全对，data URL 26KB |
+| **屏蔽本地 OCR 依赖**（rapidocr/cv2/onnxruntime 不可 import）+ 真 key | `deepseek vision` | 897ms | 3/3 全对，本地模块一个都没 import |
+| 生产依赖干净 venv（只装 `requirements.txt`）起服务 | — | — | `capabilities.ocr=false, ocr_provider=null`（无 LLM 配置时），服务正常启动 |
+| 本地 rapidocr 兜底（LLM 失败时）| `rapidocr` | ~0.5–0.8s | 3/3 全对，带真实 confidence |
 
 ## 15. 当前采用的服务组合与预热（2026-10-25 决定）
 

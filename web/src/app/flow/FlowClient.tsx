@@ -417,7 +417,7 @@ export function FlowClient({
                 ) : null}
               </div>
               <p className="mt-2 text-xs text-[var(--ec-muted)]" data-testid="ocr-privacy">
-                🔒 照片只在服务器内存里识别，不会被保存。
+                🔒 照片<b>不会保存在服务器上</b>；识别时会临时上传到你配置的 AI 服务（DeepSeek）。不想上传就用下面的「✍️ 自己输入一段」。
               </p>
               {!ocrAvailable ? (
                 <p className="mt-1 text-xs" data-testid="ocr-unavailable">

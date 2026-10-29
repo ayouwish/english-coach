@@ -11,7 +11,7 @@
 | 2026-10-23 | v1.2 | **修正 §12.2 缓存 key**：加入 TTS provider 身份与 `"v2"` 版本前缀，避免跨 provider 命中错误缓存 | **缓存失效**（可再生，重新预热即可）；**接口形状不变**，客户端无感 |
 | 2026-10-23 | v1.3 | §12.2 缓存 key 再加 `fmt` 分量并升到 `"v3"`：TTS 格式设置修复后音频从 16kHz 变 24kHz，且 mp3/wav 是不同产物；`/v1/tts` 接入同一套缓存 | **缓存失效一次**（重新预热即可）；`/v1/tts` 响应新增 `X-Cache` 与 `X-Audio-Codec/Sample-Rate/Container` 观测头 |
 | 2026-10-24 | v1.4 | §6 `/v1/dialogue` 响应新增**可选**字段 `degraded_llm`（`true` = 本条不是大模型生成，走了模板降级）；修正 prompt 质量约束（年龄适配/连续性/纠错分级） | **向后兼容**：新字段可选，v1.3 客户端无感 |
-| 2026-10-29 | v1.5 | 新增 §14 `POST /v1/ocr`（拍照识别，离线 rapidocr）与 `capabilities.ocr`；错误码表新增 `provider_unavailable`(503) | **向后兼容**：新增接口/可选字段；`provider_unavailable` 仅 OCR 依赖缺失时出现 |
+| 2026-10-29 | v1.5 | 新增 §14 `POST /v1/ocr`（拍照识别）与 `capabilities.ocr` / `ocr_provider`；错误码表新增 `provider_unavailable`(503)。OCR **默认走 LLM 视觉**（DeepSeek 多模态），本地 rapidocr 降为可选兜底 | **向后兼容**：新增接口/可选字段；`provider` 取值随部署而变，客户端不得写死 |
 > `web/` 与 `voice/` 两个模块并行开发，任何一方需要改本契约，必须先通知 Lead 并同步改本文件。
 > 冻结范围：路径、请求字段名、响应字段名、枚举值、错误码。
 > 未冻结范围：各 provider 内部实现、日志格式、额外字段（允许追加 `provider_meta` 等可选字段，不得删除或改名已有字段）。
@@ -60,8 +60,10 @@
 
 - `mode` ∈ `mock` | `local` | `cloud` | `hybrid`。
 - `capabilities` 决定 UI 降级：`phoneme_level=false` 时前端只显示单词级热力图，不显示 IPA；
-  **`ocr`（v1.5 新增，bool）**：拍照识别是否可用（离线 OCR 依赖是否装好）。`false` 时前端必须把「拍照识别」
-  按钮置灰或明确提示"未启用"，**不允许让用户点了一直转圈**。
+  **`ocr`（v1.5 新增，bool）**：拍照识别是否可用 = **任一 OCR provider 可用**（LLM 视觉已配置，或本地 OCR 依赖已装）。
+  `false` 时前端必须把「拍照识别」按钮置灰或明确提示"未启用"，**不允许让用户点了一直转圈**。
+  **`ocr_provider`（v1.5 新增，`"llm" | "local" | null`）**：实际首选的 OCR provider（自检/排查用）。
+  默认 `llm`（DeepSeek 多模态为主），`local` 仅在装了本地依赖且 LLM 不可用时出现。
   **UI 必须按 capabilities 自适应，不允许硬编码假设。**
 
 ---
@@ -566,5 +568,10 @@ blind_tests
   - 长边 >1600px 时等比缩小，并给 `warnings:["image_downscaled"]`；
   - 空白页返回 `text=""` + `warnings:["no_text_found"]`；
   - **图片只在内存处理、不落盘**（服务端不保存任何图片）。
-- 错误：非图片 **400** `bad_request`；>10MB **413** `payload_too_large`；依赖缺失 **503** `provider_unavailable`。
-- 性能参考（本机 CPU，与家庭 NAS 同级）：**热启动 0.5–0.8s/页**；首次有 1–2s 模型加载；常驻内存约 +165MB。
+- **`provider`（v1.5 实测值）**：`"deepseek vision"`（LLM 视觉，默认）或 `"rapidocr"`（本地兜底）。
+- **`lines[].confidence`**：LLM 路径为 **`null`**（诚实表示"模型不给置信度"，不编造）；本地路径为 0–1 浮点。
+- **隐私（重要）**：服务端**不保存任何图片**；但走 LLM 路径时图片会**临时上传到所配置的 LLM 服务**（如 DeepSeek）用于识别。
+  前端必须如实提示这一点（不能说"纯本地识别"），并给用户"改用文字输入"的替代路径。
+- 错误：非图片 **400** `bad_request`；>10MB **413** `payload_too_large`；
+  **503 `provider_unavailable`** = LLM 失败且无本地兜底，或两者都不可用。
+- 性能参考：LLM 路径实测 **0.7–1.5s/页**（偶发数秒；服务刚启动首次调用可能更慢）；本地兜底 0.5–0.8s/页（需额外 +157MB 依赖）。

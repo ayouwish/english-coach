@@ -218,11 +218,17 @@ try {
   // ── 6) 拍照识别（task-26）────────────────────────────────────────────────
   const VOICE = process.env.VOICE_URL ?? "http://127.0.0.1:8100";
   let ocrSupported = false;
+  // 首选 OCR provider（"llm" | "local" | null）——提到外层供下面的断言使用
+  let ocrProviderFromHealth = null;
   try {
     const h = await fetch(`${VOICE}/v1/health`, { signal: AbortSignal.timeout(3000) });
     const hj = await h.json();
     ocrSupported = hj?.capabilities?.ocr === true;
-    console.log(`\n── 拍照识别（voice capabilities.ocr = ${hj?.capabilities?.ocr ?? "缺失"}）──`);
+    ocrProviderFromHealth = hj?.capabilities?.ocr_provider ?? null;
+    console.log(
+      `\n── 拍照识别（voice capabilities.ocr = ${hj?.capabilities?.ocr ?? "缺失"}` +
+        `，ocr_provider = ${ocrProviderFromHealth ?? "缺失"}）──`,
+    );
   } catch {
     console.log("\n── 拍照识别（voice /v1/health 不可达）──");
   }
@@ -254,7 +260,25 @@ try {
       check("★ 识别文本含 Hello", /Hello/i.test(text), text.slice(0, 80));
       check("★ 识别文本含 tree", /tree/i.test(text), text.slice(0, 120));
       check("★ 行数 ≥ 3", (r.body?.lines ?? []).length >= 3, `lines=${(r.body?.lines ?? []).length}`);
-      check("provider = rapidocr", r.body?.provider === "rapidocr", r.body?.provider ?? "");
+      // OCR provider 现在是链式的：默认走 LLM 视觉（"deepseek vision"），
+      // 只有装了本地依赖且 LLM 不可用时才回落 "rapidocr"。
+      // 断言"是已知 provider 之一"，并与 health 报告的 ocr_provider 保持一致 ——
+      // 不写死具体名字，否则每次换主力 provider 都要改守卫。
+      const KNOWN_OCR_PROVIDERS = ["deepseek vision", "rapidocr"];
+      const prov = r.body?.provider ?? "";
+      check(
+        "provider ∈ 已知 OCR provider",
+        KNOWN_OCR_PROVIDERS.includes(prov),
+        `${prov || "(空)"}；已知=${KNOWN_OCR_PROVIDERS.join(" / ")}`,
+      );
+      if (ocrProviderFromHealth) {
+        const expected = ocrProviderFromHealth === "llm" ? /vision/i : /rapidocr/i;
+        check(
+          "provider 与 health.capabilities.ocr_provider 一致",
+          expected.test(prov),
+          `ocr_provider=${ocrProviderFromHealth} provider=${prov}`,
+        );
+      }
       check("儿童也能用 OCR（200）", true, "上面这次就是儿童账号发起的");
     } else {
       console.log(
@@ -290,7 +314,9 @@ try {
   check("/flow 有「拍照识别」按钮", flowHtml2.includes('data-testid="ocr-button"'));
   check(
     "★ 隐私提示在页面上",
-    flowHtml2.includes('data-testid="ocr-privacy"') && flowHtml2.includes("照片只在服务器内存里识别，不会被保存"),
+    flowHtml2.includes('data-testid="ocr-privacy"')
+      && flowHtml2.includes("不会保存在服务器上")
+      && flowHtml2.includes("DeepSeek"),
   );
   check("file input 带 accept=image/* 与 capture=environment", /accept="image\/\*"/.test(flowHtml2) && /capture="environment"/.test(flowHtml2));
   if (!ocrSupported) {

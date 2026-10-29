@@ -651,7 +651,6 @@ dependencies = [
     { name = "praat-parselmouth" },
     { name = "pydantic" },
     { name = "python-multipart" },
-    { name = "rapidocr-onnxruntime" },
     { name = "uvicorn", extra = ["standard"] },
 ]
 
@@ -665,6 +664,12 @@ dev = [
 local = [
     { name = "edge-tts" },
     { name = "faster-whisper" },
+]
+ocr-local = [
+    { name = "onnxruntime", version = "1.24.3", source = { registry = "https://mirrors.aliyun.com/pypi/simple/" }, marker = "python_full_version < '3.11'" },
+    { name = "onnxruntime", version = "1.31.0", source = { registry = "https://mirrors.aliyun.com/pypi/simple/" }, marker = "python_full_version >= '3.11'" },
+    { name = "opencv-python" },
+    { name = "rapidocr-onnxruntime" },
 ]
 
 [package.dev-dependencies]
@@ -681,15 +686,17 @@ requires-dist = [
     { name = "faster-whisper", marker = "extra == 'local'", specifier = ">=1.0" },
     { name = "httpx", specifier = ">=0.27" },
     { name = "numpy", specifier = ">=1.26" },
+    { name = "onnxruntime", marker = "extra == 'ocr-local'", specifier = ">=1.17" },
+    { name = "opencv-python", marker = "extra == 'ocr-local'", specifier = ">=4.8" },
     { name = "pillow", specifier = ">=10.0" },
     { name = "praat-parselmouth", specifier = ">=0.4.3" },
     { name = "pydantic", specifier = ">=2.6" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.0" },
     { name = "python-multipart", specifier = ">=0.0.9" },
-    { name = "rapidocr-onnxruntime", specifier = ">=1.4" },
+    { name = "rapidocr-onnxruntime", marker = "extra == 'ocr-local'", specifier = ">=1.4" },
     { name = "uvicorn", extras = ["standard"], specifier = ">=0.27" },
 ]
-provides-extras = ["azure", "local", "dev"]
+provides-extras = ["azure", "local", "ocr-local", "dev"]
 
 [package.metadata.requires-dev]
 dev = [{ name = "pytest", specifier = ">=8.0" }]

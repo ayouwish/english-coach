@@ -18,6 +18,19 @@ logger = logging.getLogger("voice.llm")
 
 
 @dataclass
+class VisionOutcome:
+    """多模态（图片输入）调用的结果：纯文本，没有 JSON 解析。"""
+
+    provider: str
+    text: str | None = None
+    error: str | None = None
+
+    @property
+    def ok(self) -> bool:
+        return self.text is not None
+
+
+@dataclass
 class LLMOutcome:
     provider: str
     data: dict | None = None
@@ -39,6 +52,59 @@ class LLMClient:
     @property
     def provider_name(self) -> str:
         return self.settings.llm_provider if self.available else "template"
+
+    @property
+    def vision_available(self) -> bool:
+        """多模态（图片输入）是否可用：与文本 LLM 同一套 base_url/key。"""
+        return self.available
+
+    def read_image(
+        self,
+        image_data_url: str,
+        prompt: str,
+        timeout_s: float | None = None,
+        max_tokens: int = 800,
+        temperature: float = 0.0,
+    ) -> VisionOutcome:
+        """OpenAI 兼容多模态调用：content = [text, image_url(data URL)]，返回纯文本。
+
+        用于 OCR（拍照识别书页）：DeepSeek 等 OpenAI 兼容端点支持 `image_url` 传 base64 data URL。
+        """
+        if not self.available:
+            return VisionOutcome(provider="template", error="llm_not_configured")
+        base = (self.settings.llm_base_url or "").rstrip("/")
+        url = f"{base}/chat/completions"
+        headers = {"Content-Type": "application/json"}
+        if self.settings.llm_api_key:
+            headers["Authorization"] = f"Bearer {self.settings.llm_api_key}"
+        payload = {
+            "model": self.settings.llm_model,
+            "messages": [
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": prompt},
+                        {"type": "image_url", "image_url": {"url": image_data_url}},
+                    ],
+                }
+            ],
+            "temperature": temperature,
+            "max_tokens": max_tokens,
+        }
+        timeout = timeout_s or self.settings.ocr_timeout_s
+        try:
+            response = httpx.post(url, headers=headers, json=payload, timeout=timeout)
+            response.raise_for_status()
+            body = response.json()
+            content = body["choices"][0]["message"]["content"]
+            if isinstance(content, list):  # 少数端点返回分段 content
+                content = "".join(part.get("text", "") for part in content if isinstance(part, dict))
+            if content is None:
+                return VisionOutcome(provider=self.provider_name, error="empty_content")
+            return VisionOutcome(provider=self.provider_name, text=str(content))
+        except Exception as exc:
+            logger.warning("LLM vision call failed (%s): %s", type(exc).__name__, exc)
+            return VisionOutcome(provider=self.provider_name, error=f"{type(exc).__name__}: {exc}")
 
     def chat_json(
         self,

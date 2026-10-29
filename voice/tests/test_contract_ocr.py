@@ -38,7 +38,9 @@ def test_health_reports_ocr_capability(client):
     body = client.get("/v1/health").json()
     assert "ocr" in body["capabilities"]
     assert isinstance(body["capabilities"]["ocr"], bool)
-    assert body["capabilities"]["ocr"] is ocr_module.engine_available()
+    # task-27：ocr = 任一 provider 可用（LLM 视觉 或 本地 rapidocr）
+    assert body["capabilities"]["ocr"] is ocr_module.ocr_available()
+    assert body["capabilities"]["ocr_provider"] in ("llm", "local", None)
 
 
 def test_ocr_is_lazy_at_startup(tmp_path):
@@ -149,7 +151,7 @@ def test_ocr_missing_dependency_returns_503(client, monkeypatch):
     assert response.status_code == 503
     body = response.json()
     assert body["error"]["code"] == "provider_unavailable"
-    assert "requirements.txt" in body["error"]["message"]
+    assert "requirements-ocr-local.txt" in body["error"]["message"]
 
 
 # --------------------------------------------------------------------------------------
