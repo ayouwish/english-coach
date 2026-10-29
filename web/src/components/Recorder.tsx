@@ -14,6 +14,11 @@ interface Props {
    * 传 "secondary" 避免出现两个主色按钮、让用户不知道该点哪个。
    */
   emphasis?: "primary" | "secondary";
+  /**
+   * 麦克风失败时向上回调（task-34）：传失败原因；成功拿到麦克风时传空字符串用于清除提示。
+   * 只做通知，**不改变**任何开麦/释放/录音逻辑。
+   */
+  onMicError?: (message: string) => void;
 }
 
 type MicState = "idle" | "preparing" | "recording" | "error";
@@ -46,6 +51,7 @@ export function Recorder({
   recording = false,
   startSignal,
   emphasis = "primary",
+  onMicError,
 }: Props) {
   const [isRecording, setIsRecording] = useState(false);
   const [seconds, setSeconds] = useState(0);
@@ -126,12 +132,13 @@ export function Recorder({
       recorder.start(250);
       setIsRecording(true);
       setMicState("recording");
+      onMicError?.(""); // 已成功拿到麦克风 → 让页面清掉失败提示
       timerRef.current = setInterval(
         () => setSeconds(Math.floor((Date.now() - startedAtRef.current) / 1000)),
         250,
       );
     },
-    [onRecorded, releaseStream, stopTimer, isChild],
+    [onRecorded, releaseStream, stopTimer, isChild, onMicError],
   );
 
   const start = useCallback(async () => {
@@ -150,11 +157,11 @@ export function Recorder({
       beginRecording(stream);
     } catch (err) {
       setMicState("error");
-      setError(
-        `无法访问麦克风：${(err as Error).message}。请检查麦克风是否插好、系统是否允许浏览器使用麦克风。`,
-      );
+      const message = `无法访问麦克风：${(err as Error).message}。请检查麦克风是否插好、系统是否允许浏览器使用麦克风。`;
+      setError(message);
+      onMicError?.(message);
     }
-  }, [acquireStream, beginRecording]);
+  }, [acquireStream, beginRecording, onMicError]);
 
   const stop = useCallback(() => {
     if (recorderRef.current?.state === "recording") recorderRef.current.stop();

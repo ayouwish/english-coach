@@ -129,6 +129,7 @@ check("★ /chat SSR HTML 没有「🎙️ 语音」切换按钮", !girlChat.inc
 // 注意：对话面板（含 Recorder）是"开了场景"之后才由客户端状态渲染的，SSR HTML 里看不到 →
 // 这几条用 **源码 + bundle** 断言（同样证明"只有麦克风、没有输入框"）。
 const chatSrcForInput = fs.readFileSync(path.join(WEB_ROOT, "src/app/chat/ChatClient.tsx"), "utf8");
+const recorderSrcForInput = fs.readFileSync(path.join(WEB_ROOT, "src/components/Recorder.tsx"), "utf8");
 check(
   "★ 源码里没有文本输入框 / 发送按钮 / 语音开关",
   !chatSrcForInput.includes("<input") &&
@@ -136,13 +137,37 @@ check(
     !chatSrcForInput.includes("showMic") &&
     !chatSrcForInput.includes("🎙️ 语音"),
 );
-check("★ 源码里 Recorder 常驻（不再包在 showMic 条件里）", chatSrcForInput.includes("<Recorder onRecorded"));
+check("★ 源码里 Recorder 常驻（不再包在 showMic 条件里）", chatSrcForInput.includes("<Recorder") && !chatSrcForInput.includes("showMic"));
 check("★ 源码有「只说」面板 speak-panel", chatSrcForInput.includes('data-testid="speak-panel"'));
 check("★ 源码有麦克风排查提示 mic-troubleshoot + https", chatSrcForInput.includes('data-testid="mic-troubleshoot"') && chatSrcForInput.includes("https"));
 check("源码有「本页需要麦克风」醒目说明（role=note）", chatSrcForInput.includes('data-testid="mic-required-note"') && chatSrcForInput.includes('role="note"'));
 check("★ bundle 含儿童录音文案「按这里开始说」", bundle.includes("按这里开始说"));
 check("★ bundle 含成人录音文案「开始录音」", bundle.includes("开始录音"));
 check("★ bundle 含麦克风失败排查文案", bundle.includes("麦克风没反应") && bundle.includes("必须用 https 打开"));
+
+// ── task-34：提示句 = 提示 + 开录（绝不直接发送文本）+ 麦克风失败醒目报错 ──────
+{
+  const suggestRegionStart = chatSrcForInput.indexOf('data-testid="suggested-replies"');
+  const suggestRegion = suggestRegionStart >= 0 ? chatSrcForInput.slice(suggestRegionStart, suggestRegionStart + 1200) : "";
+  check("★ 提示句按钮不再直接发送文本（suggestions 区域无 send(）", suggestRegion.length > 0 && !suggestRegion.includes("send("), suggestRegion.slice(0, 0) || "region ok");
+  check("★ 点提示句 → 设置 promptLine", suggestRegion.includes("setPromptLine(s)"));
+  check("★ 点提示句 → 递增 startSignal 触发自动开录", suggestRegion.includes("setStartSignal((n) => n + 1)"));
+  check("源码有提示行 data-testid=\"prompt-line\"", chatSrcForInput.includes('data-testid="prompt-line"'));
+  check("提示行说明「发出去的是你说的录音」", chatSrcForInput.includes("发出去的是你说的录音"));
+  {
+    const micAlertRegion = chatSrcForInput.slice(
+      Math.max(0, chatSrcForInput.indexOf('data-testid="mic-error-alert"') - 400),
+      chatSrcForInput.indexOf('data-testid="mic-error-alert"') + 300,
+    );
+    check(
+      "源码有麦克风失败醒目 alert（role=alert + data-testid=mic-error-alert，同一块）",
+      micAlertRegion.includes('data-testid="mic-error-alert"') && micAlertRegion.includes('role="alert"'),
+    );
+  }
+  check("★ 文案不再出现「直接打字」", !chatSrcForInput.includes("直接打字"));
+  check("Recorder 新增 onMicError 回调（仅此一处最小改动）", recorderSrcForInput.includes("onMicError?: (message: string) => void") && recorderSrcForInput.includes("onMicError?.(message)"));
+  check("bundle 含「照着这句说」与「麦克风不可用」", bundle.includes("照着这句说") && bundle.includes("麦克风不可用"));
+}
 check("儿童 /chat 零 IPA", !IPA_RE.test(girlChatRaw));
 console.log(`   ↳ audio 标签：${audioTag.replace(/\s+/g, " ").slice(0, 300)}`);
 console.log(`   ↳ audio src：${audioSrc.slice(0, 140)}`);

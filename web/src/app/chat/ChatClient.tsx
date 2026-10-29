@@ -83,6 +83,12 @@ export function ChatClient({
   const [error, setError] = useState<string | null>(null);
   const [limitMessage, setLimitMessage] = useState<string | null>(null);
   const [suggestions, setSuggestions] = useState<string[]>([]);
+  /** 提示句（task-34）：点了只显示"照着说"+触发录音，**绝不直接发送文本** */
+  const [promptLine, setPromptLine] = useState<string | null>(null);
+  /** 递增这个数字即可让 Recorder 开录（Recorder 已有 startSignal 机制） */
+  const [startSignal, setStartSignal] = useState(0);
+  /** 麦克风失败的醒目报错（Recorder.onMicError 上来；成功开麦后清空） */
+  const [micError, setMicError] = useState<string | null>(null);
   const [degraded, setDegraded] = useState(false);
   // v1.4 §6：本条回复是否由「固定话术」生成（未接入大模型）
   const [degradedLlm, setDegradedLlm] = useState(false);
@@ -314,9 +320,10 @@ export function ChatClient({
       const res = await fetch("/api/asr", { method: "POST", body: form });
       const data = (await res.json()) as { text?: string; error?: { message?: string } };
       if (!res.ok || !data.text) {
-        setError(data?.error?.message ?? "没听清，再试一次或直接打字");
+        setError(data?.error?.message ?? "没听清，再试一次");
         return;
       }
+      setPromptLine(null); // 这一轮说完了，别让提示残留到下一句
       // 保留这次的录音，渲染在该条 user 消息下（task-19 B）
       const audioUrl = URL.createObjectURL(blob);
       userAudioUrls.current.push(audioUrl);
@@ -345,7 +352,7 @@ export function ChatClient({
         <p className="mt-2 text-xs text-[var(--ec-muted)]">
           今日已练 {usage.minutes}/{usage.limitMinutes} 分钟
           {isChild ? ` · 还剩 ${usage.remainingMinutes} 分钟` : ""}
-          {voiceReachable ? "" : " · 语音识别未就绪，仍可直接打字"}
+          {voiceReachable ? "" : " · 语音识别暂时未就绪，请稍后再试"}
           {isChild ? " · 儿童安全模式：服务端强制过滤不当内容" : ""}
         </p>
         <div className="mt-3 flex flex-wrap items-center gap-2">
@@ -569,11 +576,33 @@ export function ChatClient({
                       type="button"
                       className="ec-btn ec-btn-ghost"
                       disabled={busy}
-                      onClick={() => send(s)}
+                      data-testid="suggestion-prompt"
+                      onClick={() => {
+                        // 提示句 = 参考 + 直接开录；发出去的仍然只有你说的录音
+                        setPromptLine(s);
+                        setStartSignal((n) => n + 1);
+                      }}
                     >
                       {s}
                     </button>
                   ))}
+                </div>
+              ) : null}
+
+              {micError ? (
+                <div
+                  className="mt-3 rounded-xl border-2 border-[#dc2626] bg-[#fef2f2] p-3 text-sm text-[#991b1b]"
+                  role="alert"
+                  data-testid="mic-error-alert"
+                >
+                  <p className="font-bold">🎤 麦克风不可用 —— 现在没法练习说话</p>
+                  <p className="mt-1 text-xs">{micError}</p>
+                  <ol className="mt-2 list-decimal space-y-0.5 pl-5 text-xs">
+                    <li>浏览器地址栏左侧点锁图标 → 把「麦克风」设为「允许」，刷新页面。</li>
+                    <li>必须用 https 打开（本地 http://localhost 例外）。</li>
+                    <li>换 Chrome / Edge / Safari 再试。</li>
+                    <li>关掉正在占用麦克风的程序（会议软件 / 其他标签页）。</li>
+                  </ol>
                 </div>
               ) : null}
 
@@ -587,8 +616,23 @@ export function ChatClient({
                     ? "点一下大按钮，看到「说完啦」就可以开始说英语啦；说完再点一次。"
                     : "点下面的按钮开始录音，说完再点一次停止；不需要打字，练的就是开口说。"}
                 </p>
+                {promptLine ? (
+                  <div className="mt-2 rounded-xl bg-white p-3" data-testid="prompt-line">
+                    <p className="text-sm font-semibold">
+                      {isChild ? "照这句说 🙂 " : "照着这句说："}
+                      <span className="text-[var(--ec-primary)]">{promptLine}</span>
+                    </p>
+                    <p className="mt-1 text-xs text-[var(--ec-muted)]">提示句只给你参考，发出去的是你说的录音。</p>
+                  </div>
+                ) : null}
                 <div className="mt-2">
-                  <Recorder onRecorded={(blob) => voiceToText(blob)} disabled={busy} isChild={isChild} />
+                  <Recorder
+                    onRecorded={(blob) => voiceToText(blob)}
+                    disabled={busy}
+                    isChild={isChild}
+                    startSignal={startSignal}
+                    onMicError={(msg) => setMicError(msg || null)}
+                  />
                 </div>
                 {busy ? (
                   <p className="mt-2 text-sm text-[var(--ec-muted)]" data-testid="speak-busy">
