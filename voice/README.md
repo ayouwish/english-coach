@@ -46,6 +46,8 @@ curl -s -X POST localhost:8100/v1/pronounce \
 | 7 | `GET /v1/audio/{audio_id}` | 示范音频，只读，`Cache-Control: public, max-age=604800` |
 | 8 | `POST /v1/warmup` | v1.1：批量预热参考音 + 参考 F0 缓存（见 §8） |
 | 9 | `POST /v1/ocr` | v1.5/v1.6：拍照识别书页英文（LLM 视觉为主、本地兜底，见 §14）|
+| 10 | `POST /v1/story/rewrite` | v1.8：中文讲述 → 分级英文故事（见 §18）|
+| 11 | `POST /v1/story/retell` | v1.9：复述覆盖度评估（鼓励优先、不评发音分，见 §18.5）|
 
 统一错误格式：`{"error":{"code","message","detail"}}`，错误码为契约 §8 的固定集合。
 
@@ -894,4 +896,72 @@ Azure 合成新文本实测 **1–11 秒且波动极大**（服务端曾报 `RTF
 mock/local 兜底产出 → 理论上会把 mock 音频写进 `<azure-key>.wav`（线上那些 16kHz 文件即是此类或旧 SDK bug 产物）。
 现已加两道防线：① 只有**实际产出者 == key 里的 provider** 才写缓存；② task-42 的低采样率自愈会在命中时
 清掉 `<azure-key>` 下 16k/22.05k 的坏条目并重新合成 24k（详见 §8.4、§9.4）。历史污染文件无需手工处理。
+
+## 18. 故事模式：中文讲述 → 分级英文（task-47）
+
+孩子用**中文**讲一件事（语音或文字），服务端**改写**（不是直译）成适合阅读级别的英文短故事，并做服务端硬校验。
+
+`POST /v1/story/rewrite`（JSON）：
+```json
+{"text_zh": "今天我和小明搭积木塔，被小华碰倒了，我很生气",
+ "level": "A1",                    // A1 | A2 | B1 | B2
+ "max_sentences": 6,               // 1..6
+ "weak_phonemes": ["th", "s"],     // 可选
+ "avoid_words": []}                // 可选
+```
+响应：
+```json
+{"title_en": "The Fallen Block Tower",
+ "sentences": ["Today I build a block tower with Xiaoming.", "..."],
+ "text_en": "…（\n 连接）",
+ "level": "A1",
+ "readability": {"sentence_count": 6, "avg_words": 6.8, "max_words": 8,
+                 "unknown_words": ["cross"], "ok": true},
+ "warnings": [], "provider": "deepseek",
+ "provider_meta": {"weak_phonemes_achieved": ["th"], "weak_phonemes_missing": []}}
+```
+
+**服务端硬约束**（不靠模型自觉）：
+- 句数 ≤ `max_sentences`；平均词数 ≤ 8/10/12/14（A1/A2/B1/B2）；最长句 ≤ 平均上限 + 4
+- 单一叙事时态（过去/现在，混用会触发重写）；`avoid_words` 出现也会触发重写
+- `unknown_words`：不在 `web/src/data/sentences.json` A1/A2 句库、也不在 A1 常用词表里的词（人名/地名等专有名词不算）；
+  > 2 个 → **自动重写一次**（最多 2 次 LLM 调用），仍超标 → `warnings:["too_hard"]` 并返回（不报错）
+- `weak_phonemes`：提示词里带上这些音（含句库例词）；没写出对应词 → `warnings:["weak_phonemes_missing"]`
+- LLM 调用：**关闭思考**（`thinking: disabled`，推理模型会吃光 token）、`max_tokens=2000`；
+  `finish_reason=length` → 自动用 4000 重试；JSON 解析失败重试一次，两次失败 → `502 provider_error`
+- 不落盘、不缓存（每次改写都可能不同）
+
+**`/v1/asr` 语言**（task-47）：`language` 支持 `en` / `en-US` / `zh` / `zh-CN`（大小写不敏感），
+统一规范化为 `en-US` / `zh-CN`；Azure 直接使用该 locale，faster-whisper 用 ISO 639-1（en/zh）。
+中文识别结果**原样返回**（不做英文后处理/过滤）。响应 `language` 字段为规范化后的 locale。
+
+### 18.5 `POST /v1/story/retell`（复述覆盖度，task-51）
+
+孩子读完故事后不看屏幕，用自己的话讲 2–3 句英文；服务端评估**关键信息覆盖度**（不评发音分）。
+
+请求：
+```json
+{"story_sentences": ["Today I built a tall block tower with Ming.", "Hua knocked it down.", "I was very angry."],
+ "transcript": "I build tower with Ming and Hua knock it down, I am angry",
+ "level": "A2"}
+```
+响应：
+```json
+{"coverage": 0.85,
+ "covered_points": ["和 Ming 搭积木塔", "Hua 把它弄倒", "我很生气"],
+ "missing_points": ["塔倒下来的结果可以更清楚"],
+ "feedback_zh": "你讲了和 Ming 一起搭塔、Hua 把它弄倒、你很生气，很棒！下次还可以说说塔倒下来了。",
+ "feedback_en": "Great job! ...",
+ "warnings": [], "provider": "deepseek"}
+```
+
+- **语义评估**：接受 `build`/`built`、语序不同、省略冠词；1–2 句也算好复述。
+- **鼓励优先**：`feedback_zh` = 具体肯定（提到孩子真讲到的点）+ 最多 1 条建议；**绝不出现否定词**。
+  服务端会校验：出现否定词/没提到 covered 点/低覆盖不够正向 → 重生成一次，仍不合格则用确定性正向模板兜底
+  （`warnings:["feedback_template"]`），**永远不会返回否定文案**。
+- `coverage < 0.3` 时语气更正向（"你开口讲了！我们再来一次"），不扣分。
+- `coverage` 钳制到 0..1；`covered_points`/`missing_points` 由 LLM 结构化输出，服务端做类型/长度校验。
+- LLM：关思考、`max_tokens=1200`，`finish_reason=length` → 2400 重试；JSON 解析失败重试一次，两次失败 → 502。
+- 请求校验：`story_sentences` 1–20 条、每条 ≤200 字符；`transcript` 1–1000 字符；`level` ∈ A1/A2/B1/B2，否则 400。
+- 不落盘、不缓存（每次内容不同）。
 

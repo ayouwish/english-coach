@@ -140,12 +140,16 @@ class LocalASR:
     capabilities = Capabilities(phoneme_level=False, prosody=False, nbest_phonemes=False, ssml=False)
 
     def recognize(self, clip: AudioClip, language: str = "en", prompt: str | None = None) -> ASRResult:
-        text, words, meta = transcribe_words(clip, language=language)
+        # task-47：faster-whisper 只接受 ISO 639-1（en/zh），从完整 locale 取语言部分
+        from ..languages import normalize_language, whisper_language
+
+        normalized = normalize_language(language) or "en-US"
+        text, words, meta = transcribe_words(clip, language=whisper_language(normalized))
         if prompt:
             meta["prompt_ignored"] = True
         return ASRResult(
             text=text,
-            language=language or "en",
+            language=normalized,
             duration_ms=clip.duration_ms,
             words=words,
             provider=self.name,

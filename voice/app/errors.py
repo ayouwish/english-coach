@@ -14,6 +14,7 @@ STATUS_BY_CODE: dict[str, int] = {
     "provider_timeout": 504,
     "no_provider": 503,
     "provider_unavailable": 503,  # task-25：/v1/ocr 依赖未安装（如未装 rapidocr）
+    "content_unsafe": 400,  # task-52：文生图内容被安全过滤
     "internal_error": 500,
 }
 
@@ -74,6 +75,12 @@ class ProviderError(VoiceError):
 
 class ProviderTimeout(ProviderError):
     code = "provider_timeout"
+
+
+class ContentUnsafe(VoiceError):
+    """文生图内容被服务商安全过滤（task-52）。"""
+
+    code = "content_unsafe"
 
 
 class ProviderUnavailable(ProviderError):

@@ -3,11 +3,11 @@
  * 跟读语料校验：node web/scripts/validate-corpus.mjs
  *
  * 校验 web/src/data/sentences.json：
- *   1. 恰好 300 条；id 唯一且符合 s-<level>-NN 命名；text 归一化后不重复
- *   2. A1/A2/B1 各 90–110 条
+ *   1. 恰好 600 条；id 唯一且符合 s-<level>-NN 命名；text 归一化后不重复
+ *   2. 各级别条数：A1 100 / A2 200 / B1 200 / B2 100
  *   3. focus_phonemes 必须全部落在 canonical-v1 规范空间内（辅音 24 + 元音 19 = 43），每句 1–4 个
- *   4. 必填字段非空；text 长度 A1 ≤ 60 / A2 ≤ 90 / B1 ≤ 140；tags 非空
- *   5. 音素覆盖报告：43 个规范音素各自的句子数，< 3 句记 warning
+ *   4. 必填字段非空；text 长度 A1 ≤ 60 / A2 ≤ 90 / B1 ≤ 140 / B2 ≤ 180；tags 非空
+ *   5. 音素覆盖报告：43 个规范音素各自的句子数，< 3 句记 warning；另报各级别词数分布
  *   6. 最小对立对分组统计（tags 含 minimal-pair + 分组 tag）
  *
  * 符号空间 = **canonical-v1**，定义处是 `voice/app/phonemes.py` 的 `CANONICAL_PHONEMES`
@@ -45,9 +45,11 @@ const VOWELS = [...MONOPHTHONGS, ...DIPHTHONGS, ...RETIRED_IN_CORPUS];
 const ALLOWED = [...CONSONANTS, ...VOWELS];
 const ALLOWED_SET = new Set(ALLOWED);
 
-const EXPECTED_TOTAL = 300;
-const LEVEL_RANGE = [90, 110];
-const TEXT_LIMIT = { A1: 60, A2: 90, B1: 140 };
+const EXPECTED_TOTAL = 600;
+// 各级别目标条数（task-48：A2/B1 各扩到 200，新增 B2 100，A1 保持 100）
+const LEVEL_TARGET = { A1: 100, A2: 200, B1: 200, B2: 100 };
+const LEVEL_RANGE = [90, 210];
+const TEXT_LIMIT = { A1: 60, A2: 90, B1: 140, B2: 180 };
 const MIN_PHONEME_SENTENCES = 3;
 // 43 个规范符号 − 3 个 en-US 不存在的央化双元音 = 语料实际可覆盖的上限 40
 const MIN_PHONEME_COVERAGE = 40;
@@ -90,7 +92,7 @@ if (sentences.length !== EXPECTED_TOTAL) {
 const idSeen = new Map();
 const textSeen = new Map();
 const dupTexts = [];
-const byLevel = { A1: 0, A2: 0, B1: 0 };
+const byLevel = { A1: 0, A2: 0, B1: 0, B2: 0 };
 const unknownLevels = new Map();
 
 sentences.forEach((s, i) => {
@@ -161,11 +163,10 @@ sentences.forEach((s, i) => {
 for (const [lv, n] of unknownLevels) warn(`未知 level「${lv}」共 ${n} 条，未计入分布`);
 
 // ---------- 2. 各 level 数量 ----------
-for (const [lv, expected] of [["A1", 100], ["A2", 100], ["B1", 100]]) {
+for (const [lv, expected] of Object.entries(LEVEL_TARGET)) {
   const n = byLevel[lv] ?? 0;
-  if (n < LEVEL_RANGE[0] || n > LEVEL_RANGE[1]) {
-    err(`${lv} 条数 ${n} 超出 ${LEVEL_RANGE[0]}–${LEVEL_RANGE[1]} 区间（目标 ${expected}）`);
-  }
+  if (n !== expected) err(`${lv} 条数 ${n}，目标 ${expected}`);
+  if (n < LEVEL_RANGE[0] || n > LEVEL_RANGE[1]) err(`${lv} 条数 ${n} 超出 ${LEVEL_RANGE[0]}–${LEVEL_RANGE[1]} 区间`);
 }
 
 // ---------- 3. 音素覆盖 ----------
@@ -225,7 +226,19 @@ line("语料校验报告  Corpus validation report");
 line(`数据文件: ${path.relative(process.cwd(), DATA_FILE)}`);
 line("");
 line(`总数: ${sentences.length} ${sentences.length === EXPECTED_TOTAL ? "✓" : `✗ (期望 ${EXPECTED_TOTAL})`}`);
-line(`各 level: A1=${byLevel.A1}  A2=${byLevel.A2}  B1=${byLevel.B1}  (要求各 ${LEVEL_RANGE[0]}–${LEVEL_RANGE[1]})`);
+line(`各 level: ${Object.entries(LEVEL_TARGET).map(([lv, n]) => `${lv}=${byLevel[lv] ?? 0}/${n}`).join("  ")}`);
+// 各级别词数分布（B2 要求“真难”，这里给出可复核的量化）
+const wordsOf = (t) => t.trim().split(/\s+/).length;
+const distLine = Object.keys(LEVEL_TARGET)
+  .map((lv) => {
+    const arr = sentences.filter((s) => s.level === lv);
+    if (arr.length === 0) return `${lv}: n/a`;
+    const ws = arr.map((s) => wordsOf(s.text));
+    const avg = (ws.reduce((a, b) => a + b, 0) / ws.length).toFixed(1);
+    return `${lv} 平均${avg}词/最长${Math.max(...ws)}词`;
+  })
+  .join("   ");
+line(`词数分布: ${distLine}`);
 line(`id 唯一: ${idSeen.size === sentences.length ? "✓" : "✗"}   text 重复: ${dupTexts.length === 0 ? "0 ✓" : `${dupTexts.length} ✗`}`);
 for (const d of dupTexts.slice(0, 10)) line(`  ! ${d}`);
 line("");

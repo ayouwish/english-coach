@@ -19,6 +19,24 @@ class TTSRequest(_Loose):
     ssml: str | None = None
 
 
+class StoryRewriteRequest(_Loose):
+    """中文讲述 -> 分级英文故事（task-47）。"""
+
+    text_zh: str = ""
+    level: str = "A1"  # A1 | A2 | B1 | B2
+    max_sentences: int = 6  # 1..6
+    weak_phonemes: list[str] = []
+    avoid_words: list[str] = []
+
+
+class StoryRetellRequest(_Loose):
+    """孩子复述故事 -> 关键信息覆盖度评估（task-51）。"""
+
+    story_sentences: list[str] = []
+    transcript: str = ""
+    level: str = "A2"
+
+
 class FeedbackScores(_Loose):
     pron: float | None = None
     accuracy: float | None = None

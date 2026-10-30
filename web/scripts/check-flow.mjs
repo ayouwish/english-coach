@@ -402,7 +402,16 @@ try {
   // 语料池不只是内置 300 句：家长自建语料（source='parent'，仅本人+其孩子可见）也会算进来。
   // 所以断言"内置 300 句都在"，而不是写死总数——否则一旦有人录入自定义语料，守卫就误报。
   const builtin = sents.filter((x) => (x.source ?? "builtin") === "builtin").length;
-  check("内置语料 = 300 句（且全部出现在语料池里）", builtin === 300, `builtin=${builtin} total=${sents.length}`);
+  // 以 sentences.json 为单一事实来源：语料会扩充（300 → 600，新增 B2），
+  // 写死数字会让每次扩语料都误报。这里断言"数据文件里的内置句都出现在语料池里"。
+  const corpusFile = JSON.parse(
+    fs.readFileSync(path.join(WEB_ROOT, "src/data/sentences.json"), "utf8"),
+  ).sentences;
+  check(
+    "内置语料与 sentences.json 一致（且全部出现在语料池里）",
+    builtin === corpusFile.length,
+    `builtin=${builtin} file=${corpusFile.length} total=${sents.length}`,
+  );
   check("语料池 ≥ 300 句", sents.length >= 300, `count=${sents.length}`);
   const draw5 = drawRandomSentences(sents, 5, seededRng(42));
   const draw15 = drawRandomSentences(sents, 15, seededRng(7));

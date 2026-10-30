@@ -1,4 +1,4 @@
-# 接口契约 v1.6（FROZEN · 2026-10-30）
+# 接口契约 v1.8（FROZEN · 2026-10-30）
 
 > **本文件是唯一事实来源（single source of truth）。**
 
@@ -13,6 +13,8 @@
 | 2026-10-24 | v1.4 | §6 `/v1/dialogue` 响应新增**可选**字段 `degraded_llm`（`true` = 本条不是大模型生成，走了模板降级）；修正 prompt 质量约束（年龄适配/连续性/纠错分级） | **向后兼容**：新字段可选，v1.3 客户端无感 |
 | 2026-10-29 | v1.5 | 新增 §14 `POST /v1/ocr`（拍照识别）与 `capabilities.ocr` / `ocr_provider`；错误码表新增 `provider_unavailable`(503)。OCR **默认走 LLM 视觉**（DeepSeek 多模态），本地 rapidocr 降为可选兜底 | **向后兼容**：新增接口/可选字段；`provider` 取值随部署而变，客户端不得写死 |
 | 2026-10-30 | v1.6 | `/v1/health` 新增 `providers_effective`（实际可用 provider）与 `degraded`（降级详情，空对象=健康）；**禁止静默降级**：配置的 provider 不可用时 TTS/ASR/PA 返回 503 `provider_unavailable`，不再回落 mock 返回 200 | 向后兼容（新增字段；行为变更：此前会静默返回 mock 音频/结果，属 bug 修复）|
+| 2026-10-30 | v1.7 | `/v1/asr` 的 `language` 支持 `zh`/`zh-CN`（响应回显规范化 locale）；新增 §15 `POST /v1/story/rewrite`（中文讲述→分级英文改写）| 向后兼容：新增端点与可选枚举值 |
+| 2026-10-30 | v1.8 | 新增 §16 `POST /v1/story/retell`（复述覆盖度评估，鼓励优先、不评发音分）；`warnings` 新增 `feedback_template` | 向后兼容：新增端点 |
 > `web/` 与 `voice/` 两个模块并行开发，任何一方需要改本契约，必须先通知 Lead 并同步改本文件。
 > 冻结范围：路径、请求字段名、响应字段名、枚举值、错误码。
 > 未冻结范围：各 provider 内部实现、日志格式、额外字段（允许追加 `provider_meta` 等可选字段，不得删除或改名已有字段）。
@@ -604,3 +606,82 @@ blind_tests
 - 错误：非图片 **400** `bad_request`；>10MB **413** `payload_too_large`；
   **503 `provider_unavailable`** = LLM 失败且无本地兜底，或两者都不可用。
 - 性能参考：LLM 路径实测 **0.7–1.5s/页**（偶发数秒；服务刚启动首次调用可能更慢）；本地兜底 0.5–0.8s/页（需额外 +157MB 依赖）。
+
+---
+
+## 15. v1.7 新增：`POST /v1/story/rewrite`（中文讲述 → 分级英文）
+
+故事模式的核心：孩子用中文讲自己的故事，服务端把它**改写**（不是直译）成符合其 CEFR 级别的英文。
+
+请求（JSON）：
+```json
+{"text_zh": "今天我和小明搭积木塔，被小华碰倒了，我很生气。",
+ "level": "A1",                 // A1 | A2 | B1 | B2，默认 A1
+ "max_sentences": 6,            // 1–6，默认 6
+ "weak_phonemes": ["th", "r"],  // 可选：把发音弱的音塞进故事里
+ "avoid_words": ["..."]}        // 可选
+```
+
+响应：
+```json
+{"title_en": "The Fallen Block Tower",
+ "sentences": ["Today I build a block tower with Xiaoming.", "..."],
+ "text_en": "<sentences 用 \n 连接>",
+ "level": "A1",
+ "readability": {"sentence_count": 6, "avg_words": 6.8, "max_words": 8,
+                 "unknown_words": ["cross"], "ok": true},
+ "warnings": [],
+ "provider": "deepseek",
+ "provider_meta": {"weak_phonemes_achieved": ["th"], "weak_phonemes_missing": ["r"]}}
+```
+
+**服务端硬校验（不依赖模型自觉）**：
+- 句数 ≤ `max_sentences`；平均词数 ≤ **8/10/12/14**（A1/A2/B1/B2）；最长句 ≤ 平均上限 + 4
+- **单一叙事时态**（混用 → 重写）；`avoid_words` 出现 → 重写
+- 词汇以句库（`web/src/data/sentences.json` 的 A1/A2）+ 常用词为准；人名/专名不算超纲
+  `unknown_words > 2` → **自动重写一次**（最多 2 次调用），仍超标 → `warnings:["too_hard"]` 并照常返回
+- `weak_phonemes` 未写出 → `warnings:["weak_phonemes_missing"]`
+
+**错误语义**：参数非法 → 400；LLM 未配置 → **503 `provider_unavailable`**；JSON 解析两次失败 → **502 `provider_error`**。
+**不落盘、不缓存**（内容每次不同）。实现上用 `disable_thinking`（推理模型会把 token 耗在思考上）。
+
+### `/v1/asr` 的 `language`（v1.7 扩展）
+- 接受 `en` / `en-US` / `zh` / `zh-CN`（大小写不敏感，`zh_hans` 等变体规范化）
+- 响应里 `language` 回显**规范化后的 locale**（`en-US` / `zh-CN`）
+- 非法值 → 400；中文识别结果**原样返回**（不做英文后处理）
+
+---
+
+## 16. v1.8 新增：`POST /v1/story/retell`（复述覆盖度评估）
+
+故事模式的 P3：孩子读完故事后**不看屏幕**用英文讲 2–3 句，系统评估"有没有把关键信息讲出来"。
+**不评发音分数**（复述阶段重点是表达，不是音准）。
+
+请求（JSON）：
+```json
+{"story_sentences": ["Today I built a tall block tower with Ming.", "Hua knocked it down.", "I was very angry."],
+ "transcript": "I build tower with Ming and Hua knock it down, I am angry",
+ "level": "A2"}
+```
+- `story_sentences` 1–20 条、每条 ≤200 字符；`transcript` 1–1000 字符；`level` ∈ A1/A2/B1/B2；超限 → 400
+
+响应：
+```json
+{"coverage": 0.72,
+ "covered_points": ["和 Ming 搭积木塔", "Hua 把塔弄倒", "我很生气"],
+ "missing_points": ["塔很高"],
+ "feedback_zh": "你说出了和 Ming 一起搭塔、Hua 把它弄倒、你很生气，讲得很完整！下次还可以说说塔很高。",
+ "feedback_en": "You told us you built a tower with Ming and Hua knocked it down — great job! ...",
+ "warnings": [],
+ "provider": "deepseek"}
+```
+
+**语义要求（服务端强制，不只靠模型）**：
+- 用 LLM 做**语义覆盖**（接受 `build`/`built` 变形、语序不同、省略冠词；1–2 句也算成功）
+- `coverage` 钳制到 0..1
+- **鼓励优先**：`feedback_zh` = 1 句具体肯定（必须提到孩子真的讲到的点）+ **最多 1 条**建议；**不得含否定词**（差/错/失败/不行/不好…）
+- `coverage < 0.3` 时语气必须更正向（"你开口讲了！我们再来一次"）
+- 模型反馈不合格 → 重生成一次；仍不合格 → 确定性正向模板兜底，并给 `warnings:["feedback_template"]`
+
+**错误语义**：参数非法 → 400；LLM 未配置 → 503 `provider_unavailable`；JSON 两次解析失败 → 502 `provider_error`。
+**不落盘、不缓存**（内容每次不同）。

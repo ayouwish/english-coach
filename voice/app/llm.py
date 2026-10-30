@@ -48,6 +48,14 @@ class LLMOutcome:
     provider: str
     data: dict | None = None
     error: str | None = None
+    finish_reason: str | None = None
+    completion_tokens: int | None = None
+    reasoning_tokens: int | None = None
+    thinking_disabled: bool = False
+
+    @property
+    def truncated(self) -> bool:
+        return self.finish_reason == "length"
 
     @property
     def ok(self) -> bool:
@@ -166,7 +174,14 @@ class LLMClient:
         timeout_s: float | None = None,
         max_tokens: int = 900,
         temperature: float = 0.3,
+        disable_thinking: bool = False,
     ) -> LLMOutcome:
+        """OpenAI 兼容 JSON 调用（task-47：故事改写默认关思考 + 截断诊断）。
+
+        `deepseek-flash` 是推理模型：不关思考时 reasoning 会吃掉 max_tokens，导致 JSON 截断。
+        `disable_thinking=True` 会加 `"thinking": {"type": "disabled"}`；若端点 400 拒绝该参数，
+        自动降级为"不带该参数"重试一次（与 OCR 同一套经验）。
+        """
         if not self.available:
             return LLMOutcome(provider="template", error="llm_not_configured")
         base = (self.settings.llm_base_url or "").rstrip("/")
@@ -174,30 +189,60 @@ class LLMClient:
         headers = {"Content-Type": "application/json"}
         if self.settings.llm_api_key:
             headers["Authorization"] = f"Bearer {self.settings.llm_api_key}"
-        payload = {
-            "model": self.settings.llm_model,
-            "messages": [
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_prompt},
-            ],
-            "temperature": temperature,
-            "max_tokens": max_tokens,
-            "response_format": {"type": "json_object"},
-        }
-        timeout = timeout_s or self.settings.llm_timeout_s
+
+        def _post(thinking_disabled: bool):
+            payload = {
+                "model": self.settings.llm_model,
+                "messages": [
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_prompt},
+                ],
+                "temperature": temperature,
+                "max_tokens": max_tokens,
+                "response_format": {"type": "json_object"},
+            }
+            if thinking_disabled:
+                payload["thinking"] = {"type": "disabled"}
+            return httpx.post(url, headers=headers, json=payload, timeout=timeout_s or self.settings.llm_timeout_s)
+
+        used_disable = bool(disable_thinking)
         try:
-            response = httpx.post(url, headers=headers, json=payload, timeout=timeout)
+            response = _post(used_disable)
+            if used_disable and getattr(response, "status_code", 200) == 400:
+                logger.warning("LLM JSON rejected thinking=disabled (HTTP 400); retrying without it")
+                used_disable = False
+                response = _post(False)
             response.raise_for_status()
             body = response.json()
-            content = body["choices"][0]["message"]["content"]
-            data = _loads_json(content)
+            choice = (body.get("choices") or [{}])[0] or {}
+            message = choice.get("message") or {}
+            content = message.get("content")
+            if isinstance(content, list):  # 少数端点返回分段 content
+                content = "".join(part.get("text", "") for part in content if isinstance(part, dict))
+            data = _loads_json(content or "")
+            usage = body.get("usage") or {}
+            details = usage.get("completion_tokens_details") or {}
+            finish_reason = choice.get("finish_reason")
             if data is None:
-                return LLMOutcome(provider=self.provider_name, error="invalid_json")
-            return LLMOutcome(provider=self.provider_name, data=data)
+                return LLMOutcome(
+                    provider=self.provider_name,
+                    error="invalid_json",
+                    finish_reason=finish_reason,
+                    completion_tokens=usage.get("completion_tokens"),
+                    reasoning_tokens=details.get("reasoning_tokens"),
+                    thinking_disabled=used_disable,
+                )
+            return LLMOutcome(
+                provider=self.provider_name,
+                data=data,
+                finish_reason=finish_reason,
+                completion_tokens=usage.get("completion_tokens"),
+                reasoning_tokens=details.get("reasoning_tokens"),
+                thinking_disabled=used_disable,
+            )
         except Exception as exc:
             logger.warning("LLM call failed (%s): %s", type(exc).__name__, exc)
             return LLMOutcome(provider="template", error=f"{type(exc).__name__}: {exc}")
-
 
 _FENCE_RE = re.compile(r"```(?:json)?\s*(.*?)\s*```", re.DOTALL)
 

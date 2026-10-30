@@ -14,6 +14,7 @@ import tempfile
 
 from ..audio_io import AudioClip, probe_audio, trim_wav_silence
 from ..config import Settings, get_settings
+from ..languages import normalize_language
 from ..voice_names import normalize_voice_name, voice_locale
 from ..errors import ProviderError, ProviderTimeout, ProviderUnavailable
 from ..hints import LIKELY_SUBSTITUTION
@@ -111,8 +112,9 @@ class AzureASR:
         speechsdk = _speechsdk()
         settings = get_settings()
         config = _speech_config(settings, speechsdk)
-        if language:
-            config.speech_recognition_language = "en-US" if language == "en" else language
+        # task-47：language 可能是 en/zh（短代码）或完整 locale；统一成 Azure 需要的 en-US / zh-CN
+        locale = normalize_language(language) or "en-US"
+        config.speech_recognition_language = locale
         path = _write_temp_wav(clip)
         try:
             audio_config = speechsdk.audio.AudioConfig(filename=path)
@@ -123,8 +125,8 @@ class AzureASR:
             text = getattr(result, "text", "") or ""
             words = _words_from_json(result)
             return ASRResult(
-                text=text,
-                language=language or "en",
+                text=text,  # 中文也原样返回（不做英文后处理/过滤）
+                language=locale,
                 duration_ms=clip.duration_ms,
                 words=words,
                 provider=self.name,

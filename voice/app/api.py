@@ -25,6 +25,8 @@ from .degrade import degraded_assessment, degraded_tts
 from .dialogue import complete_dialogue
 from .errors import BadRequest, PayloadTooLarge, ProviderUnavailable
 from .voice_names import is_valid_voice_name
+from .languages import SUPPORTED_ASR_LANGUAGES, normalize_language
+from .story import retell_story, rewrite_story
 from .feedback_templates import (
     CHILD_EXTRA_RULE,
     FEEDBACK_SYSTEM_PROMPT,
@@ -39,7 +41,7 @@ from .llm import LLMClient
 from .ocr import active_ocr_provider, heif_available, ocr_available, recognize_image
 from .phonemes import PHONEME_SPACE_ID, canonicalize_pa_result
 from .providers.registry import get_providers, provider_availability
-from .schemas import DialogueRequest, FeedbackRequest, TTSRequest, WarmupRequest
+from .schemas import DialogueRequest, FeedbackRequest, StoryRetellRequest, StoryRewriteRequest, TTSRequest, WarmupRequest
 from .store import AudioStore, CACHE_CONTROL, CONTENT_TYPES
 from .warmup import tts_provider_name
 from .text import estimate_word_timings, strip_terminal_punct, tokens
@@ -175,13 +177,17 @@ async def asr(
     prompt: str | None = Form(None),
 ) -> dict:
     settings = get_settings()
+    # task-47：language 支持 en / en-US / zh / zh-CN（大小写不敏感），统一成完整 locale
+    normalized_language = normalize_language(language)
+    if normalized_language is None:
+        raise BadRequest(f"language must be one of {SUPPORTED_ASR_LANGUAGES}, got {language!r}")
     data = await _read_upload(audio, settings.max_upload_bytes)
     clip = await run_in_threadpool(decode_audio, data, 16000, settings.max_audio_seconds)
     providers = get_providers()
 
     result, provider_name, fallback, errors = execution.run_chain(
         providers.asr_chain,
-        lambda provider: provider.recognize(clip, language=language or "en", prompt=prompt),
+        lambda provider: provider.recognize(clip, language=normalized_language, prompt=prompt),
         execution.TIMEOUTS["asr"],
         kind="asr",
     )
@@ -550,6 +556,35 @@ async def dialogue(payload: DialogueRequest) -> dict:
     # 返回体始终带 provider 与 degraded_llm（降级不伪装成大模型）。
     # httpx 是阻塞调用，放线程池避免卡住事件循环。
     return await run_in_threadpool(complete_dialogue, LLMClient(), body, execution.TIMEOUTS["dialogue"])
+
+
+# --------------------------------------------------------------------------------------
+# 10. story/rewrite（task-47：中文讲述 -> 分级英文故事）
+# --------------------------------------------------------------------------------------
+@router.post("/story/rewrite")
+async def story_rewrite(payload: StoryRewriteRequest) -> dict:
+    settings = get_settings()
+    return await run_in_threadpool(
+        rewrite_story,
+        payload.text_zh,
+        level=payload.level,
+        max_sentences=payload.max_sentences,
+        weak_phonemes=payload.weak_phonemes,
+        avoid_words=payload.avoid_words,
+        settings=settings,
+    )
+
+
+@router.post("/story/retell")
+async def story_retell(payload: StoryRetellRequest) -> dict:
+    settings = get_settings()
+    return await run_in_threadpool(
+        retell_story,
+        payload.story_sentences,
+        payload.transcript,
+        level=payload.level,
+        settings=settings,
+    )
 
 
 # --------------------------------------------------------------------------------------

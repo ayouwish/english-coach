@@ -10,7 +10,11 @@ import { getDb } from "@/db";
 import { attempts, sentences, users } from "@/db/schema";
 import { HttpError, type SessionUser } from "./auth";
 
-export const LEVELS = ["A1", "A2", "B1"] as const;
+// 统一用 CEFR_LEVELS（含 B2）：语料已扩到 600 句、新增 B2，
+// 这里若仍写死 A1/A2/B1，家长自定义语料的 POST 校验会拒掉 B2，且 UI 缺 B2 过滤入口。
+import { CEFR_LEVELS } from "@/lib/levels";
+
+export const LEVELS = CEFR_LEVELS;
 export type Level = (typeof LEVELS)[number];
 
 /** 该用户能看到的自定义语料归属者集合。 */

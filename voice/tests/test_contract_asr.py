@@ -14,7 +14,7 @@ def test_asr_mock_contract(client, speech):
     body = response.json()
     assert set(body) == ASR_KEYS
     assert isinstance(body["text"], str) and body["text"]
-    assert body["language"] == "en"
+    assert body["language"] == "en-US", "task-47：language 统一规范化为完整 locale"
     assert body["duration_ms"] > 0
     assert body["provider"] == "mock"
     assert body["words"], "words must not be empty"
@@ -33,7 +33,7 @@ def test_asr_accepts_prompt_and_language(client, speech):
         "/v1/asr", files=audio_files(speech), data={"language": "en", "prompt": "weather, think"}
     )
     assert response.status_code == 200
-    assert response.json()["language"] == "en"
+    assert response.json()["language"] == "en-US"
 
 
 def test_asr_is_deterministic(client, speech):

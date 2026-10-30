@@ -247,6 +247,15 @@ class Settings:
     max_tts_chars: int = 2000
     max_upload_bytes: int = 25 * 1024 * 1024
     max_ocr_bytes: int = 10 * 1024 * 1024  # /v1/ocr 图片上限（10MB）
+    # 文生图（task-52 智谱 GLM-Image）——默认 none 未启用
+    image_provider: str = "none"  # zhipu | mock | none
+    image_api_key: str | None = None
+    image_base_url: str = "https://open.bigmodel.cn/api/paas/v4"
+    image_model: str = "glm-image"
+    image_size: str = "1280x1280"
+    image_watermark: bool = True
+    image_timeout_s: float = 120.0
+    image_quality: str = "hd"
     # TTS WAV 首尾静音裁剪（task-39：Azure 短词尾部 ~1.3s 低电平噪声）
     tts_trim_silence: bool = True
     tts_trim_threshold_db: float = -50.0
@@ -363,6 +372,14 @@ def get_settings() -> Settings:
         max_tts_chars=_env_int("MAX_TTS_CHARS", 2000),
         max_upload_bytes=_env_int("MAX_UPLOAD_BYTES", 25 * 1024 * 1024),
         max_ocr_bytes=_env_int("MAX_OCR_BYTES", 10 * 1024 * 1024),
+        image_provider=_env("IMAGE_PROVIDER", "none") or "none",
+        image_api_key=_env("IMAGE_API_KEY"),
+        image_base_url=_env("IMAGE_BASE_URL", "https://open.bigmodel.cn/api/paas/v4") or "https://open.bigmodel.cn/api/paas/v4",
+        image_model=_env("IMAGE_MODEL", "glm-image") or "glm-image",
+        image_size=_env("IMAGE_SIZE", "1280x1280") or "1280x1280",
+        image_watermark=_env_bool("IMAGE_WATERMARK", True),
+        image_timeout_s=_env_float("IMAGE_TIMEOUT_S", 120.0),
+        image_quality=_env("IMAGE_QUALITY", "hd") or "hd",
         tts_trim_silence=_env_bool("TTS_TRIM_SILENCE", True),
         tts_trim_threshold_db=_env_float("TTS_TRIM_THRESHOLD_DB", -50.0),
         tts_trim_keep_ms=_env_int("TTS_TRIM_KEEP_MS", 50),
