@@ -21,6 +21,7 @@ export const GET = route(async (req: NextRequest) => {
   const items = await listMaterials({
     limit: Number(sp.get("limit") ?? 50),
     offset: Number(sp.get("offset") ?? 0),
+    kind: sp.get("kind"),
   });
   return jsonOk({ items, count: items.length });
 });
@@ -30,7 +31,7 @@ export const POST = route(async (req: NextRequest) => {
   await ensureBootstrap();
   const user = await requireUser();
   const body = (await req.json().catch(() => null)) as
-    | { title?: unknown; text?: unknown; image_b64?: unknown; source?: unknown }
+    | { title?: unknown; text?: unknown; image_b64?: unknown; source?: unknown; kind?: unknown; source_zh?: unknown; level?: unknown }
     | null;
   if (!body) throw new HttpError(400, "bad_request", "请求体必须是 JSON");
   try {
@@ -39,6 +40,9 @@ export const POST = route(async (req: NextRequest) => {
       text: body.text,
       imageB64: body.image_b64,
       source: body.source,
+      kind: (body as { kind?: unknown }).kind,
+      sourceZh: (body as { source_zh?: unknown }).source_zh,
+      level: (body as { level?: unknown }).level,
     });
     return jsonOk(
       {

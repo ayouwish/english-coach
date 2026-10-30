@@ -26,6 +26,10 @@ export const TIMEOUTS = {
   asr: 30_000,
   /** OCR：首次识别要加载模型（1–2s，最坏更久），给 60s；失败由调用方给可操作提示 */
   ocr: 60_000,
+  /** 故事改写（LLM，最长几句）：给 60s */
+  story: 60_000,
+  /** 文生图（智谱）：10–30s，给 90s */
+  illustrate: 90_000,
   pronounce: 60_000,
   tts: 20_000,
   feedback: 40_000,
@@ -165,6 +169,110 @@ export async function callOcr(image: {
   form.append("image", new Blob([new Uint8Array(image.data)], { type: image.mime }), image.filename);
   if (image.returnImage) form.append("return_image", "1");
   return callVoice<OcrResult>("/v1/ocr", { method: "POST", body: form }, TIMEOUTS.ocr);
+}
+
+export interface StoryRewriteResult {
+  title_en: string;
+  sentences: string[];
+  text_en: string;
+  level: string;
+  readability?: {
+    sentence_count?: number;
+    avg_words?: number;
+    max_words?: number;
+    unknown_words?: string[];
+    ok?: boolean;
+  } | null;
+  warnings?: string[];
+  provider?: string;
+}
+
+/** 故事改写（task-49）：中文原稿 → 适龄英文。voice 未实现时 404 → 调用方降级提示。 */
+export async function callStoryRewrite(input: {
+  text_zh: string;
+  level: string;
+  max_sentences?: number;
+  weak_phonemes?: string[];
+}): Promise<StoryRewriteResult> {
+  return callVoice<StoryRewriteResult>(
+    "/v1/story/rewrite",
+    {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        text_zh: input.text_zh,
+        level: input.level,
+        max_sentences: input.max_sentences ?? 6,
+        weak_phonemes: input.weak_phonemes ?? [],
+      }),
+    },
+    TIMEOUTS.story,
+  );
+}
+
+export interface StoryRetellResult {
+  coverage: number | null;
+  covered_points: string[];
+  missing_points: string[];
+  feedback_zh: string;
+  feedback_en: string;
+  warnings?: string[];
+  provider?: string;
+}
+
+/** 复述评估（task-50 P3）：把"孩子不看屏幕复述"的录音转写与故事要点比对。 */
+export async function callStoryRetell(input: {
+  story_sentences: string[];
+  transcript: string;
+  level?: string;
+}): Promise<StoryRetellResult> {
+  return callVoice<StoryRetellResult>(
+    "/v1/story/retell",
+    {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        story_sentences: input.story_sentences,
+        transcript: input.transcript,
+        level: input.level ?? "A2",
+      }),
+    },
+    TIMEOUTS.story,
+  );
+}
+
+export interface IllustrateResult {
+  image_b64: string;
+  mime?: string;
+  prompt_used?: string;
+  provider?: string;
+  model?: string;
+  size?: string;
+  elapsed_ms?: number;
+  warnings?: string[];
+}
+
+/** 故事插画（task-53，智谱）：`POST /v1/image/illustrate`（force=1 强制重生成）。 */
+export async function callIllustrate(input: {
+  story_text: string;
+  title_en: string;
+  style?: string;
+  force?: boolean;
+}): Promise<IllustrateResult> {
+  const qs = input.force ? "?force=1" : "";
+  return callVoice<IllustrateResult>(
+    `/v1/image/illustrate${qs}`,
+    {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        story_text: input.story_text,
+        title_en: input.title_en,
+        style: input.style ?? "watercolor",
+      }),
+    },
+    TIMEOUTS.illustrate,
+  );
 }
 
 /** 契约 §5：40s 超时，1 次重试后由调用方降级到本地模板。 */

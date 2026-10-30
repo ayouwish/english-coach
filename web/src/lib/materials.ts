@@ -74,6 +74,9 @@ export interface MaterialRow {
   imagePath: string | null;
   sentenceCount: number;
   source: string;
+  kind: string;
+  sourceZh: string | null;
+  level: string | null;
   createdBy: string | null;
   createdAt: string;
   updatedAt: string;
@@ -85,6 +88,9 @@ export interface MaterialSummary {
   sentence_count: number;
   has_image: boolean;
   source: string;
+  kind: string;
+  level: string | null;
+  has_source_zh: boolean;
   created_by: string | null;
   created_at: string;
   updated_at: string;
@@ -97,6 +103,9 @@ function toSummary(r: typeof readingMaterials.$inferSelect): MaterialSummary {
     sentence_count: r.sentenceCount,
     has_image: Boolean(r.imagePath),
     source: r.source,
+    kind: r.kind,
+    level: r.level,
+    has_source_zh: Boolean(r.sourceZh),
     created_by: r.createdBy,
     created_at: r.createdAt,
     updated_at: r.updatedAt,
@@ -119,11 +128,24 @@ function normalizeText(raw: unknown): string {
 
 export async function createMaterial(
   user: SessionUser,
-  input: { title?: unknown; text?: unknown; imageB64?: unknown; source?: unknown },
+  input: {
+    title?: unknown;
+    text?: unknown;
+    imageB64?: unknown;
+    source?: unknown;
+    kind?: unknown;
+    sourceZh?: unknown;
+    level?: unknown;
+  },
 ): Promise<MaterialSummary> {
   const title = normalizeTitle(input.title);
   const text = normalizeText(input.text);
   const source = input.source === "text" ? "text" : "photo";
+  const kind = input.kind === "story" ? "story" : "page";
+  const sourceZh =
+    kind === "story" && typeof input.sourceZh === "string" ? input.sourceZh.slice(0, MAX_TEXT).trim() || null : null;
+  const level =
+    typeof input.level === "string" && /^(A1|A2|B1|B2)$/.test(input.level) ? input.level : null;
   const id = `mat_${crypto.randomUUID().replace(/-/g, "").slice(0, 20)}`;
 
   let imagePath: string | null = null;
@@ -157,6 +179,9 @@ export async function createMaterial(
     imagePath,
     sentenceCount: countSentences(text),
     source,
+    kind,
+    sourceZh,
+    level,
     createdAt: now,
     updatedAt: now,
   });
@@ -164,13 +189,17 @@ export async function createMaterial(
   return toSummary(row);
 }
 
-export async function listMaterials(opts: { limit?: number; offset?: number } = {}): Promise<MaterialSummary[]> {
+export async function listMaterials(
+  opts: { limit?: number; offset?: number; kind?: string | null } = {},
+): Promise<MaterialSummary[]> {
   const db = getDb();
   const limit = Math.min(Math.max(1, opts.limit ?? 50), 200);
   const offset = Math.max(0, opts.offset ?? 0);
+  const where = opts.kind === "story" || opts.kind === "page" ? eq(readingMaterials.kind, opts.kind) : undefined;
   const rows = await db
     .select()
     .from(readingMaterials)
+    .where(where)
     .orderBy(desc(readingMaterials.createdAt))
     .limit(limit)
     .offset(offset);
@@ -188,6 +217,9 @@ export async function getMaterial(id: string): Promise<MaterialRow | null> {
     imagePath: row.imagePath,
     sentenceCount: row.sentenceCount,
     source: row.source,
+    kind: row.kind,
+    sourceZh: row.sourceZh,
+    level: row.level,
     createdBy: row.createdBy,
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,

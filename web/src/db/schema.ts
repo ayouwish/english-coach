@@ -68,6 +68,8 @@ export const attempts = sqliteTable(
     warningsJson: text("warnings_json").notNull().default("[]"),
     /** 1 = 盲测产生的记录；不参与 phoneme_mastery / 趋势 / SRS（契约 §13.3） */
     isBlind: integer("is_blind").notNull().default(0),
+    /** 这条 attempt 读的是哪个故事/材料（task-50）；NULL = 普通跟读 */
+    materialId: text("material_id"),
     /** 异步评分状态（task-24）：pending | scoring | done | failed；历史行默认 done */
     status: text("status").notNull().default("done"),
     scoredAt: text("scored_at"),
@@ -258,10 +260,35 @@ export const readingMaterials = sqliteTable(
     imagePath: text("image_path"),
     sentenceCount: integer("sentence_count").notNull().default(0),
     source: text("source").notNull().default("photo"),
+    /** page = 拍照书页（历史行默认）；story = 孩子讲的故事（task-49） */
+    kind: text("kind").notNull().default("page"),
+    /** 故事的中文原稿（"你说"那一栏） */
+    sourceZh: text("source_zh"),
+    /** 难度 A1/A2/B1/B2（故事改写用） */
+    level: text("level"),
     createdAt: text("created_at").notNull(),
     updatedAt: text("updated_at").notNull(),
   },
   (t) => [index("idx_materials_created").on(t.createdAt)],
+);
+
+/** 复述记录（task-50 P3）：读完之后"讲给我听"的评估结果，挂在故事上。 */
+export const storyRetells = sqliteTable(
+  "story_retells",
+  {
+    id: text("id").primaryKey(),
+    materialId: text("material_id"),
+    userId: text("user_id"),
+    storySentencesJson: text("story_sentences_json"),
+    transcript: text("transcript"),
+    coverage: real("coverage"),
+    coveredJson: text("covered_json"),
+    missingJson: text("missing_json"),
+    feedbackZh: text("feedback_zh"),
+    feedbackEn: text("feedback_en"),
+    createdAt: text("created_at").notNull(),
+  },
+  (t) => [index("idx_story_retells_material").on(t.materialId, t.createdAt)],
 );
 
 /** web 私有扩展表：纠正强度 / 音色 / 语速偏好（不改动契约冻结列）。 */

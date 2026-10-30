@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { EncouragementBox } from "@/components/EncouragementBox";
+import { RetellPanel } from "@/components/RetellPanel";
 import { Recorder } from "@/components/Recorder";
 import { FeedbackCard, IssuesSection } from "@/components/ResultSections";
 import { ScoreRadar } from "@/components/ScoreRadar";
@@ -53,6 +54,7 @@ export function FlowClient({
   voiceReachable,
   ocrAvailable,
   heicAvailable,
+  initialMaterialId = null,
 }: {
   isChild: boolean;
   userLevel: string;
@@ -62,6 +64,8 @@ export function FlowClient({
   ocrAvailable: boolean;
   /** voice 的 capabilities.heic（true = 服务端能解 HEIC，相册里的 HEIC 可直接上传） */
   heicAvailable: boolean;
+  /** /flow?material=<id>：自动载入这篇材料（故事保存后直接连读）*/
+  initialMaterialId?: string | null;
 }) {
   const [phase, setPhase] = useState<Phase>("setup");
   const [mode, setMode] = useState<"corpus" | "materials" | "custom">("corpus");
@@ -139,6 +143,30 @@ export function FlowClient({
   useEffect(() => {
     if (mode === "materials") void loadMaterials();
   }, [mode, loadMaterials]);
+
+  // 从 /story 保存后跳过来：自动载入这篇故事并直接开始连读
+  useEffect(() => {
+    if (!initialMaterialId) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await fetch(`/api/materials/${encodeURIComponent(initialMaterialId)}`);
+        const data = (await res.json().catch(() => null)) as { text?: string; error?: { message?: string } } | null;
+        if (cancelled) return;
+        if (!res.ok || !data?.text) {
+          setError(data?.error?.message ?? `载入故事失败（HTTP ${res.status}）`);
+          return;
+        }
+        startFromText(data.text, "custom");
+      } catch (err) {
+        if (!cancelled) setError(`载入故事失败：${(err as Error).message}`);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- 只在带 material 参数进入时载入一次
+  }, [initialMaterialId]);
 
   function startFromText(text: string, source: "corpus" | "custom") {
     const list = splitSentences(text);
@@ -584,6 +612,8 @@ export function FlowClient({
       form.append("reference_text", item.text);
       form.append("mode", "scripted");
       form.append("source", item.source);
+      // 从故事进入时带上 material_id：便于"听我上次读的"与故事详情趋势（task-50 P1）
+      if (initialMaterialId) form.append("material_id", initialMaterialId);
       if (item.sentenceId) form.append("sentence_id", item.sentenceId);
       form.append("duration_ms", String(Math.round(durationMs)));
 
@@ -1188,6 +1218,15 @@ export function FlowClient({
             words={encouragementWords}
             isChild={isChild}
           />
+
+          {/* P3 复述：读完故事后"不看屏幕讲一遍"（不显示发音分）*/}
+          {initialMaterialId ? (
+            <RetellPanel
+              materialId={initialMaterialId}
+              storySentences={items.map((it) => it.text)}
+              isChild={isChild}
+            />
+          ) : null}
 
           {worst.length > 0 ? (
             <div className="mt-3" data-testid="flow-worst">

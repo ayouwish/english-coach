@@ -96,6 +96,8 @@ export interface PendingAttemptInput {
   source: "corpus" | "custom";
   /** 盲测批次（task-33）：有值时 is_blind=1、盲测进行中不生成反馈、不写掌握度/SRS */
   blindTestId?: string | null;
+  /** 读的是哪个故事/材料（task-50 P1）：用于"听我上次读的"与故事详情趋势 */
+  materialId?: string | null;
 }
 
 /** 只做"存音频 + 写 pending 行"，不做任何评测（保证接口快速返回） */
@@ -133,6 +135,7 @@ export async function createPendingAttempt(input: PendingAttemptInput): Promise<
     refAudioUrl: null,
     durationMs: input.durationMs,
     warningsJson: "[]",
+    materialId: input.materialId ?? null,
     isBlind: input.blindTestId ? 1 : 0,
     blindTestId: input.blindTestId ?? null,
     status: "pending",

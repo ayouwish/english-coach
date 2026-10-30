@@ -32,6 +32,8 @@ export const POST = route(async (req: NextRequest) => {
   const durationMs = durationRaw ? Number(durationRaw) : null;
 
   // 盲测（task-33）：校验批次属于本人、仍在进行中、句子属于该批次
+  // 故事/材料 id（task-50 P1）：连读某个故事时带上，便于回放"听我上次读的"
+  const materialId = ((form.get("material_id") as string | null) ?? "").trim() || null;
   const blindTestId = ((form.get("blind_test_id") as string | null) ?? "").trim() || null;
   let blindTotal = 0;
   if (blindTestId) {
@@ -51,6 +53,7 @@ export const POST = route(async (req: NextRequest) => {
     durationMs,
     source,
     blindTestId,
+    materialId,
   });
 
   // 响应之后才评分：不阻塞用户进入下一句；并发由 async-scoring 的队列限制为 2

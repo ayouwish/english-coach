@@ -6,6 +6,7 @@ import { SuggestButton } from "./SuggestButton";
 const BASE_LINKS = [
   { href: "/practice", label: "🎤 跟读练习" },
   { href: "/flow", label: "🔗 连读模式" },
+  { href: "/story", label: "📖 我的故事" },
   { href: "/chat", label: "💬 对话训练" },
   { href: "/review", label: "📒 错音本" },
   { href: "/blindtest", label: "🎯 盲测周报" },

@@ -3,6 +3,7 @@ import fs from "node:fs";
 import { Readable } from "node:stream";
 import { ensureBootstrap } from "@/db";
 import { HttpError, requireUser } from "@/lib/auth";
+import { mimeForPath } from "@/lib/illustration";
 import { getMaterial, resolveMaterialPath } from "@/lib/materials";
 
 export const dynamic = "force-dynamic";
@@ -27,7 +28,7 @@ export async function GET(_req: NextRequest, ctx: { params: Promise<{ id: string
     return new NextResponse(stream, {
       status: 200,
       headers: {
-        "content-type": "image/jpeg",
+        "content-type": mimeForPath(material.imagePath),
         "content-length": String(stat.size),
         "last-modified": new Date(stat.mtimeMs).toUTCString(),
         "cache-control": "private, max-age=86400",
