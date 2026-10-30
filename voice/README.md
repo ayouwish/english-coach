@@ -158,6 +158,13 @@ uv run uvicorn app.main:app --host 0.0.0.0 --port 8100
 > 结果无论请求 mp3 还是 wav 都返回默认 16kHz PCM（听起来发闷，且 `content_type` 与实际字节不符）。
 > 现在若 setter 缺失会直接报错；返回字节还会用 PyAV 校验真实容器/采样率，不符则打 ERROR 日志。
 
+**语音与 locale（task-46）**：`/v1/tts` 的 `voice` 支持任意**合法** Azure 语音名（字母/数字/`._-`，
+如 `zh-CN-XiaoxiaoNeural`、`en-US-JennyNeural`），可直接用来给孩子放**中文鼓励语**。
+`rate="slow"` 分支手工构造 SSML，`xml:lang` 现在**按音色推导**（`zh-CN-…` → `zh-CN`；解析失败回退默认音色的
+locale，再回退 `en-US`），与 `<voice name=…>` 保持一致——否则中文音色会被写成 `en-US`，念成英文腔或 400。
+含引号/尖括号/空格等字符的 voice 一律 **400 `bad_request`**（防 SSML 注入）。缓存 key 含 `voice`，
+中英文音频不会互相污染。非 slow 分支仍走 `speak_text_async`，由 SDK 按音色处理。
+
 Pronunciation Assessment 参数（task-1 要求）：`granularity=Phoneme`、`enable_miscue=True`、
 `enable_prosody_assessment()`、`phoneme_alphabet="IPA"`、`nbest_phoneme_count=5`、`HundredMark`。
 `mode=unscripted`（参考文本为空）时不跑 PA（Azure PA 必须有参考文本），只出 ASR 文本 + 本地语调，

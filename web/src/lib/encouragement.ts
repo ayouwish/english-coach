@@ -28,7 +28,7 @@ export const ENCOURAGEMENT_POOLS: Record<EncouragementTier, readonly Encourageme
     { zh: "太厉害了，一口气读下来了！", en: "Amazing! You read the whole thing!" },
   ],
   A: [
-    { zh: "读得不错！继续这样就好。", en: "Nice reading! Keep it up." },
+    { zh: "读得很好！继续这样就好。", en: "Nice reading! Keep it up." },
     { zh: "很稳！保持这个节奏。", en: "Very steady! Keep this rhythm." },
     { zh: "这次比上次更顺了。", en: "Smoother than last time!" },
     { zh: "很好，句子都读完整了。", en: "Good job finishing every sentence." },
@@ -37,7 +37,7 @@ export const ENCOURAGEMENT_POOLS: Record<EncouragementTier, readonly Encourageme
   B: [
     { zh: "很认真！再读一遍会更顺。", en: "Good try! Reading again will be smoother." },
     { zh: "看到你在努力，继续保持。", en: "I can see your effort. Keep going!" },
-    { zh: "大部分都读到了，真不错。", en: "You got most of it. Nice work!" },
+    { zh: "大部分都读到了，真棒！", en: "You got most of it. Nice work!" },
     { zh: "慢一点会更清楚，我们再试试。", en: "Slow down a little and try again." },
     { zh: "你的声音很响亮，很好！", en: "Your voice was nice and loud!" },
   ],

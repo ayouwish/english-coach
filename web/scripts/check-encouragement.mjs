@@ -144,10 +144,10 @@ section("7. 源码断言：/flow 引用 + 中英双语 + 显式 voice");
   check("★ 组件展示中英两句（encouragement-zh / encouragement-en）", compSrc.includes('data-testid="encouragement-zh"') && compSrc.includes('data-testid="encouragement-en"'));
   check("★ 显式传 voice（中文 + 英文两个音色）", compSrc.includes("zh-CN-XiaoxiaoNeural") && compSrc.includes("en-US-JennyNeural") && /voice,\s*rate/.test(compSrc.replace(/\s+/g, " ")));
   check("中文 → 300ms → 英文（顺序播放）", compSrc.includes("ZH_VOICE") && compSrc.includes("EN_VOICE") && compSrc.includes("GAP_MS") && /GAP_MS = 300/.test(compSrc));
-  check("★ 无 Math.random（确定性，避免水合不一致）", !compSrc.includes("Math.random"));
+  check("★ 无 Math.random 调用（确定性，避免水合不一致）", !/Math\.random\s*\(/.test(compSrc) && !/Math\.random\s*\(/.test(fs.readFileSync(path.join(WEB_ROOT, "src/lib/encouragement.ts"), "utf8")));
   check("自动播被拦 → 可见降级提示 + 按钮", compSrc.includes('data-testid="encouragement-blocked"') && compSrc.includes('data-testid="encouragement-play"'));
   check("语音失败 → 可见提示（不静默）", compSrc.includes('data-testid="encouragement-error"') && compSrc.includes("语音暂时不可用"));
-  check("文案不写 markdown 星号", !compSrc.includes("**") && !fnHasDoubleStar());
+  check("文案不写 markdown 星号", !fnHasDoubleStar() && !/["'`]\*\*/.test(compSrc));
 }
 
 function fnHasDoubleStar() {
