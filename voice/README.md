@@ -923,10 +923,13 @@ mock/local 兜底产出 → 理论上会把 mock 音频写进 `<azure-key>.wav`�
 ```
 
 **服务端硬约束**（不靠模型自觉）：
-- 句数 ≤ `max_sentences`；平均词数 ≤ 8/10/12/14（A1/A2/B1/B2）；最长句 ≤ 平均上限 + 4
+- 句数 ≤ `max_sentences`；平均词数 ≤ **8 / 10 / 12 / 14 / 16**（A1/A2/B1/B2/**C1**）；最长句 ≤ 平均上限 + 4
+  （C1 允许复合句、抽象词与连接词，但仍要求"自然、可朗读"；task-55）
 - 单一叙事时态（过去/现在，混用会触发重写）；`avoid_words` 出现也会触发重写
-- `unknown_words`：不在 `web/src/data/sentences.json` A1/A2 句库、也不在 A1 常用词表里的词（人名/地名等专有名词不算）；
-  > 2 个 → **自动重写一次**（最多 2 次 LLM 调用），仍超标 → `warnings:["too_hard"]` 并返回（不报错）
+- `unknown_words` 判定策略：**A1/A2** 用 `sentences.json` 的 A1/A2 句库 + A1 常用词表判定
+  （人名/地名等专有名词不算；>2 个 → 自动重写一次（最多 2 次 LLM 调用），仍超标 → `warnings:["too_hard"]`）；
+  **B1/B2/C1 不做 unknown 判定**（句库只覆盖低级别、C1 词汇开放，强行判定会系统性误报 `too_hard`）——
+  这三级返回 `unknown_words: []` 且不参与 `readability.ok`，只按句数/词数/时态/SMS 判定
 - `weak_phonemes`：提示词里带上这些音（含句库例词）；没写出对应词 → `warnings:["weak_phonemes_missing"]`
 - LLM 调用：**关闭思考**（`thinking: disabled`，推理模型会吃光 token）、`max_tokens=2000`；
   `finish_reason=length` → 自动用 4000 重试；JSON 解析失败重试一次，两次失败 → `502 provider_error`
@@ -963,7 +966,7 @@ mock/local 兜底产出 → 理论上会把 mock 音频写进 `<azure-key>.wav`�
 - `coverage < 0.3` 时语气更正向（"你开口讲了！我们再来一次"），不扣分。
 - `coverage` 钳制到 0..1；`covered_points`/`missing_points` 由 LLM 结构化输出，服务端做类型/长度校验。
 - LLM：关思考、`max_tokens=1200`，`finish_reason=length` → 2400 重试；JSON 解析失败重试一次，两次失败 → 502。
-- 请求校验：`story_sentences` 1–20 条、每条 ≤200 字符；`transcript` 1–1000 字符；`level` ∈ A1/A2/B1/B2，否则 400。
+- 请求校验：`story_sentences` 1–20 条、每条 ≤200 字符；`transcript` 1–1000 字符；`level` ∈ A1/A2/B1/B2/**C1**，否则 400。
 - 不落盘、不缓存（每次内容不同）。
 
 ## 19. 文生图：故事 → 儿童绘本插画（task-52，智谱 GLM-Image）

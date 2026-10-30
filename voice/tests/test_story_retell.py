@@ -186,4 +186,32 @@ def test_retell_request_validation(client, llm_env):
     assert client.post("/v1/story/retell", json=_body(story_sentences=["x" * 201])).status_code == 400
     assert client.post("/v1/story/retell", json=_body(transcript="")).status_code == 400
     assert client.post("/v1/story/retell", json=_body(transcript="x" * 1001)).status_code == 400
-    assert client.post("/v1/story/retell", json=_body(level="C1")).status_code == 400
+    assert client.post("/v1/story/retell", json=_body(level="C2")).status_code == 400  # C1 合法、C2 非法
+
+
+# --------------------------------------------------------------------------------------
+# task-55：retell 支持 C1
+# --------------------------------------------------------------------------------------
+def test_retell_c1_normal(client, llm_env, monkeypatch):
+    calls = _patch_llm(monkeypatch, [NORMAL])
+    response = client.post("/v1/story/retell", json=_body(level="C1"))
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["coverage"] == 0.72
+    assert "C1" in calls[0]["user"]
+
+
+def test_retell_c1_low_coverage_still_positive(client, llm_env, monkeypatch):
+    low = {
+        "coverage": 0.15,
+        "covered_points": ["积木塔"],
+        "missing_points": ["冲突", "和好"],
+        "feedback_zh": "你开口讲了！你提到了积木塔，我们再来一次，这次可以多说一点。",
+        "feedback_en": "You spoke up! Let's try again together.",
+    }
+    _patch_llm(monkeypatch, [low])
+    body = client.post("/v1/story/retell", json=_body(level="C1")).json()
+    assert body["coverage"] == 0.15
+    for word in NEGATIVE_WORDS:
+        assert word not in body["feedback_zh"]
+    assert "开口" in body["feedback_zh"]

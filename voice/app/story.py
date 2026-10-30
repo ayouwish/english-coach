@@ -27,9 +27,18 @@ from .text import word_phonemes
 
 logger = logging.getLogger("voice.story")
 
-LEVELS: tuple[str, ...] = ("A1", "A2", "B1", "B2")
-# 平均词数上限（最长句 = 该值 + 4）
-LEVEL_MAX_AVG_WORDS: dict[str, int] = {"A1": 8, "A2": 10, "B1": 12, "B2": 14}
+LEVELS: tuple[str, ...] = ("A1", "A2", "B1", "B2", "C1")
+# 平均词数上限（最长句 = 该值 + 4）；task-55 增加 C1（账号体系支持成人 C1）
+LEVEL_MAX_AVG_WORDS: dict[str, int] = {"A1": 8, "A2": 10, "B1": 12, "B2": 14, "C1": 16}
+# 各级别的语言复杂度提示（写进提示词，让模型按级别调整）
+LEVEL_GUIDANCE: dict[str, str] = {
+    "A1": "very simple common words, short subject-verb-object sentences, one clause only",
+    "A2": "simple sentences, everyday vocabulary, mostly one clause",
+    "B1": "some compound sentences with common connectors (because / but / so), concrete vocabulary",
+    "B2": "compound and complex sentences, richer vocabulary, still natural and easy to read aloud",
+    "C1": "complex and compound-complex sentences and abstract vocabulary are welcome, "
+          "but keep it natural, coherent and pleasant to read aloud",
+}
 MAX_EXTRA_WORDS = 4
 MAX_UNKNOWN_WORDS = 2
 MAX_SENTENCES = 6
@@ -138,6 +147,17 @@ _PRESENT_IRREGULAR = {
     "feels", "knows", "grows", "plays", "reads",
 }
 _PRESENT_EXCEPTIONS = {"is", "was", "this", "his", "its", "us", "yes", "always", "sometimes", "plus", "does"}
+# 常见动词原形（只用于时态启发式，减少 "furious"/"nervous" 这类以 s 结尾的形容词误判）
+_VERB_BASES = frozenset("""
+play live like want need help look watch walk talk work build knock bump push pull drop fall open close
+start stop try carry cook clean dance jump climb read write throw catch give take make come go see eat drink
+sleep wake sit stand run say tell think know feel find get put smile laugh cry shout ask answer wait hurry
+study visit travel arrive return notice realize decide explain describe imagine remember forget begin become
+bring buy choose drive fly grow hear hold keep leave lose meet pay rise send sing speak spend swim teach
+understand wear win break fix hide hit hurt learn move plan prefer prepare pretend promise protect reach
+rest roll save seem share show shut smell sound stay step stick suppose surprise taste thank touch train
+treat trust turn use warn wash wish wonder worry yell
+""".split())
 
 
 def reset_story_cache() -> None:
@@ -215,21 +235,38 @@ def sentence_words(sentence: str) -> list[str]:
     return _WORD_RE.findall(sentence)
 
 
+def _verb_stems(word: str) -> set[str]:
+    """可能的动词原形（played -> play/playe，walks -> walk，tries -> try/trie）。"""
+    stems: set[str] = set()
+    if word.endswith("ied") and len(word) > 4:
+        stems.add(word[:-3] + "y")
+    if word.endswith("ed") and len(word) > 3:
+        stems.add(word[:-2])
+        stems.add(word[:-1])  # liked -> like
+    if word.endswith("es") and len(word) > 3:
+        stems.add(word[:-2])
+        stems.add(word[:-1])
+    if word.endswith("s") and not word.endswith("ss") and len(word) > 2:
+        stems.add(word[:-1])
+    return stems
+
+
 def _tense(tokens: list[str]) -> str | None:
     past = present = 0
     for token in tokens:
         lowered = token.lower()
-        if lowered in _PAST_IRREGULAR or (lowered.endswith("ed") and len(lowered) > 3):
+        if lowered in _PAST_IRREGULAR:
             past += 1
-        elif lowered in _PRESENT_IRREGULAR:
+            continue
+        if lowered in _PRESENT_IRREGULAR:
             present += 1
-        elif (
-            lowered.endswith("s")
-            and not lowered.endswith("ss")
-            and len(lowered) > 2
-            and lowered not in _PRESENT_EXCEPTIONS
-        ):
-            present += 1
+            continue
+        stems = _verb_stems(lowered)
+        if stems & _VERB_BASES:
+            if lowered.endswith("ed"):
+                past += 1
+            elif lowered.endswith("s") and lowered not in _PRESENT_EXCEPTIONS:
+                present += 1
     if past and present:
         return "mixed"
     if past:
@@ -237,6 +274,9 @@ def _tense(tokens: list[str]) -> str | None:
     if present:
         return "present"
     return None
+
+
+LEVELS_WITH_VOCAB_CHECK: frozenset[str] = frozenset({"A1", "A2"})
 
 
 def evaluate_readability(
@@ -255,8 +295,9 @@ def evaluate_readability(
     limit = LEVEL_MAX_AVG_WORDS.get(level, 8)
 
     tokens = [word for sentence in sentences for word in sentence_words(sentence)]
+    check_vocab = level in LEVELS_WITH_VOCAB_CHECK
     unknown: list[str] = []
-    for sentence in sentences:
+    for sentence in (sentences if check_vocab else []):
         words = sentence_words(sentence)
         for index, token in enumerate(words):
             lowered = token.lower()
@@ -280,7 +321,7 @@ def evaluate_readability(
         violations.append("sentence_too_long")
     if _tense(tokens) == "mixed":
         violations.append("mixed_tense")
-    if len(unknown) > MAX_UNKNOWN_WORDS:
+    if check_vocab and len(unknown) > MAX_UNKNOWN_WORDS:
         violations.append("unknown_words")
     declined = {word.lower() for word in avoid_words or []}
     if declined and any(token.lower() in declined for token in tokens):
@@ -369,8 +410,10 @@ def build_prompts(
         "No markdown, no comments, no Chinese characters in the English output."
     )
     word_list = ", ".join(sorted(vocab)[:120]) if vocab else "simple everyday words"
+    guidance = LEVEL_GUIDANCE.get(level, LEVEL_GUIDANCE["A1"])
     parts = [
         f"Level: {level}. Target: at most {max_sentences} sentences.",
+        f"Level guidance: {guidance}.",
         f"Average sentence length must be <= {limit} words; every sentence must be <= {limit + MAX_EXTRA_WORDS} words.",
         "Use ONLY ONE tense (past tense if the story already happened; present tense for routines). Do not mix tenses.",
         f"Prefer simple words from this list: {word_list}.",

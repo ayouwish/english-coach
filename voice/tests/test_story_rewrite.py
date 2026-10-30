@@ -86,7 +86,7 @@ def _story_body(**overrides):
 def test_story_request_validation(client, llm_env):
     assert client.post("/v1/story/rewrite", json=_story_body(text_zh="")).status_code == 400
     assert client.post("/v1/story/rewrite", json=_story_body(text_zh="中" * 2001)).status_code == 400
-    assert client.post("/v1/story/rewrite", json=_story_body(level="C1")).status_code == 400
+    assert client.post("/v1/story/rewrite", json=_story_body(level="C2")).status_code == 400  # C1 合法、C2 非法
     assert client.post("/v1/story/rewrite", json=_story_body(max_sentences=0)).status_code == 400
     assert client.post("/v1/story/rewrite", json=_story_body(max_sentences=7)).status_code == 400
 
@@ -348,3 +348,66 @@ def test_story_sentence_initial_proper_noun_not_unknown(client, llm_env, monkeyp
     body = client.post("/v1/story/rewrite", json=_story_body()).json()
     assert "xiaohua" not in body["readability"]["unknown_words"]
     assert body["readability"]["ok"] is True, body["readability"]
+
+
+# --------------------------------------------------------------------------------------
+# task-55：C1 级别
+# --------------------------------------------------------------------------------------
+C1_STORY = {
+    "title_en": "The Tower and the Apology",
+    "sentences": [
+        "Today I constructed an elaborate block tower together with my friend Xiaoming.",
+        "Xiaohua inadvertently knocked it over, which made me genuinely furious.",
+        "Although I felt deeply upset, I eventually realized it had been an accident.",
+        "We rebuilt the tower together, and our friendship became even stronger than before.",
+    ],
+}
+
+
+def test_c1_level_accepted(client, llm_env, monkeypatch, tmp_path):
+    monkeypatch.setenv("STORY_VOCAB_PATH", _vocab_file(tmp_path, GOOD_TEXT))  # C1 不判定词表
+    reset_story_cache()
+    calls = _patch_llm(monkeypatch, [C1_STORY])
+    response = client.post("/v1/story/rewrite", json=_story_body(level="C1"))
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["level"] == "C1"
+    assert body["readability"]["ok"] is True
+    assert "too_hard" not in body["warnings"]
+    # C1 允许抽象词/复合句：不做 unknown_words 判定，不应误报 too_hard
+    assert body["readability"]["unknown_words"] == []
+    assert "C1" in calls[0]["user"]
+    assert "complex" in calls[0]["user"].lower() or "abstract" in calls[0]["user"].lower()
+
+
+def test_c1_too_long_triggers_rewrite(client, llm_env, monkeypatch, tmp_path):
+    monkeypatch.setenv("STORY_VOCAB_PATH", _vocab_file(tmp_path, GOOD_TEXT))
+    reset_story_cache()
+    long_sentence = " ".join(["word"] * 21) + "."
+    bad = {"title_en": "Too Long", "sentences": [long_sentence]}
+    calls = _patch_llm(monkeypatch, [bad, C1_STORY])
+    body = client.post("/v1/story/rewrite", json=_story_body(level="C1")).json()
+    assert len(calls) == 2
+    assert body["readability"]["ok"] is True
+
+
+def test_c1_two_failures_marks_too_hard(client, llm_env, monkeypatch, tmp_path):
+    monkeypatch.setenv("STORY_VOCAB_PATH", _vocab_file(tmp_path, GOOD_TEXT))
+    reset_story_cache()
+    long_sentence = " ".join(["word"] * 25) + "."
+    bad = {"title_en": "Too Long", "sentences": [long_sentence]}
+    calls = _patch_llm(monkeypatch, [bad, bad])
+    body = client.post("/v1/story/rewrite", json=_story_body(level="C1")).json()
+    assert len(calls) == 2
+    assert "too_hard" in body["warnings"]
+    assert body["readability"]["ok"] is False
+
+
+def test_c1_avg_words_threshold_is_16():
+    from app.story import LEVEL_MAX_AVG_WORDS, evaluate_readability
+
+    assert LEVEL_MAX_AVG_WORDS["C1"] == 16
+    ok = evaluate_readability([" ".join(["word"] * 16)], level="C1", max_sentences=6, vocab=set())
+    too_long = evaluate_readability([" ".join(["word"] * 17)], level="C1", max_sentences=6, vocab=set())
+    assert ok["ok"] is True and ok["avg_words"] == 16.0
+    assert too_long["ok"] is False and "avg_words_too_high" in too_long["violations"]
