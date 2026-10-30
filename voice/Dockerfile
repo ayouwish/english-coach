@@ -40,7 +40,13 @@ WORKDIR /app
 # 先依赖后源码，最大化利用 Docker 层缓存
 # （等价写法：RUN pip install --no-cache-dir -r requirements.txt）
 COPY pyproject.toml uv.lock requirements.txt ./
+# requirements.txt 由 `uv export --extra azure ...` 生成（task-44 事故：漏掉 --extra azure 会让
+# TTS/ASR/PA 在线上静默降级成 mock 合成音；见 README §17）。
 RUN uv pip install --system --no-cache -r requirements.txt
+
+# 构建期硬断言：Azure 语音 SDK 必须真的进了镜像。
+# 缺失时**镜像构建直接失败**，不会再产出"能用但全部降级为 mock"的镜像（task-44）。
+RUN python -c "import azure.cognitiveservices.speech as s; print('azure speech', getattr(s, '__version__', 'ok'))"
 
 COPY app ./app
 

@@ -843,3 +843,48 @@ Azure 合成新文本实测 **1–11 秒且波动极大**（服务端曾报 `RTF
 5. `unscripted` 模式下 `pron/accuracy/completeness` 为 `null`（无参考文本，不臆造分数）。
 
 ---
+
+## 17. 禁止静默降级 + 镜像依赖断言（task-44 线上事故）
+
+**事故**：`requirements.txt` 是 `uv export` 生成的，但漏了 `--extra azure` → 线上镜像里没有
+`azure-cognitiveservices-speech` → TTS/ASR/PA 全部**静默回落到 mock**并返回 200：
+用户听到的"浑浊"其实是 mock 单音（16kHz、>4kHz 零能量），这几天的跟读评分也全是假的；
+`/v1/health` 还显示 `providers.tts=azure`（谎报）。
+
+修复（三层防回归）：
+
+1. **依赖必须重新导出并带 azure extra**：
+   ```bash
+   uv export --frozen --no-dev --extra azure --no-emit-project --format requirements-txt --no-hashes \
+     --index-url https://mirrors.aliyun.com/pypi/simple/ > requirements.txt
+   ```
+   产出必须包含 `azure-cognitiveservices-speech==1.52.0`（及其传递依赖 `azure-core`）。
+2. **Dockerfile 构建期硬断言**：`uv pip install` 之后执行
+   `RUN python -c "import azure.cognitiveservices.speech"` —— SDK 缺失时**镜像构建直接失败**，
+   不会再产出"能用但全部降级"的镜像。
+3. **禁止静默降级**：`PROVIDER_MODE` 为 `cloud` / `hybrid` / `local`（非 mock）时，若实际产出者是
+   `mock` 或 `degraded`，TTS/ASR/PA 一律返回 **503 `provider_unavailable`**，message 明确提示
+   「请重建镜像（docker compose build voice）或修复 .env 配置」。只有 `PROVIDER_MODE=mock` 才允许 mock。
+   （hybrid 下回落到 `local`/`piper`/`gop` 等**真实** provider 仍允许 200——那不是假声音。）
+
+**`/v1/health` 字段（task-44 新增，契约 v1.7）**：
+
+```json
+{
+  "providers": {"asr": "azure", "pa": "azure", "tts": "azure", "llm": "deepseek"},   // 配置值（语义不变）
+  "providers_effective": {"asr": "none", "pa": "none", "tts": "none", "llm": "template"}, // 实际可用
+  "degraded": {
+    "tts": {"configured": "azure", "effective": "none",
+            "reason": "azure-cognitiveservices-speech is not installed; run `uv sync --extra azure`"}
+  }
+}
+```
+
+- `degraded`：空对象 `{}` = 健康；非空时按 kind（`asr`/`pa`/`tts`）给出配置值、实际可用值与原因。
+- `providers` 语义保持不变（配置值）；**判断是否真的可用请看 `degraded`**（web/自检脚本用）。
+
+**缓存污染结论**：旧代码的 `/v1/tts` 缓存 key 用"配置的 primary provider 名"，而写缓存的字节可能是
+mock/local 兜底产出 → 理论上会把 mock 音频写进 `<azure-key>.wav`（线上那些 16kHz 文件即是此类或旧 SDK bug 产物）。
+现已加两道防线：① 只有**实际产出者 == key 里的 provider** 才写缓存；② task-42 的低采样率自愈会在命中时
+清掉 `<azure-key>` 下 16k/22.05k 的坏条目并重新合成 24k（详见 §8.4、§9.4）。历史污染文件无需手工处理。
+

@@ -23,7 +23,8 @@ from .cache import (
 from .config import get_settings
 from .degrade import degraded_assessment, degraded_tts
 from .dialogue import complete_dialogue
-from .errors import BadRequest, PayloadTooLarge
+from .errors import BadRequest, PayloadTooLarge, ProviderUnavailable
+from .voice_names import is_valid_voice_name
 from .feedback_templates import (
     CHILD_EXTRA_RULE,
     FEEDBACK_SYSTEM_PROMPT,
@@ -37,7 +38,7 @@ from .intonation import compare_intonation, extract_f0, prosody_score_from_dista
 from .llm import LLMClient
 from .ocr import active_ocr_provider, heif_available, ocr_available, recognize_image
 from .phonemes import PHONEME_SPACE_ID, canonicalize_pa_result
-from .providers.registry import get_providers
+from .providers.registry import get_providers, provider_availability
 from .schemas import DialogueRequest, FeedbackRequest, TTSRequest, WarmupRequest
 from .store import AudioStore, CACHE_CONTROL, CONTENT_TYPES
 from .warmup import tts_provider_name
@@ -45,6 +46,66 @@ from .text import estimate_word_timings, strip_terminal_punct, tokens
 from .warmup import prepare_reference, resolve_item, run_warmup, validate_item
 
 logger = logging.getLogger("voice.api")
+
+
+def _provider_status(providers, settings) -> tuple[dict, dict]:
+    """健康检查：配置的 provider 是否真的可用；不可用则找链上第一个可用的真实兜底。
+
+    -> (degraded, effective)。degraded[kind] = {configured, effective, reason}，健康时为空 dict。
+    task-44：线上曾出现 providers.tts=azure 但实际回落到 mock（谎报），必须如实上报。
+    """
+    degraded: dict = {}
+    effective: dict = {}
+    for kind, current in (("asr", providers.asr), ("pa", providers.pa), ("tts", providers.tts)):
+        configured = getattr(current, "name", "") or ""
+        available, reason = provider_availability(kind, configured)
+        if available:
+            effective[kind] = configured
+            continue
+        fallback_name = None
+        for candidate in getattr(providers, f"{kind}_chain", []) or []:
+            candidate_name = getattr(candidate, "name", "") or ""
+            if candidate_name in ("", "mock") or candidate_name == configured:
+                continue
+            if provider_availability(kind, candidate_name)[0]:
+                fallback_name = candidate_name
+                break
+        effective[kind] = fallback_name or ("mock" if settings.mode == "mock" else "none")
+        if settings.mode != "mock":
+            degraded[kind] = {"configured": configured, "effective": effective[kind], "reason": reason}
+    # LLM 与 providers.llm 对齐（它有自己的 degraded_llm 诚实字段，不进 degraded）
+    effective["llm"] = settings.llm_provider
+    return degraded, effective
+
+
+def _ensure_real_provider(kind: str, provider_name: str | None) -> None:
+    """非 mock 模式下，禁止"配置的 provider 不可用 → 回落到 mock"还返回 200。
+
+    task-44 线上事故：requirements 漏装 azure SDK，TTS/ASR/PA 全部静默降级成 mock，
+    用户把合成音当成母语者示范（跟读评分也全是假的）。这里改为 **503 provider_unavailable**。
+    """
+    settings = get_settings()
+    if settings.mode == "mock":
+        return
+    name = (provider_name or "").lower()
+    if name not in ("mock", "", "degraded"):
+        return
+    providers = get_providers()
+    configured = getattr(providers, kind).name
+    _ok, reason = provider_availability(kind, configured)
+    alternatives = [
+        getattr(candidate, "name", "")
+        for candidate in (getattr(providers, f"{kind}_chain", []) or [])
+        if getattr(candidate, "name", "") not in ("", "mock")
+        and provider_availability(kind, getattr(candidate, "name", ""))[0]
+    ]
+    message = (
+        f"{kind.upper()} provider 不可用：{reason or '未安装/未配置'}（配置为 {configured}，已禁止回落到 mock）。"
+        "请重建镜像（docker compose build voice）或修复 .env 配置（依赖见 requirements.txt）。"
+    )
+    if alternatives:
+        message += f" 可用替代：{', '.join(dict.fromkeys(alternatives))}。"
+    raise ProviderUnavailable(message, provider=configured, code="provider_unavailable")
 
 router = APIRouter()
 
@@ -86,6 +147,8 @@ async def health() -> dict:
     capabilities["ocr"] = ocr_available()  # task-27：任一 OCR provider 可用（LLM 视觉 或 本地 rapidocr）
     capabilities["ocr_provider"] = active_ocr_provider()  # "llm" | "local" | null（自检用）
     capabilities["heic"] = heif_available()  # task-38：是否支持从相册选 iPhone HEIC/HEIF 照片
+    # task-44：如实上报"配置的 provider 是否真的可用"（线上曾谎报 azure、实际回落到 mock）
+    degraded, effective = _provider_status(providers, settings)
     return {
         "status": "ok",
         "version": settings.version,
@@ -96,6 +159,8 @@ async def health() -> dict:
             "tts": providers.tts.name,
             "llm": settings.llm_provider,
         },
+        "providers_effective": effective,
+        "degraded": degraded,
         "capabilities": capabilities,
     }
 
@@ -126,6 +191,7 @@ async def asr(
 
         raise ProviderError("all ASR providers failed", provider=provider_name or "asr", detail=errors[-3:])
 
+    _ensure_real_provider("asr", getattr(result, "provider", provider_name))
     payload = result.to_contract()
     if fallback:
         payload["warnings"] = ["provider_fallback"]
@@ -186,6 +252,7 @@ async def pronounce(
         )
         provider_name = "degraded"
         fallback = True
+    _ensure_real_provider("pa", getattr(result, "provider", provider_name))
     if fallback:
         warnings.append("provider_fallback")
     warnings.extend(result.warnings)
@@ -308,6 +375,11 @@ async def tts(payload: TTSRequest) -> Response:
     if not text.strip() and not (payload.ssml or "").strip():
         raise BadRequest("either text or ssml is required")
 
+    # task-46：允许任意**合法**的 Azure 语音名（如 zh-CN-XiaoxiaoNeural）透传；
+    # 含引号/尖括号等字符的一律 400（voice 会进 SSML 属性，必须防注入）。
+    if payload.voice and not is_valid_voice_name(payload.voice):
+        raise BadRequest(f"invalid voice name: {payload.voice!r}（只允许字母/数字/./_/-）")
+
     providers = get_providers()
     cache = get_cache()
     resolved_voice = payload.voice or settings.default_tts_voice
@@ -365,8 +437,12 @@ async def tts(payload: TTSRequest) -> Response:
     else:
         audio, content_type, provider_name, fallback = await run_in_threadpool(_generate)
 
+    # task-44：非 mock 模式下，回落到 mock/degraded 必须报 503，绝不能把合成音当示范音返回 200
+    _ensure_real_provider("tts", provider_name)
+
     # 只缓存"主 provider 正常产出"的音频：降级音/兜底音绝不能固化（否则会永久给错音频）
-    if cache_hash is not None and not fallback and provider_name != "degraded":
+    # 另外要求**实际产出者 == 缓存 key 里的 provider**，否则会把 piper/mock 音频写进 azure 的 key（污染）
+    if cache_hash is not None and not fallback and provider_name != "degraded" and provider_name == tts_provider:
         try:
             await run_in_threadpool(cache.put_audio, cache_hash, audio, ext_from_content_type(content_type))
         except Exception:  # noqa: BLE001 - 缓存写失败不影响本次返回

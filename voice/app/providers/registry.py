@@ -136,3 +136,57 @@ def reset_providers() -> None:
 
 
 __all__ = ["ProviderSet", "build_providers", "get_providers", "reset_providers", "ProviderError"]
+
+
+def provider_availability(kind: str, name: str) -> tuple[bool, str | None]:
+    """探测某个 provider 现在**是否真的可用**（依赖已装 + 配置齐全 + 模型文件在）。
+
+    只做廉价检查（import 探测/路径检查/配置检查），不加载模型、不联网。
+    -> (available, reason)。task-44：health 用它报告真实的 degraded 状态，禁止谎报。
+    """
+    name = (name or "").lower()
+    try:
+        if not name:
+            return False, "provider 未配置"
+        if name == "mock":
+            return True, None
+        if name == "azure":
+            from .azure import azure_status
+
+            return azure_status()
+        if name == "local":
+            import importlib.util
+
+            if kind == "tts":
+                if importlib.util.find_spec("edge_tts") is None:
+                    return False, "edge-tts 未安装"
+                return True, None
+            if importlib.util.find_spec("faster_whisper") is None:
+                return False, "faster-whisper 未安装"
+            from .local import resolve_whisper_dir
+
+            resolve_whisper_dir()
+            return True, None
+        if name == "piper":
+            import importlib.util
+
+            if importlib.util.find_spec("piper") is None:
+                return False, "piper 未安装"
+            from .piper import resolve_voice_path
+
+            resolve_voice_path(None)
+            return True, None
+        if name == "gop":
+            import importlib.util
+
+            if importlib.util.find_spec("onnxruntime") is None:
+                return False, "onnxruntime 未安装"
+            from .gop import resolve_model_paths
+
+            resolve_model_paths()
+            return True, None
+        return False, f"未知 provider: {name!r}"
+    except VoiceError as exc:
+        return False, exc.message
+    except Exception as exc:  # pragma: no cover - 环境异常按不可用处理
+        return False, f"{type(exc).__name__}: {exc}"

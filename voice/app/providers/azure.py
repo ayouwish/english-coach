@@ -14,6 +14,7 @@ import tempfile
 
 from ..audio_io import AudioClip, probe_audio, trim_wav_silence
 from ..config import Settings, get_settings
+from ..voice_names import normalize_voice_name, voice_locale
 from ..errors import ProviderError, ProviderTimeout, ProviderUnavailable
 from ..hints import LIKELY_SUBSTITUTION
 from ..text import syllable_count, tokens
@@ -86,6 +87,20 @@ def _check_result(result, speechsdk, provider: str = "azure"):
             raise ProviderTimeout(f"{provider} timed out: {detail}", provider=provider)
         raise ProviderError(f"{provider} request failed: {detail}", provider=provider)
     return result
+
+
+def azure_status() -> tuple[bool, str | None]:
+    """健康检查用：Azure 语音是否**真的可用**（SDK 已安装 + key/region 已配置）。"""
+    try:
+        _speechsdk()
+    except ProviderUnavailable as exc:
+        return False, exc.message
+    settings = get_settings()
+    if not settings.azure_speech_key:
+        return False, "AZURE_SPEECH_KEY 未配置"
+    if not (settings.azure_speech_endpoint or settings.azure_speech_region):
+        return False, "AZURE_SPEECH_REGION（或 AZURE_SPEECH_ENDPOINT）未配置"
+    return True, None
 
 
 class AzureASR:
@@ -292,7 +307,9 @@ class AzureTTS:
         speechsdk = _speechsdk()
         settings = get_settings()
         config = _speech_config(settings, speechsdk)
-        config.speech_synthesis_voice_name = voice or settings.azure_tts_voice
+        # task-46：语音名必须是安全字符（防 SSML/配置注入）；非法则回退默认音色
+        voice_name = normalize_voice_name(voice) or normalize_voice_name(settings.azure_tts_voice) or settings.azure_tts_voice
+        config.speech_synthesis_voice_name = voice_name
         fmt_key, fmt_name, content_type = self._resolve_format(fmt)
         _apply_output_format(config, speechsdk, fmt_name)
         synth = speechsdk.SpeechSynthesizer(speech_config=config, audio_config=None)
@@ -301,8 +318,11 @@ class AzureTTS:
             result = synth.speak_ssml_async(ssml).get()
         elif rate == "slow":
             escaped = (text or "").replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+            # task-46：xml:lang 必须与语音的 locale 一致（否则 zh 音色会被写成 en-US → 念歪/400）。
+            # 推导：voice -> 默认音色 -> en-US。
+            locale = voice_locale(voice_name, settings.azure_tts_voice)
             ssml_payload = (
-                f'<speak version="1.0" xml:lang="en-US"><voice name="{voice or settings.azure_tts_voice}">'
+                f'<speak version="1.0" xml:lang="{locale}"><voice name="{voice_name}">'
                 f'<prosody rate="-30%">{escaped}</prosody></voice></speak>'
             )
             result = synth.speak_ssml_async(ssml_payload).get()

@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { EncouragementBox } from "@/components/EncouragementBox";
 import { Recorder } from "@/components/Recorder";
 import { FeedbackCard, IssuesSection } from "@/components/ResultSections";
 import { ScoreRadar } from "@/components/ScoreRadar";
@@ -626,6 +627,9 @@ export function FlowClient({
   }
 
   const doneItems = items.filter((it) => it.status === "done" && it.result?.scores);
+  /** 鼓励语音的确定性种子：同一轮全部读完 → 同一句话（避免水合/重复播报不一致） */
+  const encouragementSeed = items.map((it) => it.attemptId ?? `-${it.index}`).join("|") || "flow";
+  const encouragementWords = doneItems.flatMap((it) => it.result?.words ?? []);
   const avgPron =
     doneItems.length > 0
       ? Math.round(
@@ -1176,6 +1180,15 @@ export function FlowClient({
               </>
             ) : null}
           </p>
+          {/* 读完之后的分级鼓励（task-45）：按平均分/完成情况选文案，中英双语 + 顺序播放 */}
+          <EncouragementBox
+            attemptId={encouragementSeed}
+            pron={avgPron}
+            noSpeech={doneItems.length === 0}
+            words={encouragementWords}
+            isChild={isChild}
+          />
+
           {worst.length > 0 ? (
             <div className="mt-3" data-testid="flow-worst">
               <h2 className="font-bold">{isChild ? "这几句可以再读一遍" : "最需要再练的几句"}</h2>

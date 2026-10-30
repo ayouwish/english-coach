@@ -51,17 +51,19 @@ def test_mode_provider_matrix(monkeypatch, mode, expected):
     assert (settings.asr_provider, settings.pa_provider, settings.tts_provider) == expected
 
 
-def test_cloud_mode_without_azure_key_degrades_to_mock(client, monkeypatch, sweep):
-    """环境里没有 AZURE_SPEECH_KEY：cloud 模式也必须 200（链尾 mock 兜底）+ provider_fallback。"""
+def test_cloud_mode_without_azure_key_returns_503_not_mock(client, monkeypatch, sweep):
+    """task-44：cloud 模式没有 AZURE_SPEECH_KEY 时**禁止静默回落 mock 返回 200** → 503 provider_unavailable。"""
     monkeypatch.delenv("AZURE_SPEECH_KEY", raising=False)
     _with_env(monkeypatch, PROVIDER_MODE="cloud")
     health = client.get("/v1/health").json()
-    assert health["providers"]["pa"] == "azure"  # 如实上报配置
+    assert health["providers"]["pa"] == "azure"  # 配置值如实上报
+    assert health["degraded"]["pa"]["configured"] == "azure"
+    assert health["degraded"]["pa"]["effective"] == "none"
     response = post_pronounce(client, sweep, "I think the weather is really nice today.")
-    assert response.status_code == 200
+    assert response.status_code == 503
     body = response.json()
-    assert "provider_fallback" in body["warnings"]
-    assert body["provider"] == "mock"
+    assert body["error"]["code"] == "provider_unavailable"
+    assert "重建镜像" in body["error"]["message"] or "build voice" in body["error"]["message"]
 
 
 def test_local_mode_capabilities_and_lazy_model_load(client, monkeypatch):

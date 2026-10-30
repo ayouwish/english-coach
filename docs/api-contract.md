@@ -1,4 +1,4 @@
-# 接口契约 v1.5（FROZEN · 2026-10-29）
+# 接口契约 v1.6（FROZEN · 2026-10-30）
 
 > **本文件是唯一事实来源（single source of truth）。**
 
@@ -12,6 +12,7 @@
 | 2026-10-23 | v1.3 | §12.2 缓存 key 再加 `fmt` 分量并升到 `"v3"`：TTS 格式设置修复后音频从 16kHz 变 24kHz，且 mp3/wav 是不同产物；`/v1/tts` 接入同一套缓存 | **缓存失效一次**（重新预热即可）；`/v1/tts` 响应新增 `X-Cache` 与 `X-Audio-Codec/Sample-Rate/Container` 观测头 |
 | 2026-10-24 | v1.4 | §6 `/v1/dialogue` 响应新增**可选**字段 `degraded_llm`（`true` = 本条不是大模型生成，走了模板降级）；修正 prompt 质量约束（年龄适配/连续性/纠错分级） | **向后兼容**：新字段可选，v1.3 客户端无感 |
 | 2026-10-29 | v1.5 | 新增 §14 `POST /v1/ocr`（拍照识别）与 `capabilities.ocr` / `ocr_provider`；错误码表新增 `provider_unavailable`(503)。OCR **默认走 LLM 视觉**（DeepSeek 多模态），本地 rapidocr 降为可选兜底 | **向后兼容**：新增接口/可选字段；`provider` 取值随部署而变，客户端不得写死 |
+| 2026-10-30 | v1.6 | `/v1/health` 新增 `providers_effective`（实际可用 provider）与 `degraded`（降级详情，空对象=健康）；**禁止静默降级**：配置的 provider 不可用时 TTS/ASR/PA 返回 503 `provider_unavailable`，不再回落 mock 返回 200 | 向后兼容（新增字段；行为变更：此前会静默返回 mock 音频/结果，属 bug 修复）|
 > `web/` 与 `voice/` 两个模块并行开发，任何一方需要改本契约，必须先通知 Lead 并同步改本文件。
 > 冻结范围：路径、请求字段名、响应字段名、枚举值、错误码。
 > 未冻结范围：各 provider 内部实现、日志格式、额外字段（允许追加 `provider_meta` 等可选字段，不得删除或改名已有字段）。
@@ -46,6 +47,8 @@
   "version": "0.1.0",
   "mode": "mock",
   "providers": { "asr": "mock", "pa": "mock", "tts": "mock", "llm": "mock" },
+  "providers_effective": { "asr": "mock", "pa": "mock", "tts": "mock", "llm": "template" },
+  "degraded": {},
   "capabilities": {
     "phoneme_level": false,
     "prosody": false,
@@ -58,6 +61,13 @@
 }
 ```
 
+- **`providers_effective`（v1.6 新增）**：**实际可用**的 provider（与 `providers` 的配置值区分）。
+  配置了 azure 但 SDK 缺失时，`providers.tts` 仍是 `"azure"`，而 `providers_effective.tts` 为 `"none"`。
+- **`degraded`（v1.6 新增）**：降级详情，**空对象 `{}` 表示健康**；否则形如
+  `{"tts": {"configured": "azure", "effective": "none", "reason": "...is not installed"}}`。
+  **语义要求（v1.6 的行为契约）**：非 `mock` 模式下，配置的 provider 不可用时，TTS/ASR/PA **必须返回 503 `provider_unavailable`**，
+  **不得**回落到 mock 后返回 200 —— 把合成音当"母语者示范"返回是事故（2026-10-29 真实发生过）。
+  回落到的若是**真实 provider**（hybrid 下的 local/piper/gop）则允许 200。
 - `mode` ∈ `mock` | `local` | `cloud` | `hybrid`。
 - `capabilities` 决定 UI 降级：`phoneme_level=false` 时前端只显示单词级热力图，不显示 IPA；
   **`ocr`（v1.5 新增，bool）**：拍照识别是否可用 = **任一 OCR provider 可用**（LLM 视觉已配置，或本地 OCR 依赖已装）。

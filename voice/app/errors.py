@@ -77,7 +77,10 @@ class ProviderTimeout(ProviderError):
 
 
 class ProviderUnavailable(ProviderError):
-    """Provider 依赖缺失 / 未配置（例如没装 azure SDK、没有 key）。"""
+    """Provider 依赖缺失 / 未配置（例如没装 azure SDK、没有 key）。
 
-    def __init__(self, message: str, provider: str = "", detail: Any | None = None):
-        super().__init__(message, provider=provider, detail=detail, code="no_provider")
+    `code` 可覆盖：task-44 要求"非 mock 模式回落到 mock"对外是 503 `provider_unavailable`。
+    """
+
+    def __init__(self, message: str, provider: str = "", detail: Any | None = None, code: str = "no_provider"):
+        super().__init__(message, provider=provider, detail=detail, code=code)

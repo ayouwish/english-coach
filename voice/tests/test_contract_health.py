@@ -13,7 +13,7 @@ def test_health_shape_and_defaults(client):
     response = client.get("/v1/health")
     assert response.status_code == 200
     body = response.json()
-    assert set(body) == {"status", "version", "mode", "providers", "capabilities"}
+    assert set(body) == {"status", "version", "mode", "providers", "capabilities", "providers_effective", "degraded"}
     assert body["status"] == "ok"
     assert body["version"] == "0.1.0"
     assert body["mode"] in MODES
@@ -24,6 +24,10 @@ def test_health_shape_and_defaults(client):
     assert body["capabilities"]["intonation_curve"] is True
     assert body["capabilities"]["gpu"] is False
     assert isinstance(body["capabilities"]["phoneme_level"], bool)
+    # task-44：如实上报"配置的 provider 是否真的可用"（mock 模式下健康）
+    assert set(body["providers_effective"]) == PROVIDER_KEYS
+    assert body["providers_effective"] == {"asr": "mock", "pa": "mock", "tts": "mock", "llm": "template"}
+    assert body["degraded"] == {}
 
 
 def test_health_needs_no_auth(client):
