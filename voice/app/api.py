@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import difflib
+import logging
 import re
 
 from fastapi import APIRouter, File, Form, UploadFile
@@ -10,7 +11,7 @@ from fastapi.responses import Response
 from starlette.concurrency import run_in_threadpool
 
 from . import execution
-from .audio_io import decode_audio, probe_audio
+from .audio_io import MIN_TTS_WAV_SAMPLE_RATE, decode_audio, probe_audio, wav_header_info
 from .cache import (
     EXT_CONTENT_TYPES,
     SINGLE_FLIGHT,
@@ -42,6 +43,8 @@ from .store import AudioStore, CACHE_CONTROL, CONTENT_TYPES
 from .warmup import tts_provider_name
 from .text import estimate_word_timings, strip_terminal_punct, tokens
 from .warmup import prepare_reference, resolve_item, run_warmup, validate_item
+
+logger = logging.getLogger("voice.api")
 
 router = APIRouter()
 
@@ -319,6 +322,13 @@ async def tts(payload: TTSRequest) -> Response:
         hit = await run_in_threadpool(cache.get_audio, cache_hash)
         if hit is not None:
             cached_audio, cached_ext = hit
+            bad = await run_in_threadpool(
+                _purge_low_rate_wav_cache, cache, cache_hash, cached_audio, cached_ext, tts_provider
+            )
+            if bad is not None:
+                hit = None  # 当作 miss：重新合成并写入新缓存（cache_state 仍为 "miss"）
+        if hit is not None:
+            cached_audio, cached_ext = hit
             probe = await run_in_threadpool(_safe_probe, cached_audio)
             return Response(
                 content=cached_audio,
@@ -330,7 +340,10 @@ async def tts(payload: TTSRequest) -> Response:
         """合成（或再查一次缓存）：同一 key 并发时只真正生成一次。"""
         if cache_hash is not None:
             again = cache.get_audio(cache_hash)
-            if again is not None:
+            if (
+                again is not None
+                and _purge_low_rate_wav_cache(cache, cache_hash, again[0], again[1], tts_provider) is None
+            ):
                 return again[0], EXT_CONTENT_TYPES.get(again[1], "application/octet-stream"), tts_provider, False
         result, name, fallback_flag, _errors = execution.run_chain(
             providers.tts_chain,
@@ -373,6 +386,36 @@ def _safe_probe(data: bytes):
         return probe_audio(data)
     except Exception:  # noqa: BLE001
         return None
+
+
+def _purge_low_rate_wav_cache(cache, key: str, audio: bytes, ext: str, provider_name: str | None = None) -> dict | None:
+    """缓存自愈（task-42）：命中 **azure** 的 wav 但采样率 <24kHz → 删音频 + 连带 F0，返回 header 信息。
+
+    只解析 WAV 头部（≤1KB），不解码整个文件。返回 None 表示"不是坏缓存"。
+
+    只对 azure 生效：16kHz 是 Azure 旧 bug（SDK 静默退回默认格式）的产物；
+    mock TTS 本身就是 16kHz、Piper 是 22.05kHz，都是合法输出，不能误伤它们的缓存。
+    """
+    if (provider_name or "").lower() != "azure":
+        return None
+    if (ext or "").lower() not in ("wav", "wave"):
+        return None
+    info = wav_header_info(audio)
+    rate = info["sample_rate"] if info else None
+    if rate is None or rate >= MIN_TTS_WAV_SAMPLE_RATE:
+        return None
+    logger.warning(
+        "tts cache hit with low sample rate (%dHz < %dHz): purge & re-synthesize "
+        "(key=%s, duration=%sms, bytes=%d)",
+        rate,
+        MIN_TTS_WAV_SAMPLE_RATE,
+        key,
+        info.get("duration_ms"),
+        len(audio),
+    )
+    cache.delete_audio(key)
+    cache.delete_f0(key)  # F0 是对坏音频算的，一并删掉
+    return info
 
 
 def _tts_headers(provider_name: str, probe, cache_state: str, fallback: bool) -> dict:

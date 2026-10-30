@@ -11,6 +11,8 @@ from __future__ import annotations
 
 import io
 import time
+
+import numpy as np
 from pathlib import Path
 
 import pytest
@@ -20,6 +22,7 @@ from app.cache import KEY_VERSION, cache_key, get_cache, legacy_v2_cache_key, re
 from app.config import reset_settings_cache
 from app.providers.base import Capabilities, TTSResult
 from app.providers.registry import ProviderSet, build_providers
+from app.audio_io import pcm16_wav_bytes
 from app.synth import sweep_wav, synthesize_speech_wav, tone_wav
 
 TEXT = "I think the weather is really nice today."
@@ -313,7 +316,7 @@ def fake_azure(monkeypatch):
     monkeypatch.setenv("AZURE_SPEECH_REGION", "eastasia")
     reset_settings_cache()
     monkeypatch.setattr("app.providers.azure._speechsdk", lambda: _FakeSpeechSDK)
-    _FakeSynthesizer.audio = tone_wav(220.0, 0.4)
+    _FakeSynthesizer.audio = pcm16_wav_bytes(np.linspace(0, 0, 24000 * 4 // 10, dtype=np.float32) + 0.2 * np.sin(2 * np.pi * 220.0 * np.arange(24000 * 4 // 10) / 24000), 24000)
     yield _FakeSpeechSDK
     reset_settings_cache()
 

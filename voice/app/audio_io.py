@@ -97,6 +97,59 @@ def _parse_wav_pcm16_mono(audio: bytes) -> tuple[int, np.ndarray] | None:
     return sample_rate, np.frombuffer(raw, dtype="<i2")
 
 
+MIN_TTS_WAV_SAMPLE_RATE = 24000  # TTS WAV 的最低可接受采样率（task-42：16kHz=电话音被限带宽）
+
+_WAV_SUPPORTED_EXTS = {".wav", ".wave"}
+
+
+def wav_header_info(data: bytes, header_bytes: int = 1024) -> dict | None:
+    """只解析 WAV 头部（≤1KB）：-> {sample_rate, channels, bits, data_bytes, duration_ms}。
+
+    不做解码、不读完整文件——用于缓存命中/批量审计时的廉价采样率校验（task-42）。
+    非 RIFF/WAVE 或头部不完整返回 None。
+    """
+    head = data[: max(12, header_bytes)]
+    if len(head) < 12 or head[:4] != b"RIFF" or head[8:12] != b"WAVE":
+        return None
+    pos = 12
+    sample_rate = channels = bits = None
+    data_bytes = None
+    while pos + 8 <= len(head):
+        chunk_id = head[pos : pos + 4]
+        size = int.from_bytes(head[pos + 4 : pos + 8], "little")
+        if chunk_id == b"fmt ":
+            fmt = head[pos + 8 : pos + 8 + size]
+            if len(fmt) < 8:
+                return None
+            channels = int.from_bytes(fmt[2:4], "little")
+            sample_rate = int.from_bytes(fmt[4:8], "little")
+            bits = int.from_bytes(fmt[14:16], "little") if len(fmt) >= 16 else None
+        elif chunk_id == b"data":
+            data_bytes = size
+            break
+        pos += 8 + size + (size & 1)  # chunk 按字对齐
+    if not sample_rate or not channels or sample_rate <= 0:
+        return None
+    duration_ms = None
+    if data_bytes is not None and bits:
+        bytes_per_second = sample_rate * channels * (bits // 8)
+        if bytes_per_second > 0:
+            duration_ms = int(round(data_bytes / bytes_per_second * 1000))
+    return {
+        "sample_rate": int(sample_rate),
+        "channels": int(channels),
+        "bits": bits,
+        "data_bytes": data_bytes,
+        "duration_ms": duration_ms,
+    }
+
+
+def wav_sample_rate_from_header(data: bytes) -> int | None:
+    """便捷函数：只取采样率（非 WAV 返回 None）。"""
+    info = wav_header_info(data)
+    return info["sample_rate"] if info else None
+
+
 def trim_wav_silence(
     audio: bytes,
     threshold_db: float = -50.0,

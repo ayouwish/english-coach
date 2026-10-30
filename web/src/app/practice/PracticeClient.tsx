@@ -56,6 +56,10 @@ export function PracticeClient({
   const [myAudioDurationMs, setMyAudioDurationMs] = useState<number | null>(null);
   const [demoUrl, setDemoUrl] = useState<string | null>(null);
   const [demoBusy, setDemoBusy] = useState(false);
+  /** 「只听示范」正在播（task-43）：点了就播，不用再点下面的原生播放器 */
+  const [demoPlaying, setDemoPlaying] = useState(false);
+  const demoAudioRef = useRef<HTMLAudioElement | null>(null);
+  const demoUrlRef = useRef<string | null>(null);
   // 「跟我读」：播完示范音把 startSignal 加一，Recorder 收到后自动开始录音
   const [followBusy, setFollowBusy] = useState(false);
   const [startSignal, setStartSignal] = useState(0);
@@ -94,6 +98,39 @@ export function PracticeClient({
     }, 1500);
     return () => clearTimeout(timer);
   }, [level, list]);
+
+  /** 停掉当前示范音（重复点击/切换句子/卸载都用它） */
+  function stopDemoAudio() {
+    const audio = demoAudioRef.current;
+    if (audio) {
+      audio.pause();
+      audio.currentTime = 0;
+      audio.onended = null;
+      audio.onerror = null;
+      demoAudioRef.current = null;
+    }
+    setDemoPlaying(false);
+  }
+
+  // 切换句子：停掉正在播的示范音、清掉兜底播放器（避免上一句的音频继续响/残留）
+  useEffect(() => {
+    stopDemoAudio();
+    setDemoUrl(null);
+    if (demoUrlRef.current) {
+      URL.revokeObjectURL(demoUrlRef.current);
+      demoUrlRef.current = null;
+    }
+  }, [selected?.id]);
+
+  // 卸载：停播 + 释放所有 object URL（含最后一轮示范音）
+  useEffect(() => {
+    const urls = objectUrls;
+    return () => {
+      stopDemoAudio();
+      for (const u of urls.current) URL.revokeObjectURL(u);
+      urls.current = [];
+    };
+  }, []);
 
   function rememberUrl(url: string) {
     objectUrls.current.push(url);
@@ -184,15 +221,40 @@ export function PracticeClient({
   }
 
   async function playDemo() {
-    if (!selected) return;
+    if (!selected || demoBusy) return;
     setDemoBusy(true);
+    setError(null);
     try {
+      // 重复点击 / 上一段还在播：先停掉、从头开始（不叠加）
+      const prev = demoAudioRef.current;
+      if (prev) {
+        prev.pause();
+        prev.currentTime = 0;
+        prev.onended = null;
+        prev.onerror = null;
+      }
       const url = await getDemoUrl();
       if (!url) {
         setError("示范音暂时不可用，稍后再试");
         return;
       }
-      setDemoUrl(url);
+      demoUrlRef.current = url;
+      setDemoUrl(url); // 原生 <audio controls> 仍保留作兜底（手动可点、可重复听）
+      // ★ 关键修复：拿到 URL 就**立即播放**（在点击手势里调用，不会被自动播放策略拦）
+      const audio = new Audio(url);
+      demoAudioRef.current = audio;
+      setDemoPlaying(true);
+      audio.onended = () => setDemoPlaying(false);
+      audio.onerror = () => {
+        setDemoPlaying(false);
+        setError("示范音播放失败：可以点下面的播放器重试");
+      };
+      try {
+        await audio.play();
+      } catch {
+        setDemoPlaying(false);
+        setError("自动播放被浏览器拦住了：点下面那个播放器就可以听（或再点一次按钮）");
+      }
     } catch (err) {
       setError((err as Error).message);
     } finally {
@@ -378,8 +440,15 @@ export function PracticeClient({
               startSignal={startSignal}
               emphasis="secondary"
             />
-            <button type="button" className="ec-btn ec-btn-ghost" onClick={playDemo} disabled={demoBusy}>
-              🔊 {demoBusy ? "生成中…" : isChild ? "只听示范" : "只听示范音"}
+            <button
+              type="button"
+              className="ec-btn ec-btn-ghost"
+              onClick={() => void playDemo()}
+              disabled={demoBusy || demoPlaying}
+              data-testid="demo-play"
+              aria-label={isChild ? "只听示范，点了立即播放" : "只听示范音，点了立即播放"}
+            >
+              🔊 {demoPlaying ? "播放中…" : demoBusy ? "生成中…" : isChild ? "只听示范" : "只听示范音"}
             </button>
             {response?.retryable ? (
               <button type="button" className="ec-btn ec-btn-warn" onClick={retry} disabled={busy}>
@@ -393,9 +462,10 @@ export function PracticeClient({
               <RecordedAudio src={myAudioUrl} durationMs={myAudioDurationMs} />
             ) : null}
             {demoUrl ? (
-              <span className="flex items-center gap-2">
+              <span className="flex flex-wrap items-center gap-2" data-testid="demo-fallback">
                 示范音：
                 <audio controls src={demoUrl} className="h-9" />
+                <span className="text-xs text-[var(--ec-muted)]">（也可以用这个播放器重复听）</span>
               </span>
             ) : null}
           </div>

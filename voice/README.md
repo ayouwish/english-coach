@@ -376,6 +376,14 @@ Azure 对**短词**返回的 WAV 尾部会带约 1.3s 的低电平噪声（实�
 | `think, sink` / slow | 2.86s | 1.41s | **1.51s** |
 | `think` / mp3 | 1.87s | — | 不裁剪（mp3）|
 
+**旧缓存兼容 / 坏音频自愈**（task-42）：task-39 之前写入的 WAV 可能是 **16kHz**（旧的"SDK 静默退回默认格式"
+bug 产物，>4kHz 零能量=电话音"浑浊"）。现在：
+- `/v1/tts` **命中缓存时**只读 WAV 头部（≤1KB）解析采样率；若是 **azure** 的 wav 且 **<24000Hz**：
+  记 WARNING（含 key/采样率/时长）→ 删除该缓存 + 同名 `cache/f0/<key>.json` → 当作 miss 重新合成并写入新 24kHz 缓存。
+  （只对 azure 生效；mock 本身 16kHz、Piper 22.05kHz 都是合法输出，不会被误删。）
+- 校验阈值按格式收紧：**wav ≥ 24000Hz**、mp3 ≥ 16000Hz；Azure 产出低于阈值会抛 `ProviderError`（不再静默通过，避免坏音频再进缓存）。
+- 批量清理：`python scripts/trim_cache.py --fix-low-rate`（默认只报告，带上参数才删，并按文件打印采样率）。
+
 ### 8.3 `POST /v1/warmup`
 
 ```bash
@@ -442,7 +450,21 @@ docker compose exec -T voice python scripts/trim_cache.py
 # 只看前 N 个 / 指定数据目录
 docker compose exec -T voice python scripts/trim_cache.py --limit 20
 docker compose exec -T voice python scripts/trim_cache.py --data-dir /data
+
+# task-42：清理旧 bug 留下的 16kHz 坏缓存（电话音）。默认只报告，--fix-low-rate 才删
+docker compose exec -T voice python scripts/trim_cache.py --fix-low-rate
+docker compose exec -T voice python scripts/trim_cache.py --fix-low-rate --json
 ```
+
+低采样率审计输出示例（临时目录）：
+
+```
+  低采样率: old16k_badcache.wav  16000Hz < 24000Hz（时长 500ms）  → 删除
+结果     : scanned=3 ok=2 low_rate_found=1 deleted=1 (f0=1) trimmed=0 skipped=2 failed=0
+```
+
+> 即使不跑脚本，`/v1/tts` 命中这些坏缓存时也会**自动**删除并重新合成（用户无感），
+> 脚本只是用于一次性批量清理（不必逐个词触发）。
 
 输出示例（真实临时目录）：
 

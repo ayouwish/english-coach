@@ -173,6 +173,44 @@ if (!fs.existsSync(DB_PATH)) {
   check("没听到：带重录入口（页面录音按钮仍在）", noSpeech.html.includes("按这里开始说") || noSpeech.html.includes("开始录音"));
 }
 
+// ── C. task-43：「只听示范」点了立即播放（不是只渲染播放器）─────────────────
+section("C. 「只听示范」立即播放（playDemo 源码级断言）");
+{
+  const src = fs.readFileSync(path.join(WEB_ROOT, "src/app/practice/PracticeClient.tsx"), "utf8");
+  // 抠出 playDemo 函数体（花括号配对）
+  const start = src.indexOf("async function playDemo(");
+  let body = "";
+  if (start >= 0) {
+    const open = src.indexOf("{", start);
+    let depth = 0;
+    for (let i = open; i < src.length; i++) {
+      if (src[i] === "{") depth += 1;
+      else if (src[i] === "}") {
+        depth -= 1;
+        if (depth === 0) {
+          body = src.slice(open, i + 1);
+          break;
+        }
+      }
+    }
+  }
+  check("能找到 playDemo 函数", body.length > 0, `len=${body.length}`);
+  check(
+    "★ playDemo 里真的调用了 play()（不是只 setDemoUrl）",
+    /\.play\(\)/.test(body) && /new Audio\(/.test(body),
+    body.includes("audio.play()") ? "命中 audio.play()" : "未命中",
+  );
+  check(
+    "★ 重复点击先 pause + currentTime=0（从头播、不叠加）",
+    /pause\(\)/.test(body) && /currentTime\s*=\s*0/.test(body),
+  );
+  check("★ 有「播放中」状态（按钮文案/状态变量）", src.includes('"播放中…"') && src.includes("demoPlaying"));
+  check("play() 失败可见（不静默）", /自动播放被浏览器拦/.test(body) || /示范音播放失败/.test(body));
+  check("兜底：原生 <audio controls> 仍在且带说明", src.includes("<audio controls src={demoUrl}") && src.includes("也可以用这个播放器重复听"));
+  check("切句/卸载会停播并 revoke（不 revoke 正在播的）", src.includes("stopDemoAudio()") && src.includes("URL.revokeObjectURL(demoUrlRef.current)"));
+  check("「跟我读」未被改动（仍是自己 new Audio(url) 播放）", /async function followAlong\([\s\S]{0,1200}?new Audio\(url\)/.test(src));
+}
+
 console.log(`\n合计断言失败 ${failed} 项`);
 console.log(failed === 0 ? "结论：全部通过 ✅" : "结论：存在失败 ❌");
 process.exit(failed > 0 ? 1 : 0);

@@ -210,6 +210,36 @@ class WarmupCache:
             self.evict()
         return external_audio_id(key, ext)
 
+    def delete_audio(self, key: str) -> int:
+        """删除该 key 的所有音频格式文件（task-42：坏缓存自愈/批量清理）。-> 删除数"""
+        if not self.enabled:
+            return 0
+        removed = 0
+        with self._lock:
+            for path in self._audio_candidates(key):
+                try:
+                    path.unlink()
+                    removed += 1
+                except FileNotFoundError:
+                    continue
+                except OSError:
+                    continue
+        return removed
+
+    def delete_f0(self, key: str) -> int:
+        """删除该 key 的参考 F0 缓存（坏音频的 F0 也不可信）。-> 删除数"""
+        if not self.enabled:
+            return 0
+        with self._lock:
+            path = self.f0_dir / f"{key}.json"
+            try:
+                path.unlink()
+                return 1
+            except FileNotFoundError:
+                return 0
+            except OSError:
+                return 0
+
     def audio_external_id(self, key: str) -> str | None:
         for path in self._audio_candidates(key):
             return external_audio_id(key, path.suffix.lstrip(".").lower())

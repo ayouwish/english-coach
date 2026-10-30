@@ -351,7 +351,8 @@ class AzureTTS:
 
 # 请求格式 -> 期望的真实容器/编码（用于防回归校验）
 _EXPECTED_CONTAINERS = {"mp3": {"mp3"}, "wav": {"wav", "wav_pcm"}}
-_EXPECTED_MIN_RATE = 16000
+# task-42：wav 必须 ≥24kHz（我们只产出 Riff24Khz；16kHz 是"SDK 静默退回默认格式"的坏产物，电话音）
+_EXPECTED_MIN_RATE = {"mp3": 16000, "wav": 24000}
 
 
 def _apply_output_format(config, speechsdk, fmt_name: str) -> None:
@@ -392,10 +393,18 @@ def verify_audio_format(data: bytes, fmt: str):
 
     expected_containers = _EXPECTED_CONTAINERS.get(fmt, set())
     container_ok = probe.container in expected_containers or (fmt == "mp3" and probe.codec.startswith("mp3"))
-    if not container_ok or probe.sample_rate < _EXPECTED_MIN_RATE:
+    min_rate = _EXPECTED_MIN_RATE.get(fmt, 16000)
+    if probe.sample_rate < min_rate:
+        # 低采样率 = 带宽被限（16kHz 只有 ~4kHz 高频）→ "浑浊/电话音"。
+        # 绝不静默返回：抛错让调用链降级，避免把坏音频写进缓存（task-42 的旧 bug 就是这么进缓存的）。
+        raise ProviderError(
+            f"azure TTS 输出采样率过低：请求 {fmt}（≥{min_rate}Hz），实际 {probe.sample_rate}Hz"
+            "（检查 set_speech_synthesis_output_format 是否生效——旧 bug 会静默退回 16kHz）",
+            provider="azure",
+        )
+    if not container_ok:
         logger.error(
-            "azure TTS 返回的音频与请求格式不符：请求 %s，实际 container=%s codec=%s rate=%sHz "
-            "（检查 set_speech_synthesis_output_format 是否真的生效）",
+            "azure TTS 返回的音频容器与请求格式不符：请求 %s，实际 container=%s codec=%s rate=%sHz",
             fmt,
             probe.container,
             probe.codec,

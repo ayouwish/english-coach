@@ -31,7 +31,12 @@ ROOT = Path(__file__).resolve().parent.parent
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from app.audio_io import probe_audio, trim_wav_silence  # noqa: E402
+from app.audio_io import (  # noqa: E402
+    MIN_TTS_WAV_SAMPLE_RATE,
+    probe_audio,
+    trim_wav_silence,
+    wav_header_info,
+)
 from app.config import get_settings  # noqa: E402
 
 
@@ -58,6 +63,11 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--limit", type=int, default=0, help="只处理前 N 个 wav（调试用）")
     parser.add_argument("--threshold-db", type=float, default=None, help="静音阈值 dBFS（默认取 settings）")
     parser.add_argument("--keep-ms", type=int, default=None, help="首尾保留余量 ms（默认取 settings）")
+    parser.add_argument(
+        "--fix-low-rate",
+        action="store_true",
+        help=f"删除采样率 <{MIN_TTS_WAV_SAMPLE_RATE}Hz 的坏 WAV 缓存（默认只报告；task-42）",
+    )
     parser.add_argument("--json", action="store_true", help="额外输出机器可读 JSON")
     args = parser.parse_args(argv)
 
@@ -75,8 +85,14 @@ def main(argv: list[str] | None = None) -> int:
         return 2
 
     files = _collect_wavs(audio_dir, args.limit)
-    stats = {"scanned": 0, "trimmed": 0, "skipped": 0, "failed": 0, "saved_ms": 0.0,
-             "before_ms": 0.0, "after_ms": 0.0, "ignored_mp3": len(list(audio_dir.glob("*.mp3")))}
+    stats = {
+        "scanned": 0, "ok": 0, "trimmed": 0, "skipped": 0, "failed": 0,
+        "low_rate_found": 0, "deleted": 0, "f0_deleted": 0,
+        "saved_ms": 0.0, "before_ms": 0.0, "after_ms": 0.0,
+        "ignored_mp3": len(list(audio_dir.glob("*.mp3"))),
+        "low_rate_files": [],
+    }
+    f0_dir = data_dir / "cache" / "f0"
     failures: list[str] = []
 
     for path in files:
@@ -85,6 +101,28 @@ def main(argv: list[str] | None = None) -> int:
             data = path.read_bytes()
             if not _is_wav(data):
                 raise ValueError("不是 RIFF/WAVE 文件（扩展名是 .wav 但内容不是）")
+            info = wav_header_info(data)
+            rate = info["sample_rate"] if info else None
+            if rate is not None and rate < MIN_TTS_WAV_SAMPLE_RATE:
+                # task-42：16kHz = 带宽被限（>4kHz 零能量）的"电话音"坏缓存
+                stats["low_rate_found"] += 1
+                stats["low_rate_files"].append(
+                    {"file": path.name, "sample_rate": rate, "duration_ms": info.get("duration_ms")}
+                )
+                print(
+                    f"  低采样率: {path.name}  {rate}Hz < {MIN_TTS_WAV_SAMPLE_RATE}Hz"
+                    f"（时长 {info.get('duration_ms')}ms）"
+                    + ("  → 删除" if args.fix_low_rate else "  → 仅报告（加 --fix-low-rate 才删）")
+                )
+                if args.fix_low_rate:
+                    path.unlink(missing_ok=True)
+                    stats["deleted"] += 1
+                    f0 = f0_dir / f"{path.stem}.json"
+                    if f0.is_file():
+                        f0.unlink(missing_ok=True)
+                        stats["f0_deleted"] += 1
+                continue
+            stats["ok"] += 1
             before = probe_audio(data).duration_ms
             trimmed, changed = trim_wav_silence(data, threshold_db=threshold_db, keep_ms=keep_ms)
             if not changed:
@@ -116,13 +154,16 @@ def main(argv: list[str] | None = None) -> int:
 
     saved_s = stats["saved_ms"] / 1000.0
     print(
-        f"结果     : scanned={stats['scanned']} trimmed={stats['trimmed']} skipped={stats['skipped']} "
-        f"failed={stats['failed']}（另有 {stats['ignored_mp3']} 个 mp3 未处理）"
+        f"结果     : scanned={stats['scanned']} ok={stats['ok']} low_rate_found={stats['low_rate_found']} "
+        f"deleted={stats['deleted']} (f0={stats['f0_deleted']}) trimmed={stats['trimmed']} "
+        f"skipped={stats['skipped']} failed={stats['failed']}（另有 {stats['ignored_mp3']} 个 mp3 未处理）"
     )
     print(
         f"总时长   : {stats['before_ms']/1000.0:.2f}s -> {stats['after_ms']/1000.0:.2f}s "
         f"（节省 {saved_s:.2f}s = {stats['saved_ms']:.0f}ms，平均每个裁剪 {stats['saved_ms']/stats['trimmed'] if stats['trimmed'] else 0:.0f}ms）"
     )
+    if stats["low_rate_found"] and not args.fix_low_rate:
+        print(f"提示     : 发现 {stats['low_rate_found']} 个低采样率坏缓存（16kHz=电话音）；加 --fix-low-rate 删除")
     if args.dry_run:
         print("dry-run  : 未写入任何文件")
     if failures:
