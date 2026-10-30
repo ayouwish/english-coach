@@ -23,7 +23,7 @@ from .cache import (
 from .config import get_settings
 from .degrade import degraded_assessment, degraded_tts
 from .dialogue import complete_dialogue
-from .errors import BadRequest, PayloadTooLarge, ProviderUnavailable
+from .errors import BadRequest, PayloadTooLarge, ProviderError, ProviderUnavailable
 from .voice_names import is_valid_voice_name
 from .languages import SUPPORTED_ASR_LANGUAGES, normalize_language
 from .story import retell_story, rewrite_story
@@ -57,6 +57,14 @@ from .text import estimate_word_timings, strip_terminal_punct, tokens
 from .warmup import prepare_reference, resolve_item, run_warmup, validate_item
 
 logger = logging.getLogger("voice.api")
+
+
+def _errors_are_no_speech(errors: list) -> bool:
+    """判断链上错误是否全部是"没有识别到语音"（no match / no speech）。"""
+    if not errors:
+        return False
+    text = " ".join(str(item).lower() for item in errors)
+    return any(marker in text for marker in ("no match", "nomatch", "no speech", "didn't hear"))
 
 
 def _provider_status(providers, settings) -> tuple[dict, dict]:
@@ -204,11 +212,22 @@ async def asr(
     )
     if result is None:
         # 连 mock 都失败了：ASR 没有任何可产出的降级内容，只能报 502
-        from .errors import ProviderError
-
         raise ProviderError("all ASR providers failed", provider=provider_name or "asr", detail=errors[-3:])
 
-    _ensure_real_provider("asr", getattr(result, "provider", provider_name))
+    actual_provider = getattr(result, "provider", provider_name)
+    # task-56：纯静音/太短时有的 provider（如本地 whisper）会返回空文本 → 统一按"没听到"处理，
+    # 不能返回 200 + 空 text 让前端误以为识别成功。
+    if not (getattr(result, "text", "") or "").strip():
+        raise ProviderError("没有识别到语音（静音或说话太短），请再说一次", provider=actual_provider or "asr")
+    if (
+        settings.mode != "mock"
+        and actual_provider in ("mock", "degraded")
+        and _errors_are_no_speech(errors)
+    ):
+        # task-56：纯静音/太短 → 真实 provider 报 "no match"；这时不能拿 mock 文本冒充识别结果，
+        # 也不能报成"provider 不可用"，而要给出原有的 no-speech 语义（502 provider_error）。
+        raise ProviderError("没有识别到语音（静音或说话太短），请再说一次", provider="asr")
+    _ensure_real_provider("asr", actual_provider)
     payload = result.to_contract()
     if fallback:
         payload["warnings"] = ["provider_fallback"]

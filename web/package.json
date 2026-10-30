@@ -13,6 +13,7 @@
     "db:migrate": "node scripts/migrate.mjs",
     "db:seed": "node scripts/seed.mjs",
     "db:reset": "node scripts/migrate.mjs --reset && node scripts/seed.mjs",
+    "db:cleanup": "node scripts/cleanup-user-data.mjs",
     "mock:voice": "node scripts/mock-voice.mjs",
     "smoke": "node scripts/smoke.mjs",
     "test:migrations": "node scripts/test-migrations.mjs",

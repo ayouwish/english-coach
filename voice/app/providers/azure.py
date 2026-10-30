@@ -11,6 +11,7 @@ from __future__ import annotations
 import logging
 import os
 import tempfile
+import threading
 
 from ..audio_io import AudioClip, probe_audio, trim_wav_silence
 from ..config import Settings, get_settings
@@ -104,6 +105,89 @@ def azure_status() -> tuple[bool, str | None]:
     return True, None
 
 
+
+# --------------------------------------------------------------------------------------
+# 连续识别（task-56）：recognize_once 遇到第一段静音就返回 → 中间停顿会丢后半句
+# --------------------------------------------------------------------------------------
+def _apply_segmentation_timeout(config, speechsdk, settings: Settings) -> None:
+    """放宽"段间静音判定"（默认 1500ms），避免一口气读完被切成很多碎段。"""
+    try:
+        property_id = getattr(speechsdk.PropertyId, "Speech_SegmentationSilenceTimeoutMs", None)
+        if property_id is None:
+            return
+        value = str(int(settings.azure_segmentation_silence_timeout_ms))
+        config.set_property(property_id, value)
+    except Exception as exc:  # 老版本 SDK 不支持该属性时不要影响识别
+        logger.warning("azure set segmentation silence timeout failed: %s", exc)
+
+
+def _continuous_recognize(speechsdk, recognizer, settings: Settings) -> list:
+    """连续识别：收集所有 RecognizedSpeech 事件，等会话结束/超时后停止。
+
+    - 返回 result 列表（空 = 没有识别到语音，由调用方映射成原有 no-speech 语义）
+    - `speechsdk.CancellationReason.Error` → ProviderError（原有 provider error 语义）
+    - 等不到会话结束且零结果 → ProviderTimeout（原有超时语义）
+    """
+    results: list = []
+    errors: list[str] = []
+    done = threading.Event()
+
+    def on_recognized(event) -> None:
+        try:
+            result = getattr(event, "result", None)
+            if result is None:
+                return
+            if getattr(result, "reason", None) == speechsdk.ResultReason.RecognizedSpeech:
+                text = (getattr(result, "text", "") or "").strip()
+                if text:
+                    results.append(result)
+        except Exception as exc:  # 事件回调异常不能影响会话
+            logger.warning("azure recognized-event handler failed: %s", exc)
+
+    def on_canceled(event) -> None:
+        try:
+            result = getattr(event, "result", None)
+            details = getattr(result, "cancellation_details", None)
+            reason = getattr(details, "reason", None)
+            cancellation_reason = getattr(speechsdk, "CancellationReason", None)
+            if cancellation_reason is not None and reason == getattr(cancellation_reason, "Error", None):
+                errors.append(getattr(details, "error_details", "") or "canceled")
+        except Exception as exc:
+            logger.warning("azure canceled-event handler failed: %s", exc)
+        finally:
+            done.set()
+
+    def on_session_stopped(event) -> None:  # noqa: ARG001 - 会话结束（文件读完 EOF）
+        done.set()
+
+    recognizer.recognized.connect(on_recognized)
+    recognizer.canceled.connect(on_canceled)
+    recognizer.session_stopped.connect(on_session_stopped)
+
+    start_future = recognizer.start_continuous_recognition_async()
+    if hasattr(start_future, "get"):
+        start_future.get()
+    finished = done.wait(float(settings.azure_asr_timeout_s))
+    try:
+        stop_future = recognizer.stop_continuous_recognition_async()
+        if hasattr(stop_future, "get"):
+            stop_future.get()
+    except Exception as exc:
+        logger.warning("azure stop continuous recognition failed: %s", exc)
+
+    if errors:
+        raise ProviderError(f"azure continuous recognition failed: {errors[0]}", provider="azure")
+    if not finished and not results:
+        raise ProviderTimeout("azure continuous recognition timed out", provider="azure")
+    if not finished:
+        logger.warning("azure continuous recognition timed out with %d partial result(s)", len(results))
+    return results
+
+
+def _join_recognized_text(results: list) -> str:
+    return " ".join((getattr(result, "text", "") or "").strip() for result in results if (getattr(result, "text", "") or "").strip())
+
+
 class AzureASR:
     name = "azure"
     capabilities = Capabilities(phoneme_level=False, prosody=False, nbest_phonemes=False, ssml=False)
@@ -115,22 +199,28 @@ class AzureASR:
         # task-47：language 可能是 en/zh（短代码）或完整 locale；统一成 Azure 需要的 en-US / zh-CN
         locale = normalize_language(language) or "en-US"
         config.speech_recognition_language = locale
+        _apply_segmentation_timeout(config, speechsdk, settings)
         path = _write_temp_wav(clip)
         try:
             audio_config = speechsdk.audio.AudioConfig(filename=path)
             recognizer = speechsdk.SpeechRecognizer(speech_config=config, audio_config=audio_config)
-            result = _check_result(recognizer.recognize_once_async().get(), speechsdk)
-            if result.reason == speechsdk.ResultReason.NoMatch:
+            # task-56：连续识别（recognize_once 遇第一段静音就返回，会丢后半句）
+            results = _continuous_recognize(speechsdk, recognizer, settings)
+            if not results:
                 raise ProviderError("azure returned no match", provider="azure")
-            text = getattr(result, "text", "") or ""
-            words = _words_from_json(result)
+            text = _join_recognized_text(results)
+            if not text:
+                raise ProviderError("azure returned no match", provider="azure")
+            words = []
+            for result in results:
+                words.extend(_words_from_json(result))
             return ASRResult(
                 text=text,  # 中文也原样返回（不做英文后处理/过滤）
                 language=locale,
                 duration_ms=clip.duration_ms,
                 words=words,
                 provider=self.name,
-                provider_meta={"region": settings.azure_speech_region or "endpoint"},
+                provider_meta={"region": settings.azure_speech_region or "endpoint", "segments": len(results)},
             )
         finally:
             _safe_unlink(path)
@@ -152,6 +242,7 @@ class AzurePA:
         speechsdk = _speechsdk()
         settings = get_settings()
         config = _speech_config(settings, speechsdk)
+        _apply_segmentation_timeout(config, speechsdk, settings)
         path = _write_temp_wav(clip)
         try:
             audio_config = speechsdk.audio.AudioConfig(filename=path)
@@ -175,9 +266,11 @@ class AzurePA:
                     pass
                 pa_config.apply_to(recognizer)
 
-            result = _check_result(recognizer.recognize_once_async().get(), speechsdk)
-            if result.reason == speechsdk.ResultReason.NoMatch:
+            # task-56：连续识别（遇到停顿不再丢掉后半句）；各段按空格拼接
+            results = _continuous_recognize(speechsdk, recognizer, settings)
+            if not results:
                 raise ProviderError("azure returned no match", provider="azure")
+            recognized_text = _join_recognized_text(results)
 
             if not scripted:
                 return PAResult(
@@ -185,81 +278,107 @@ class AzurePA:
                     granularity="word",
                     mode=mode or "scripted",
                     reference_text=reference_text or "",
-                    recognized_text=getattr(result, "text", "") or "",
+                    recognized_text=recognized_text,
                     duration_ms=clip.duration_ms,
                     scores=PAScores(
                         pron=None,
                         accuracy=None,
-                        fluency=_fluency_from_text(getattr(result, "text", "") or "", clip.duration_ms, learner_age_band),
+                        fluency=_fluency_from_text(recognized_text, clip.duration_ms, learner_age_band),
                         completeness=None,
                         prosody=None,
                     ),
                     words=[],
                     issues=[],
                     warnings=[],
-                    provider_meta={"unscripted": True},
+                    provider_meta={"unscripted": True, "segments": len(results)},
                 )
 
-            assessment = speechsdk.PronunciationAssessmentResult(result)
+            # 多段合并：words 串联；分数按每段"词时长"加权平均（单段时与原行为一致）
             words: list[WordScore] = []
             issues = []
-            for item in getattr(assessment, "words", None) or []:
-                start = _ms(getattr(item, "offset", 0))
-                end = start + _ms(getattr(item, "duration", 0))
-                phonemes: list[PhonemeScore] = []
-                for ph in getattr(item, "phonemes", None) or []:
-                    ph_start = _ms(getattr(ph, "offset", 0))
-                    ph_end = ph_start + _ms(getattr(ph, "duration", 0))
-                    nbest = []
-                    for candidate in getattr(ph, "nbest_phonemes", None) or []:
-                        nbest.append(
-                            {
-                                "phoneme": getattr(candidate, "phoneme", None),
-                                "score": float(getattr(candidate, "score", 0.0) or 0.0),
-                            }
+            totals = {key: 0.0 for key in ("pron", "accuracy", "fluency", "completeness", "prosody")}
+            weight_by_key = {key: 0.0 for key in totals}
+            for result in results:
+                try:
+                    assessment = speechsdk.PronunciationAssessmentResult(result)
+                except Exception as exc:
+                    logger.warning("azure PA result parse failed for one segment: %s", exc)
+                    continue
+                segment_words: list[WordScore] = []
+                for item in getattr(assessment, "words", None) or []:
+                    start = _ms(getattr(item, "offset", 0))
+                    end = start + _ms(getattr(item, "duration", 0))
+                    phonemes: list[PhonemeScore] = []
+                    for ph in getattr(item, "phonemes", None) or []:
+                        ph_start = _ms(getattr(ph, "offset", 0))
+                        ph_end = ph_start + _ms(getattr(ph, "duration", 0))
+                        nbest = []
+                        for candidate in getattr(ph, "nbest_phonemes", None) or []:
+                            nbest.append(
+                                {
+                                    "phoneme": getattr(candidate, "phoneme", None),
+                                    "score": float(getattr(candidate, "score", 0.0) or 0.0),
+                                }
+                            )
+                        phonemes.append(
+                            PhonemeScore(
+                                phoneme=getattr(ph, "phoneme", "") or "",
+                                score=float(getattr(ph, "accuracy_score", 0.0) or 0.0),
+                                start_ms=ph_start,
+                                end_ms=ph_end,
+                                nbest=nbest,
+                            )
                         )
-                    phonemes.append(
-                        PhonemeScore(
-                            phoneme=getattr(ph, "phoneme", "") or "",
-                            score=float(getattr(ph, "accuracy_score", 0.0) or 0.0),
-                            start_ms=ph_start,
-                            end_ms=ph_end,
-                            nbest=nbest,
-                        )
-                    )
-                error_type = getattr(item, "error_type", "None") or "None"
-                words.append(
-                    WordScore(
-                        word=getattr(item, "word", "") or "",
-                        start_ms=start,
-                        end_ms=end,
-                        score=float(getattr(item, "accuracy_score", 0.0) or 0.0),
-                        error_type=error_type,
-                        phonemes=phonemes,
-                    )
-                )
-                if error_type != "None":
-                    culprit = min(phonemes, key=lambda p: p.score) if phonemes else None
-                    actual = None
-                    if culprit and culprit.nbest:
-                        best = max(culprit.nbest, key=lambda n: n.get("score") or 0.0)
-                        if best.get("phoneme") and best.get("phoneme") != culprit.phoneme:
-                            actual = best.get("phoneme")
-                    if actual is None and culprit:
-                        actual = LIKELY_SUBSTITUTION.get(culprit.phoneme)
-                    issues.append(
-                        build_issue(
+                    error_type = getattr(item, "error_type", "None") or "None"
+                    segment_words.append(
+                        WordScore(
                             word=getattr(item, "word", "") or "",
-                            phoneme=culprit.phoneme if culprit else None,
-                            expected=culprit.phoneme if culprit else None,
-                            actual=actual,
-                            score=culprit.score if culprit else float(getattr(item, "accuracy_score", 0.0) or 0.0),
-                            start_ms=culprit.start_ms if culprit else start,
-                            end_ms=culprit.end_ms if culprit else end,
+                            start_ms=start,
+                            end_ms=end,
+                            score=float(getattr(item, "accuracy_score", 0.0) or 0.0),
                             error_type=error_type,
+                            phonemes=phonemes,
                         )
                     )
+                    if error_type != "None":
+                        culprit = min(phonemes, key=lambda p: p.score) if phonemes else None
+                        actual = None
+                        if culprit and culprit.nbest:
+                            best = max(culprit.nbest, key=lambda n: n.get("score") or 0.0)
+                            if best.get("phoneme") and best.get("phoneme") != culprit.phoneme:
+                                actual = best.get("phoneme")
+                        if actual is None and culprit:
+                            actual = LIKELY_SUBSTITUTION.get(culprit.phoneme)
+                        issues.append(
+                            build_issue(
+                                word=getattr(item, "word", "") or "",
+                                phoneme=culprit.phoneme if culprit else None,
+                                expected=culprit.phoneme if culprit else None,
+                                actual=actual,
+                                score=culprit.score if culprit else float(getattr(item, "accuracy_score", 0.0) or 0.0),
+                                start_ms=culprit.start_ms if culprit else start,
+                                end_ms=culprit.end_ms if culprit else end,
+                                error_type=error_type,
+                            )
+                        )
+                weight = max(1.0, float(sum(max(1, word.end_ms - word.start_ms) for word in segment_words) or 1))
+                for key, attr in (
+                    ("pron", "pronunciation_score"),
+                    ("accuracy", "accuracy_score"),
+                    ("fluency", "fluency_score"),
+                    ("completeness", "completeness_score"),
+                    ("prosody", "prosody_score"),
+                ):
+                    value = _opt(getattr(assessment, attr, None))
+                    if value is not None:
+                        totals[key] += value * weight
+                        weight_by_key[key] += weight
+                words.extend(segment_words)
 
+            merged = {
+                key: (totals[key] / weight_by_key[key] if weight_by_key[key] > 0 else None)
+                for key in totals
+            }
             warnings: list[str] = []
             granularity_out = "phoneme" if granularity == "phoneme" else "word"
             if granularity_out == "word":
@@ -271,19 +390,19 @@ class AzurePA:
                 granularity=granularity_out,
                 mode=mode or "scripted",
                 reference_text=reference_text,
-                recognized_text=getattr(result, "text", "") or "",
+                recognized_text=recognized_text,
                 duration_ms=clip.duration_ms,
                 scores=PAScores(
-                    pron=_opt(getattr(assessment, "pronunciation_score", None)),
-                    accuracy=_opt(getattr(assessment, "accuracy_score", None)),
-                    fluency=_opt(getattr(assessment, "fluency_score", None)),
-                    completeness=_opt(getattr(assessment, "completeness_score", None)),
-                    prosody=_opt(getattr(assessment, "prosody_score", None)),
+                    pron=merged["pron"],
+                    accuracy=merged["accuracy"],
+                    fluency=merged["fluency"],
+                    completeness=merged["completeness"],
+                    prosody=merged["prosody"],
                 ),
                 words=words,
                 issues=sort_and_cap_issues(issues, limit=5),
                 warnings=warnings,
-                provider_meta={"grading_system": "HundredMark", "phoneme_alphabet": "IPA"},
+                provider_meta={"grading_system": "HundredMark", "phoneme_alphabet": "IPA", "segments": len(results)},
             )
         finally:
             _safe_unlink(path)

@@ -744,6 +744,85 @@ rm -rf data/cache/audio/* data/cache/f0/*
 tar czf ~/english-coach-backup-$(date +%F).tar.gz --exclude='data/cache' data deploy/.env
 ```
 
+### 6.5 清理某个账号的测试数据（按账号 + 时间点）
+
+**什么时候用**：某个账号曾经被拿来测试（比如"女儿账号在 10-30 21:30 之前都是爸爸在试"），
+堆了一堆不属于它的错题、录音、对话，影响后续使用。这条命令按**账号 + 时间点**清理，
+默认只统计，确认后才真删，且**删之前自动备份**。
+
+**先决条件**：`web` 镜像里要有这个脚本（`web/scripts/cleanup-user-data.mjs`，构建时 COPY 进 `/app/scripts`）。
+如果你用的是旧镜像，先重建一次：`docker compose build web && docker compose up -d web`。
+
+```bash
+# ① 先只统计（默认就是 dry-run，不改任何东西；建议每次都先跑这一步）
+docker compose exec -T web node scripts/cleanup-user-data.mjs \
+  --db /data/app.db \
+  --user girl@example.com \
+  --before 2026-10-30T13:30:00Z \
+  --dry-run
+```
+
+输出会列出**每张表将删多少行、保留多少行**，以及**磁盘音频/图片**的待删个数与字节数。
+看一眼"合计"和"保留"两列对不对，再执行下一步。
+
+```bash
+# ② 确认无误后真删（会先 VACUUM INTO 备份，备份校验通过才开始删）
+docker compose exec -T web node scripts/cleanup-user-data.mjs \
+  --db /data/app.db \
+  --user girl@example.com \
+  --before 2026-10-30T13:30:00Z \
+  --yes
+```
+
+**时间参数必须带时区**（否则会被按容器时区静默解释，可能删错窗口）。北京时间 21:30 有两种写法：
+
+```bash
+--before 2026-10-30T21:30:00+08:00     # 本地写法
+--before 2026-10-30T13:30:00Z          # 等价的 UTC（推荐，最不容易错）
+```
+
+| 参数 | 说明 |
+|---|---|
+| `--db /data/app.db` | 容器内的库路径；数据目录默认就是它所在的 `/data` |
+| `--user <email>` | 必须**精确匹配**一个账号；不存在或有歧义会报错退出（非 0） |
+| `--before <ISO8601>` | 删除**早于**该时刻的数据；不带时区会直接报错并给换算示例 |
+| `--dry-run` | 只统计（**默认行为**，不加 `--yes` 就是 dry-run） |
+| `--yes` | 真正执行；与 `--dry-run` 互斥 |
+| `--keep-mastery` | 保留 `phoneme_mastery`（默认会删该账号的掌握度聚合行） |
+
+**会删什么**（先子表后主表，全在一个事务里）：
+
+| 表 | 过滤条件 |
+|---|---|
+| `phoneme_scores` | `attempt_id ∈ 将被删的 attempts` **∪** 该账号 `created_at < before`（兜住历史孤立行） |
+| `attempts` | `user_id` + `created_at < before`（同时收集磁盘 `audio_path`） |
+| `chat_messages` | `chat_session_id ∈ 将被删的 chat_sessions`（同时收集磁盘 `audio_path`） |
+| `chat_sessions` | `user_id` + `started_at < before` |
+| `story_retells` / `practice_sessions` / `srs_cards` / `blind_tests` | `user_id` + 各自时间列 `< before` |
+| `reading_materials` | `created_by` + `created_at < before`（同时删磁盘图片） |
+| `phoneme_mastery` | 该账号**全部**（无时间维度；`--keep-mastery` 可保留） |
+| 磁盘文件 | 上面收集到的 `audio_path` / `image_path`（不存在则跳过；越界路径一律不删） |
+
+**不会删**：`audit_log`（审计保留）、`sessions`（登录态）、`user_prefs`（偏好设置）、
+`suggestions`（意见反馈）、`sentences` / `chat_scenarios`（全局共享语料）。
+
+**行为保证**：
+
+- **先备份再删**：`VACUUM INTO <数据目录>/backup-before-cleanup-<时间戳>.db`（一致性快照，不是 `cp`）；
+  备份会校验（`quick_check` + `attempts` 行数比对），**校验失败就中止，一行都不删**。
+- **幂等**：重复执行第二次会显示"没有需要清理的数据"，不删任何东西、也不会再堆备份文件。
+- **不可逆，但可恢复**：用上面那个备份覆盖 `app.db` 即可（步骤见输出末尾）。
+- **掌握度的诚实说明**：`phoneme_mastery` 是**按次增量更新**的（没有"从 attempts 全量重算"的代码）。
+  所以默认删掉它 = 历史掌握度从零开始、之后随新练习累积；**不会**按剩余历史 attempts 自动重建。
+  想保留旧数字就加 `--keep-mastery`（代价：数字里仍含被删测试数据的贡献）。
+- 建议**没人使用的时候**执行（会短暂拿写锁）。
+
+> **本地直跑**（非容器）等价命令，在 `web/` 目录下：
+> ```bash
+> node scripts/cleanup-user-data.mjs --db data/app.db --user girl@example.com --before 2026-10-30T13:30:00Z --dry-run
+> # 或（在 web/ 下）：pnpm db:cleanup --user girl@example.com --before 2026-10-30T13:30:00Z
+> ```
+
 ---
 
 ## 7. 三账号日常运维（家长视角）

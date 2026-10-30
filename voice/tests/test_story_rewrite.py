@@ -231,22 +231,43 @@ def test_story_weak_phonemes_missing_warning(client, llm_env, monkeypatch, tmp_p
 # /v1/asr 语言规范化（假 Azure SDK）
 # --------------------------------------------------------------------------------------
 class _FakeASRResult:
-    reason = None
+    reason = "RecognizedSpeech"
     text = "今天我和小明搭积木塔"
     json = "{}"
 
 
-class _FakeASRFuture:
-    def get(self):
-        return _FakeASRResult()
+class _Connection:
+    def __init__(self):
+        self.handlers = []
+
+    def connect(self, handler):
+        self.handlers.append(handler)
+
+    def fire(self, event):
+        for handler in self.handlers:
+            handler(event)
+
+
+class _Future:
+    def get(self, timeout=None):
+        return None
 
 
 class _FakeRecognizer:
-    def __init__(self, **kwargs):
-        pass
+    """task-56 之后 ASR 走连续识别：伪造一个 RecognizedSpeech 事件 + 会话结束。"""
 
-    def recognize_once_async(self):
-        return _FakeASRFuture()
+    def __init__(self, **kwargs):
+        self.recognized = _Connection()
+        self.canceled = _Connection()
+        self.session_stopped = _Connection()
+
+    def start_continuous_recognition_async(self):
+        self.recognized.fire(SimpleNamespace(result=_FakeASRResult()))
+        self.session_stopped.fire(SimpleNamespace())
+        return _Future()
+
+    def stop_continuous_recognition_async(self):
+        return _Future()
 
 
 def _patch_azure_asr(monkeypatch):
@@ -256,11 +277,16 @@ def _patch_azure_asr(monkeypatch):
         speech_recognition_language = None
         speech_synthesis_voice_name = "en-US-JennyNeural"
 
+        def set_property(self, property_id, value):
+            captured.setdefault("properties", {})[property_id] = value
+
         def set_speech_synthesis_output_format(self, value):
             pass
 
     fake_sdk = SimpleNamespace(
-        ResultReason=SimpleNamespace(Canceled="Canceled", NoMatch="NoMatch"),
+        ResultReason=SimpleNamespace(Canceled="Canceled", NoMatch="NoMatch", RecognizedSpeech="RecognizedSpeech"),
+        CancellationReason=SimpleNamespace(Error="Error"),
+        PropertyId=SimpleNamespace(Speech_SegmentationSilenceTimeoutMs="Speech_SegmentationSilenceTimeoutMs"),
         audio=SimpleNamespace(AudioConfig=lambda **kwargs: object()),
         SpeechRecognizer=_FakeRecognizer,
         SpeechConfig=lambda **kwargs: _Config(),

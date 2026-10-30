@@ -11,12 +11,15 @@
  * 用法：BASE_URL=http://127.0.0.1:3020 node scripts/check-chat-speech.mjs
  */
 import fs from "node:fs";
+import http from "node:http";
 import path from "node:path";
+import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 
 const WEB_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const BASE = (process.env.BASE_URL ?? "http://127.0.0.1:3010").replace(/\/$/, "");
-const IPA_RE = /[θðɹŋæʃɪʌɔɜəʊʒɑɒɛˈˌ]/;
+const IPA_RE = /[θðŋæʃɪʌɔɜəʊʒɑɒɛˈˌ]/;
+const leaks = (t) => ["θ", "ð", "ɹ", "ŋ", "æ", "ʃ", "ɪ", "ʌ", "ɔ", "ɜ", "ə", "ʊ", "ʒ", "ɑ", "ɒ", "ɛ", "ˈ", "ˌ"].filter((c) => t.includes(c));
 
 let failed = 0;
 const check = (name, cond, detail = "") => {
@@ -106,7 +109,11 @@ check("★ 页面里存在 <audio> 且是原生 controls", audioTag.includes("co
 check("★ audio.src 指向 /api/tts?", audioSrc.startsWith("/api/tts?"), audioSrc.slice(0, 90));
 check("★ src 带 format=mp3", audioSrc.includes("format=mp3"), audioSrc.slice(0, 120));
 check("★ 儿童 src 带 rate=slow", audioSrc.includes("rate=slow"), (audioSrc.match(/rate=(\w+)/) ?? [])[1] ?? "");
-check("preload=none（不预先请求所有音频）", /preload="none"/.test(audioTag));
+check(
+  "preload=metadata（取真实时长，避免 0:00 / 0:00；仍不预载整段音频）",
+  /preload="metadata"/.test(audioTag),
+  (audioTag.match(/preload="[^"]*"/) ?? [""])[0],
+);
 check("audio 带 aria-label", /aria-label="[^"]+"/.test(audioTag));
 check("★ 自动朗读开关存在且带 aria-pressed", /data-testid="autoread-toggle"[^>]*aria-pressed/.test(girlChat));
 
@@ -284,6 +291,220 @@ const girlChatHtml = (await (await fetch(`${BASE}/chat`, { headers: { cookie: gi
 check("★ 聊天头部可直接切语速", girlChatHtml.includes('data-testid="chat-rate-slow"') && girlChatHtml.includes('data-testid="chat-rate-normal"'));
 check("聊天头部说明含取舍文案", girlChatHtml.includes("2.3 倍"));
 check("不再写死过时秒数（1–11s）", !girlChatHtml.includes("1–11s") && !girlChatHtml.includes("1–11"));
+
+// ── 4) task-57：对话轮次的 unscripted 发音评估 + 助手音频 0:00 修复 ───────────
+{
+  console.log("\n──────── 4. 对话发音评估（unscripted）+ 历史展示 + 0:00 修复 ────────");
+  const DB_PATH = process.env.DB_PATH ?? path.join(WEB_ROOT, "data/app.db");
+  const captured = [];
+  let pronounceMode = "ok";
+  const TINY_WAV = Buffer.from("RIFF$\\u0000\\u0000\\u0000WAVEfmt \\u0010\\u0000\\u0000\\u0000\\u0001\\u0000\\u0001\\u0000\\u0080>\\u0000\\u0000\\u0000}\\u0000\\u0000\\u0002\\u0000\\u0010\\u0000data\\u0000\\u0000\\u0000\\u0000", "binary");
+  const stub = http.createServer((req, res) => {
+    const chunks = [];
+    req.on("data", (c) => chunks.push(c));
+    req.on("end", () => {
+      const raw = Buffer.concat(chunks);
+      const body = raw.toString("utf8");
+      captured.push({ url: String(req.url), body });
+      const send = (status, obj) => {
+        res.statusCode = status;
+        res.setHeader("content-type", "application/json");
+        res.end(JSON.stringify(obj));
+      };
+      if (String(req.url).startsWith("/v1/health")) {
+        send(200, {
+          status: "ok",
+          version: "0.1.0-stub",
+          mode: "mock",
+          providers: { asr: "mock", pa: "mock", tts: "mock", llm: "mock" },
+          capabilities: {
+            phoneme_level: true,
+            prosody: true,
+            intonation_curve: true,
+            nbest_phonemes: true,
+            ssml: true,
+            gpu: false,
+            ocr: false,
+          },
+        });
+        return;
+      }
+      if (String(req.url).startsWith("/v1/asr")) {
+        send(200, { text: "I like playing football with my friends.", provider: "stub", duration_ms: 900 });
+        return;
+      }
+      if (String(req.url).startsWith("/v1/dialogue")) {
+        send(200, {
+          reply: "That sounds like so much fun!",
+          reply_zh: "听起来很好玩！",
+          correction: null,
+          flag: "ok",
+          provider: "stub",
+          done: false,
+          suggested_replies: ["Yes, I love it!"],
+        });
+        return;
+      }
+      if (String(req.url).startsWith("/v1/pronounce")) {
+        if (pronounceMode === "fail") {
+          send(502, { error: { code: "provider_error", message: "stub 失败" } });
+          return;
+        }
+        send(200, {
+          reference_text: "",
+          recognized_text: "i like playing football with my friends",
+          scores: { pron: 82, accuracy: 85, fluency: 78, completeness: 95, prosody: null },
+          issues: [{ type: "mispronunciation", word: "football", phoneme: "θ", score: 55 }],
+          words: [
+            { word: "football", score: 61, start_ms: 300, end_ms: 900 },
+            { word: "friends", score: 88, start_ms: 1000, end_ms: 1400 },
+          ],
+          intonation: { dtw_distance: 0.3, worst_regions: [] },
+          warnings: [],
+          provider: "stub",
+          duration_ms: 1600,
+        });
+        return;
+      }
+      if (String(req.url).startsWith("/v1/tts")) {
+        res.statusCode = 200;
+        res.setHeader("content-type", "audio/wav");
+        res.end(TINY_WAV);
+        return;
+      }
+      send(404, { error: { code: "not_found", message: "stub: no route" } });
+    });
+  });
+  await new Promise((r) => stub.listen(8137, "127.0.0.1", r));
+
+  const PORT = 3027;
+  const child = spawn("pnpm", ["exec", "next", "start", "-p", String(PORT)], {
+    cwd: WEB_ROOT,
+    env: { ...process.env, VOICE_SERVICE_URL: "http://127.0.0.1:8137" },
+    stdio: "ignore",
+  });
+  try {
+    let up = false;
+    for (let i = 0; i < 40; i++) {
+      await new Promise((r) => setTimeout(r, 500));
+      try {
+        const r = await fetch(`http://127.0.0.1:${PORT}/api/health`, { signal: AbortSignal.timeout(1500) });
+        if (r.ok) {
+          up = true;
+          break;
+        }
+      } catch {
+        /* 还没起来 */
+      }
+    }
+    check("stub-voice web 实例（3027）启动成功", up);
+
+    const stubLogin = async (email, password) => {
+      const res = await fetch(`http://127.0.0.1:${PORT}/api/auth/login`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ email, password }),
+      });
+      const raw = typeof res.headers.getSetCookie === "function" ? res.headers.getSetCookie() : [];
+      return (raw.find((c) => c.startsWith("ec_session=")) ?? raw[0] ?? "").split(";")[0];
+    };
+    const childCookie = await stubLogin("girl@example.com", "Girl12345!");
+    const dadCookie = await stubLogin("dad@example.com", "Dad12345!");
+    check("stub 实例可登录（儿童 + 家长）", Boolean(childCookie) && Boolean(dadCookie));
+
+    const startSession = async (cookie) => {
+      const r = await fetch(`http://127.0.0.1:${PORT}/api/chat/sessions`, {
+        method: "POST",
+        headers: { "content-type": "application/json", cookie },
+        body: JSON.stringify({ scenario_id: "self_intro" }),
+      });
+      return (await r.json().catch(() => null))?.session_id ?? null;
+    };
+    /** 走一轮语音对话：multipart 带录音 */
+    const voiceTurn = async (cookie, sessionId, text = "I like playing football.") => {
+      const form = new FormData();
+      form.append("audio", new Blob([TINY_WAV], { type: "audio/wav" }), "turn.wav");
+      form.append("text", text);
+      const r = await fetch(`http://127.0.0.1:${PORT}/api/chat/sessions/${sessionId}/turn`, {
+        method: "POST",
+        headers: { cookie },
+        body: form,
+      });
+      return { status: r.status, body: await r.json().catch(() => null) };
+    };
+    const waitPron = async (cookie, sessionId, timeoutMs = 15000) => {
+      const t0 = Date.now();
+      let last = null;
+      while (Date.now() - t0 < timeoutMs) {
+        const r = await fetch(`http://127.0.0.1:${PORT}/api/chat/sessions/${sessionId}/messages`, {
+          headers: { cookie },
+        });
+        const data = await r.json().catch(() => null);
+        const userMsgs = (data?.messages ?? []).filter((m) => m.role === "user");
+        last = userMsgs[userMsgs.length - 1] ?? null;
+        if (last?.pron) return last.pron;
+        await new Promise((r2) => setTimeout(r2, 500));
+      }
+      return null;
+    };
+
+    // ① 家长自己讲一轮（家长视图应看到分数）
+    const dadSession = await startSession(dadCookie);
+    const dadTurn = await voiceTurn(dadCookie, dadSession);
+    check("语音轮次：multipart turn → 200", dadTurn.status === 200 && Boolean(dadTurn.body?.user_message_id), `status=${dadTurn.status}`);
+    const dadPron = await waitPron(dadCookie, dadSession);
+    check("★ 一轮后 chat_messages.pron_json 非空（后台评分完成）", Boolean(dadPron), JSON.stringify(dadPron ?? null).slice(0, 140));
+    check("★ pron_json 内容正确（pron=82 / 最弱 th / 逐词）", dadPron?.pron === 82 && (dadPron?.weak_phonemes ?? [])[0]?.label === "th" && (dadPron?.words ?? []).length >= 1, JSON.stringify(dadPron?.weak_phonemes ?? null));
+    {
+      const DatabaseMod = (await import("better-sqlite3")).default;
+      const db = new DatabaseMod(DB_PATH, { readonly: true });
+      const row = db.prepare("SELECT pron_json FROM chat_messages WHERE id = ?").get(dadTurn.body?.user_message_id);
+      db.close();
+      check("★ 库里 pron_json 已写入（非空）", Boolean(row?.pron_json), String(row?.pron_json ?? "null").slice(0, 120));
+    }
+
+    // ② outbound：unscripted + reference_text 为空
+    const pronCaptured = captured.filter((c) => c.url.startsWith("/v1/pronounce"));
+    const lastPron = pronCaptured[pronCaptured.length - 1]?.body ?? "";
+    check("★ /v1/pronounce outbound 使用 mode=unscripted", /name="mode"\r\n\r\nunscripted/.test(lastPron), (lastPron.match(/name="mode"\r\n\r\n([^\r]+)/) ?? [])[1] ?? "(未捕获)");
+    check("★ outbound reference_text 为空字符串", /name="reference_text"\r\n\r\n\r\n/.test(lastPron), "reference_text 空");
+    check("outbound 带 phoneme 粒度", /name="granularity"\r\n\r\nphoneme/.test(lastPron));
+
+    // ③ 家长视图 HTML：有分数与弱音
+    const dadChatHtml = await (await fetch(`http://127.0.0.1:${PORT}/chat`, { headers: { cookie: dadCookie } })).text();
+    check("★ 家长历史对话含发音分数（history-pron + 发音）", dadChatHtml.includes('data-testid="history-pron"') && dadChatHtml.includes('data-kind="parent-score"') && /发音\s*<strong>82<\/strong>|发音/.test(dadChatHtml), (dadChatHtml.match(/发音[^<]{0,20}/) ?? [""])[0]);
+    check("家长视图显示最弱音 th", /最弱[^<]{0,12}/.test(dadChatHtml), (dadChatHtml.match(/最弱[^<]{0,12}/) ?? [""])[0]);
+
+    // ④ 儿童视图 HTML：只有正向提示、没有分数
+    const childSession = await startSession(childCookie);
+    await voiceTurn(childCookie, childSession);
+    const childPron = await waitPron(childCookie, childSession);
+    check("儿童语音轮次同样完成评分（后台）", Boolean(childPron), JSON.stringify(childPron ?? null).slice(0, 100));
+    check("★ 儿童数据里不含 IPA（弱音 ipa 为 null）", (childPron?.weak_phonemes ?? []).every((w) => w.ipa === null), JSON.stringify(childPron?.weak_phonemes ?? null));
+    const childChatHtml = await (await fetch(`http://127.0.0.1:${PORT}/chat`, { headers: { cookie: childCookie } })).text();
+    check("★ 儿童历史对话只有正向提示（data-kind=child-positive）", childChatHtml.includes('data-kind="child-positive"'));
+    check("★ 儿童视图不含分数（无 parent-score / 无 data-pron）", !childChatHtml.includes('data-kind="parent-score"') && !/data-pron="/.test(childChatHtml));
+    check("儿童 /chat 仍零 IPA", leaks(childChatHtml).length === 0, `leaked=${leaks(childChatHtml).join("")}`);
+
+    // ⑤ 评分失败：对话仍成功，页面显示「—」
+    pronounceMode = "fail";
+    const failSession = await startSession(dadCookie);
+    const failTurn = await voiceTurn(dadCookie, failSession);
+    check("★ 评分失败时对话仍成功（200）", failTurn.status === 200 && Boolean(failTurn.body?.reply), `status=${failTurn.status}`);
+    const failPron = await waitPron(dadCookie, failSession, 4000);
+    check("评分失败 → pron 保持 null（不崩）", failPron === null);
+    const failChatHtml = await (await fetch(`http://127.0.0.1:${PORT}/chat`, { headers: { cookie: dadCookie } })).text();
+    check("★ 评分失败在页面上显示「—」（parent-failed）", failChatHtml.includes('data-kind="parent-failed"') && /发音\s*<strong>—<\/strong>|—/.test(failChatHtml));
+    pronounceMode = "ok";
+
+    // ⑥ 助手音频不再 0:00：preload=metadata（SSR HTML 断言）
+    check("★ 助手音频 preload=metadata（不再 0:00 / 0:00）", /<audio[^>]*preload="metadata"[^>]*data-testid="tts-audio"/.test(dadChatHtml) || /data-testid="tts-audio"[^>]*preload="metadata"/.test(dadChatHtml), "tts-audio preload=metadata");
+    check("助手音频不再用 preload=none", !/<audio[^>]*data-testid="tts-audio"[^>]*preload="none"/.test(dadChatHtml));
+  } finally {
+    child.kill("SIGTERM");
+    stub.close();
+  }
+}
 
 console.log(`\n合计失败 ${failed} 项`);
 console.log(failed === 0 ? "结论：全部通过 ✅" : "结论：存在失败 ❌");

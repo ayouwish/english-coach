@@ -161,6 +161,14 @@ uv run uvicorn app.main:app --host 0.0.0.0 --port 8100
 > 结果无论请求 mp3 还是 wav 都返回默认 16kHz PCM（听起来发闷，且 `content_type` 与实际字节不符）。
 > 现在若 setter 缺失会直接报错；返回字节还会用 PyAV 校验真实容器/采样率，不符则打 ERROR 日志。
 
+**ASR 连续识别（task-56）**：Azure ASR 用**连续识别**（`start_continuous_recognition_async`）收集所有
+`RecognizedSpeech` 事件后按空格拼接，而不是 `recognize_once`（后者遇到第一段 ~0.5s 静音就返回，会**丢掉后半句**）。
+- 段间静音阈值放宽到 **1500ms**（`AZURE_SEGMENTATION_SILENCE_TIMEOUT_MS`，可配置），减少"一口气读完被切碎"；
+- 安全超时 `AZURE_ASR_TIMEOUT_S=60`；无语音 / 超时 / provider 错误语义保持不变（纯静音 → 502 `provider_error`
+  「没有识别到语音（静音或说话太短）」；本地 whisper 返回空文本也按同一语义处理，不会拿 mock 文本冒充）；
+- PA（发音评测）同样改为连续识别，多段结果按词时长加权合并分数、词时间轴串联；
+- faster-whisper 本地 provider 本来就是**整段解码**，无此问题（已加测试确认它一次拿到完整音频）。
+
 **语音与 locale（task-46）**：`/v1/tts` 的 `voice` 支持任意**合法** Azure 语音名（字母/数字/`._-`，
 如 `zh-CN-XiaoxiaoNeural`、`en-US-JennyNeural`），可直接用来给孩子放**中文鼓励语**。
 `rate="slow"` 分支手工构造 SSML，`xml:lang` 现在**按音色推导**（`zh-CN-…` → `zh-CN`；解析失败回退默认音色的

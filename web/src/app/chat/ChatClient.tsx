@@ -2,6 +2,8 @@
 
 import { useEffect, useRef, useState } from "react";
 import { Recorder } from "@/components/Recorder";
+import type { ChatPron } from "@/lib/chat-pronunciation";
+import { PronunciationNote } from "@/components/PronunciationNote";
 import { ttsUrl } from "@/lib/tts-url";
 import type { DialogueCorrection } from "@/lib/types";
 
@@ -24,6 +26,8 @@ interface Message {
   flag?: string | null;
   /** 这条 user 消息是通过语音输入产生的 → 保留 object URL 供回放（task-19 B） */
   audioUrl?: string | null;
+  /** 这条 user 消息的 unscripted 发音评估（task-57，后台完成） */
+  pron?: ChatPron | null;
 }
 
 /** 语音状态（task-19 A）：不再 6s 中断，只提示进度；失败要可见 */
@@ -264,20 +268,55 @@ export function ChatClient({
     }
   }
 
-  async function send(text: string, audioUrl?: string | null) {
+  /** 轮询会话消息，把后台评好的 pron 补到指定用户消息上（最多 4 次，失败就保持 null） */
+  async function pollTurnPronunciation(sessionIdValue: string, index: number, textValue: string) {
+    for (let attempt = 0; attempt < 4; attempt++) {
+      await new Promise((r) => setTimeout(r, 700 + attempt * 400));
+      try {
+        const res = await fetch(`/api/chat/sessions/${sessionIdValue}/messages`, { cache: "no-store" });
+        const data = (await res.json().catch(() => null)) as
+          | { messages?: { role: string; text: string; pron?: ChatPron | null }[] }
+          | null;
+        if (!res.ok || !data?.messages) continue;
+        const match = [...data.messages].reverse().find((m) => m.role === "user" && m.text === textValue);
+        if (match?.pron) {
+          setMessages((prev) =>
+            prev.map((m, i) => (i === index && m.role === "user" ? { ...m, pron: match.pron ?? null } : m)),
+          );
+          return;
+        }
+      } catch {
+        /* 下一轮再试 */
+      }
+    }
+    // 4 次都没拿到 → 标成 null（家长看到「—」，儿童看正向提示），不静默也不崩
+    setMessages((prev) => prev.map((m, i) => (i === index && m.role === "user" ? { ...m, pron: null } : m)));
+  }
+
+  async function send(text: string, audioUrl?: string | null, audioBlob?: Blob | null) {
     if (!sessionId || !text.trim()) return;
     // 新的一轮开始：先停掉上一条朗读（不阻塞输入，用户可以立刻继续说话/打字）
     stopAllAudio();
     setBusy(true);
     setError(null);
     const assistantIndex = messages.length + 1; // 用户消息后的那条
+    const userIndex = messages.length;
     setMessages((prev) => [...prev, { role: "user", text, audioUrl: audioUrl ?? null }]);
     try {
-      const res = await fetch(`/api/chat/sessions/${sessionId}/turn`, {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ text }),
-      });
+      // 语音轮次：multipart（audio + text），服务端会存录音并在响应后台做发音评估
+      let res: Response;
+      if (audioBlob) {
+        const form = new FormData();
+        form.append("audio", audioBlob, "turn.webm");
+        form.append("text", text);
+        res = await fetch(`/api/chat/sessions/${sessionId}/turn`, { method: "POST", body: form });
+      } else {
+        res = await fetch(`/api/chat/sessions/${sessionId}/turn`, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ text }),
+        });
+      }
       const data = (await res.json()) as TurnResponse;
       if (res.status === 429) {
         setLimitMessage(data?.error?.message ?? "今天的练习时间到啦 🌙");
@@ -304,6 +343,8 @@ export function ChatClient({
       setUsage((u) => ({ ...u, minutes: Math.round((u.minutes + 0.5) * 10) / 10 }));
       // 文字已经渲染（上面的 setMessages）；这里只是驱动原生 <audio> 自动播，绝不阻塞消息出现
       queueAutoRead(assistantIndex, data.reply);
+      // 发音评分在服务端后台跑：轮询几次把它补到那条用户消息上（拿不到就显示「—」）
+      if (audioBlob && sessionId) void pollTurnPronunciation(sessionId, userIndex, text);
     } catch (err) {
       setError((err as Error).message);
     } finally {
@@ -331,7 +372,7 @@ export function ChatClient({
         const old = userAudioUrls.current.shift();
         if (old) URL.revokeObjectURL(old);
       }
-      await send(data.text, audioUrl);
+      await send(data.text, audioUrl, blob);
     } catch (err) {
       setError((err as Error).message);
     } finally {
@@ -490,6 +531,11 @@ export function ChatClient({
                   <p className="mt-1 text-xs">（内容已按儿童安全规则替换）</p>
                 ) : null}
 
+                {/* 语音轮次的发音信息（task-57）：家长看分数/弱音，儿童只看鼓励 */}
+                {m.role === "user" && m.pron !== undefined ? (
+                  <PronunciationNote pron={m.pron} isChild={isChild} testid="chat-pron" />
+                ) : null}
+
                 {/* 用户自己说的（语音输入）→ 可回放（task-19 B） */}
                 {m.role === "user" && m.audioUrl ? (
                   <audio
@@ -507,7 +553,7 @@ export function ChatClient({
                   <div className="mt-2">
                     <audio
                       controls
-                      preload="none"
+                      preload="metadata"
                       src={ttsUrl(m.text, speechRate, "mp3")}
                       data-testid="tts-audio"
                       aria-label={`朗读这句话：${m.text}`}

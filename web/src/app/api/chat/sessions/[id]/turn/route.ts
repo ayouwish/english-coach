@@ -1,5 +1,7 @@
-import { NextRequest } from "next/server";
+import { NextRequest, after } from "next/server";
 import { asc, eq } from "drizzle-orm";
+import { saveAudio } from "@/lib/audio";
+import { scoreChatTurn } from "@/lib/chat-pronunciation";
 import { ensureBootstrap, getDb } from "@/db";
 import { chatMessages, chatScenarios, chatSessions } from "@/db/schema";
 import { HttpError, requireUser } from "@/lib/auth";
@@ -22,10 +24,22 @@ export const POST = route(async (req: NextRequest, ctx: { params: Promise<{ id: 
   const user = await requireUser();
   const { id } = await ctx.params;
 
-  const body = (await req.json().catch(() => null)) as
-    | { text?: string; audio_url?: string }
-    | null;
-  const text = (body?.text ?? "").trim();
+  // 语音轮次用 multipart（audio + text，顺便做发音评估）；文字/suggestions 仍是 JSON
+  const contentType = req.headers.get("content-type") ?? "";
+  let text = "";
+  let audio: { data: Uint8Array; mime: string; ext: string } | null = null;
+  if (contentType.includes("multipart/form-data")) {
+    const form = await req.formData();
+    text = ((form.get("text") as string | null) ?? "").trim();
+    const file = form.get("audio");
+    if (file instanceof File) {
+      const ext = file.type.includes("wav") ? "wav" : file.type.includes("mp4") ? "m4a" : file.type.includes("ogg") ? "ogg" : "webm";
+      audio = { data: new Uint8Array(await file.arrayBuffer()), mime: file.type || "audio/webm", ext };
+    }
+  } else {
+    const body = (await req.json().catch(() => null)) as { text?: string } | null;
+    text = (body?.text ?? "").trim();
+  }
   if (!text) throw new HttpError(400, "bad_request", "请输入内容");
   if (text.length > 500) throw new HttpError(400, "bad_request", "单次输入请控制在 500 字符以内");
 
@@ -100,6 +114,8 @@ export const POST = route(async (req: NextRequest, ctx: { params: Promise<{ id: 
 
   const now = new Date().toISOString();
   const userMsgId = `cm_${crypto.randomUUID().replace(/-/g, "").slice(0, 20)}`;
+  // 语音轮次：录音落盘（历史里可回放），音频随后台评分使用
+  const savedAudio = audio ? saveAudio(user.id, audio.data, audio.ext) : null;
   const botMsgId = `cm_${crypto.randomUUID().replace(/-/g, "").slice(0, 20)}`;
 
   await db.insert(chatMessages).values({
@@ -110,7 +126,8 @@ export const POST = route(async (req: NextRequest, ctx: { params: Promise<{ id: 
     textZh: null,
     correctionJson: null,
     flag: "ok",
-    audioPath: null,
+    audioPath: savedAudio?.relativePath ?? null,
+    pronJson: null,
     createdAt: now,
   });
   await db.insert(chatMessages).values({
@@ -122,6 +139,7 @@ export const POST = route(async (req: NextRequest, ctx: { params: Promise<{ id: 
     correctionJson: JSON.stringify(reply.correction),
     flag: reply.flag,
     audioPath: null,
+    pronJson: null,
     createdAt: new Date(Date.now() + 1).toISOString(),
   });
 
@@ -147,6 +165,13 @@ export const POST = route(async (req: NextRequest, ctx: { params: Promise<{ id: 
     startedAt: session.startedAt,
   });
 
+  // 发音评估放在响应之后（**不阻塞**对话回复）：unscripted、reference_text=""
+  if (audio && savedAudio && caps.reachable) {
+    after(async () => {
+      await scoreChatTurn({ user, messageId: userMsgId, audio: audio as { data: Uint8Array; mime: string; ext: string } });
+    });
+  }
+
   return jsonOk({
     session_id: id,
     provider: reply.provider,
@@ -162,5 +187,7 @@ export const POST = route(async (req: NextRequest, ctx: { params: Promise<{ id: 
     done,
     turn_index: nextTurn,
     message_id: botMsgId,
+    user_message_id: userMsgId,
+    user_audio_url: savedAudio ? `/api/audio/${userMsgId}` : null,
   });
 });

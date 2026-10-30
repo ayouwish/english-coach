@@ -463,6 +463,8 @@ docker compose start web
 
 建议在飞牛的"备份"功能里把 `/vol1/1000/docker/english-coach/data` 加到定时备份任务。
 
+> 需要**按账号清理测试数据**（某个账号被拿来试过，堆了一堆不属于它的记录）？见 **§14**。
+
 ---
 
 ## 10. 升级与回滚
@@ -584,3 +586,59 @@ docker compose logs --tail=50 voice   # 排查评测/合成问题
 
 **备份三样东西**：`data/`（数据库+录音）、`deploy/.env`（密钥）、`deploy/certs/`（证书）。
 数据库用 `VACUUM INTO` 热备，见 §9。
+
+---
+
+## 14. 清理某个账号的测试数据（按账号 + 时间点）
+
+**场景**：某个账号曾经被拿来做测试（例如"女儿账号在 10-30 21:30 之前都是爸爸在试"），
+里面堆了大量不属于它的错题/录音/对话，影响后续真实使用。这条命令按**账号 + 时间点**清理，
+**默认只统计**，确认后才真删，而且**删之前自动备份**。
+
+**先决条件**：`web` 镜像里要包含脚本 `web/scripts/cleanup-user-data.mjs`
+（构建时 COPY 到容器 `/app/scripts/`）。飞牛上如果是旧镜像，先重建一次：
+
+```bash
+cd /vol1/1000/docker/english-coach/deploy
+docker compose build web && docker compose up -d web
+```
+
+```bash
+cd /vol1/1000/docker/english-coach/deploy
+
+# ① 只统计（默认行为，不改任何东西）
+docker compose exec -T web node scripts/cleanup-user-data.mjs \
+  --db /data/app.db \
+  --user girl@example.com \
+  --before 2026-10-30T13:30:00Z \
+  --dry-run
+
+# ② 看完"合计/保留"两列没错，再真删（先 VACUUM INTO 备份并校验，才动数据）
+docker compose exec -T web node scripts/cleanup-user-data.mjs \
+  --db /data/app.db \
+  --user girl@example.com \
+  --before 2026-10-30T13:30:00Z \
+  --yes
+```
+
+**时间必须带时区**，否则会被按容器时区解释、可能删错窗口。北京时间 21:30 写成
+`2026-10-30T21:30:00+08:00` 或等价的 UTC `2026-10-30T13:30:00Z`（推荐后者）。
+
+**它会删**：该账号在时间点之前的 `attempts` / `phoneme_scores` / `chat_sessions` /
+`chat_messages` / `story_retells` / `practice_sessions` / `srs_cards` / `blind_tests` /
+`reading_materials`（含磁盘图片）/ 磁盘录音，以及该账号的 `phoneme_mastery` 聚合行
+（想保留掌握度加 `--keep-mastery`）。
+**它不删**：`audit_log`（审计）、`sessions`（登录态）、`user_prefs`、`suggestions`、共享语料。
+
+**三条要记住的行为**：
+
+1. **先备份再删**：备份落在数据目录 `backup-before-cleanup-<时间戳>.db`，校验（`quick_check` + 行数比对）通不过就中止，一行都不删。
+2. **不可逆，但可恢复**：用那个备份覆盖 `app.db`（**先停 web**，并删掉 `app.db-wal`/`app.db-shm`）。
+3. **掌握度不会自动重建**：`phoneme_mastery` 是按次**增量**更新的，没有"从历史 attempts 全量重算"的逻辑。
+   所以默认删掉它 = 从零开始累积；想保留旧数字用 `--keep-mastery`（代价是数字里仍含被删测试数据的贡献）。
+
+幂等：重复执行第二次会显示"没有需要清理的数据"，不会删东西、也不会再堆备份文件。
+建议**没人使用的时候**执行（会短暂拿写锁）。
+
+> 更细的表格（每张表的过滤条件、退出码、本地直跑写法）见
+> [deployment.md §6.5](deployment.md)。

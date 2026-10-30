@@ -224,6 +224,9 @@ class Settings:
     azure_speech_region: str | None = None
     azure_speech_endpoint: str | None = None
     azure_tts_voice: str = "en-US-JennyNeural"
+    # task-56：连续识别参数（ASR 遇停顿不能只识别前半句）
+    azure_segmentation_silence_timeout_ms: int = 1500
+    azure_asr_timeout_s: float = 60.0
 
     llm_base_url: str | None = None
     llm_api_key: str | None = None
@@ -353,6 +356,8 @@ def get_settings() -> Settings:
         azure_speech_region=_env("AZURE_SPEECH_REGION"),
         azure_speech_endpoint=_env("AZURE_SPEECH_ENDPOINT"),
         azure_tts_voice=_env("AZURE_TTS_VOICE", "en-US-JennyNeural") or "en-US-JennyNeural",
+        azure_segmentation_silence_timeout_ms=_env_int("AZURE_SEGMENTATION_SILENCE_TIMEOUT_MS", 1500),
+        azure_asr_timeout_s=_env_float("AZURE_ASR_TIMEOUT_S", 60.0),
         llm_base_url=base_url,
         llm_api_key=api_key,
         llm_model=model,

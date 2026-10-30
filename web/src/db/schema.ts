@@ -197,6 +197,8 @@ export const chatMessages = sqliteTable(
     correctionJson: text("correction_json"),
     flag: text("flag"),
     audioPath: text("audio_path"),
+    /** 对话轮次的 unscripted 发音评估（精简 JSON，task-57）；历史行 NULL */
+    pronJson: text("pron_json"),
     createdAt: text("created_at").notNull(),
   },
   (t) => [index("idx_chat_messages_session").on(t.chatSessionId, t.createdAt)],

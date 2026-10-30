@@ -2,6 +2,8 @@ import { redirect } from "next/navigation";
 import { asc, desc, eq } from "drizzle-orm";
 import { ensureBootstrap, getDb } from "@/db";
 import { chatMessages, chatScenarios, chatSessions } from "@/db/schema";
+import { PronunciationNote } from "@/components/PronunciationNote";
+import { parsePron } from "@/lib/chat-pronunciation";
 import { ttsUrl } from "@/lib/tts-url";
 import { getCurrentUser } from "@/lib/auth";
 import { getCapabilities } from "@/lib/voice";
@@ -100,10 +102,14 @@ export default async function ChatPage() {
               >
                 <p className="font-medium">{m.text}</p>
                 {m.textZh ? <p className="mt-0.5 text-xs opacity-80">{m.textZh}</p> : null}
+                {/* 语音轮次的发音信息（task-57）：家长看分数，儿童只看鼓励 */}
+                {m.role === "user" && ((m.pronJson ?? null) !== null || Boolean(m.audioPath)) ? (
+                  <PronunciationNote pron={parsePron(m.pronJson ?? null)} isChild={user.isChild} testid="history-pron" />
+                ) : null}
                 {m.role === "assistant" ? (
                   <audio
                     controls
-                    preload="none"
+                    preload="metadata"
                     src={ttsUrl(m.text, speechRate, "mp3")}
                     data-testid="tts-audio"
                     aria-label={`朗读这句话：${m.text}`}
