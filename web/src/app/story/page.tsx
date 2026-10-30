@@ -63,6 +63,7 @@ export default async function StoryPage() {
 
   return (
     <StoryClient
+      viewerId={user.id}
       isChild={user.isChild}
       defaultLevel={defaultLevel}
       levels={[...CEFR_LEVELS]}

@@ -1,6 +1,7 @@
 import { forbidden, redirect } from "next/navigation";
 import { ensureBootstrap } from "@/db";
 import { getCurrentUser } from "@/lib/auth";
+import { FamilyMembersPanel } from "@/components/FamilyMembersPanel";
 import { buildParentSummary, type MemberSummary } from "@/lib/parent-summary";
 import { getCapabilities } from "@/lib/voice";
 
@@ -45,6 +46,9 @@ export default async function ParentPage() {
           ))}
         </div>
       </section>
+
+      {/* task-54：家庭成员管理（创建账号 / 不同英语水平 / 重置密码） */}
+      <FamilyMembersPanel viewerId={user.id} />
 
       <BlindWeeklyPanel members={summary.members.filter((m) => m.role === "child")} />
 

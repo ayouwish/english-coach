@@ -19,6 +19,8 @@ interface MaterialItem {
   kind: string;
   level: string | null;
   created_at: string;
+  created_by: string | null;
+  created_by_name: string | null;
 }
 
 interface Readability {
@@ -36,11 +38,13 @@ interface Readability {
  * 失败一律可见：ASR 失败、改写失败（含"服务端未就绪"）、保存失败都在页面上写明原因。
  */
 export function StoryClient({
+  viewerId,
   isChild,
   defaultLevel,
   levels,
   levelSuggestion = { suggest: null, message: null },
 }: {
+  viewerId: string;
   isChild: boolean;
   defaultLevel: string;
   levels: string[];
@@ -59,6 +63,8 @@ export function StoryClient({
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
   const [stories, setStories] = useState<MaterialItem[]>([]);
+  /** P1：故事集筛选（全家 / 只看我的） */
+  const [storyScope, setStoryScope] = useState<"family" | "mine">("family");
   /** P2：把弱音练进故事里（默认开） */
   const [useWeakPhonemes, setUseWeakPhonemes] = useState(true);
   const [weakUsed, setWeakUsed] = useState<string[]>([]);
@@ -466,6 +472,25 @@ export function StoryClient({
           <button type="button" className="ec-btn ec-btn-ghost !px-2 !py-0.5 text-xs" onClick={() => void loadStories()}>
             刷新
           </button>
+          <span className="mx-1 h-5 w-px bg-[#e6e8f5]" />
+          <button
+            type="button"
+            data-testid="story-scope-family"
+            aria-pressed={storyScope === "family"}
+            onClick={() => setStoryScope("family")}
+            className={`ec-btn ${storyScope === "family" ? "ec-btn-primary" : "ec-btn-ghost"} !px-2 !py-0.5 text-xs`}
+          >
+            全家
+          </button>
+          <button
+            type="button"
+            data-testid="story-scope-mine"
+            aria-pressed={storyScope === "mine"}
+            onClick={() => setStoryScope("mine")}
+            className={`ec-btn ${storyScope === "mine" ? "ec-btn-primary" : "ec-btn-ghost"} !px-2 !py=0.5 text-xs`}
+          >
+            只看我的
+          </button>
           {storiesError ? (
             <span className="text-xs text-red-700" role="alert" data-testid="stories-error">
               {storiesError}
@@ -484,7 +509,8 @@ export function StoryClient({
         ) : (
           <div className="mt-2 flex flex-col gap-3" data-testid="story-groups">
             {(() => {
-              const groups = groupStoriesByDay(stories);
+              const scoped = storyScope === "mine" ? stories.filter((x) => x.created_by === viewerId) : stories;
+              const groups = groupStoriesByDay(scoped);
               const sections: { key: string; label: string; items: MaterialItem[] }[] = [
                 { key: "today", label: "今天", items: groups.today },
                 { key: "yesterday", label: "昨天", items: groups.yesterday },
@@ -517,6 +543,7 @@ export function StoryClient({
                               <span className="block text-xs text-[var(--ec-muted)]">
                                 {s.sentence_count} 句{s.level ? ` · ${s.level}` : ""} ·{" "}
                                 {new Date(s.created_at).toLocaleDateString("zh-CN")}
+                                {s.created_by_name ? ` · ${s.created_by_name}` : ""}
                               </span>
                             </Link>
                             <Link

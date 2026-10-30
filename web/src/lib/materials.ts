@@ -12,9 +12,9 @@
  */
 import fs from "node:fs";
 import path from "node:path";
-import { desc, eq } from "drizzle-orm";
+import { desc, eq, inArray } from "drizzle-orm";
 import { DATA_DIR, getDb } from "@/db";
-import { readingMaterials } from "@/db/schema";
+import { readingMaterials, users } from "@/db/schema";
 import type { SessionUser } from "./auth";
 import { countSentences } from "./sentence-split";
 
@@ -85,6 +85,7 @@ export interface MaterialRow {
 export interface MaterialSummary {
   id: string;
   title: string;
+  created_by_name: string | null;
   sentence_count: number;
   has_image: boolean;
   source: string;
@@ -96,10 +97,11 @@ export interface MaterialSummary {
   updated_at: string;
 }
 
-function toSummary(r: typeof readingMaterials.$inferSelect): MaterialSummary {
+function toSummary(r: typeof readingMaterials.$inferSelect, authorName: string | null = null): MaterialSummary {
   return {
     id: r.id,
     title: r.title,
+    created_by_name: authorName,
     sentence_count: r.sentenceCount,
     has_image: Boolean(r.imagePath),
     source: r.source,
@@ -203,7 +205,17 @@ export async function listMaterials(
     .orderBy(desc(readingMaterials.createdAt))
     .limit(limit)
     .offset(offset);
-  return rows.map(toSummary);
+  // 作者昵称（家庭应用成员很少，直接一次查 map）
+  const ids = [...new Set(rows.map((r) => r.createdBy).filter((x): x is string => Boolean(x)))];
+  const names = new Map<string, string>();
+  if (ids.length > 0) {
+    const authorRows = await db
+      .select({ id: users.id, displayName: users.displayName })
+      .from(users)
+      .where(inArray(users.id, ids));
+    for (const a of authorRows) names.set(a.id, a.displayName);
+  }
+  return rows.map((r) => toSummary(r, r.createdBy ? (names.get(r.createdBy) ?? null) : null));
 }
 
 export async function getMaterial(id: string): Promise<MaterialRow | null> {
