@@ -26,7 +26,7 @@ import httpx
 from .config import Settings, get_settings
 from .errors import BadRequest, ContentUnsafe, ProviderError, ProviderUnavailable
 from .llm import LLMClient
-from .story import COMMON_WORDS, MAX_TEXT_ZH_CHARS  # 复用常用词做"是否为普通英文词"判断
+from .story import COMMON_WORDS  # 复用常用词做"是否为普通英文词"判断
 
 logger = logging.getLogger("voice.image")
 

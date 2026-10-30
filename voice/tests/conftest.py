@@ -48,6 +48,17 @@ def client():
         yield test_client
 
 
+def _clear_image_cache() -> None:
+    """清掉文生图缓存（task-52：图片缓存不在 WarmupCache 里，单独清）。"""
+    import shutil
+
+    from app.config import get_settings
+
+    images_dir = get_settings().data_dir / "cache" / "images"
+    if images_dir.is_dir():
+        shutil.rmtree(images_dir, ignore_errors=True)
+
+
 @pytest.fixture(autouse=True)
 def _clean_caches():
     """每个用例开始前清掉进程内单例与磁盘缓存，避免用例之间互相命中（顺序无关）。"""
@@ -55,10 +66,12 @@ def _clean_caches():
     reset_providers()
     reset_cache()
     get_cache().clear()
+    _clear_image_cache()
     yield
     reset_settings_cache()
     reset_providers()
     reset_cache()
+    _clear_image_cache()
 
 
 @pytest.fixture

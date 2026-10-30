@@ -37,6 +37,14 @@ class StoryRetellRequest(_Loose):
     level: str = "A2"
 
 
+class ImageIllustrateRequest(_Loose):
+    """故事 -> 儿童绘本插画（task-52）。"""
+
+    story_text: str = ""
+    title_en: str | None = None
+    style: str = "watercolor"
+
+
 class FeedbackScores(_Loose):
     pron: float | None = None
     accuracy: float | None = None

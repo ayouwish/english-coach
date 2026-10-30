@@ -82,6 +82,13 @@ class ContentUnsafe(VoiceError):
 
     code = "content_unsafe"
 
+    def __init__(self, message: str, provider: str = "", detail: Any | None = None):
+        payload_detail = {"provider": provider}
+        if detail:
+            payload_detail["reason"] = detail
+        super().__init__(message, detail=payload_detail)
+        self.provider = provider
+
 
 class ProviderUnavailable(ProviderError):
     """Provider 依赖缺失 / 未配置（例如没装 azure SDK、没有 key）。

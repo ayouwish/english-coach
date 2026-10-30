@@ -48,6 +48,7 @@ curl -s -X POST localhost:8100/v1/pronounce \
 | 9 | `POST /v1/ocr` | v1.5/v1.6：拍照识别书页英文（LLM 视觉为主、本地兜底，见 §14）|
 | 10 | `POST /v1/story/rewrite` | v1.8：中文讲述 → 分级英文故事（见 §18）|
 | 11 | `POST /v1/story/retell` | v1.9：复述覆盖度评估（鼓励优先、不评发音分，见 §18.5）|
+| 12 | `POST /v1/image/illustrate` | v2.0：故事 → 儿童绘本插画（智谱 GLM-Image，见 §19）|
 
 统一错误格式：`{"error":{"code","message","detail"}}`，错误码为契约 §8 的固定集合。
 
@@ -964,4 +965,43 @@ mock/local 兜底产出 → 理论上会把 mock 音频写进 `<azure-key>.wav`�
 - LLM：关思考、`max_tokens=1200`，`finish_reason=length` → 2400 重试；JSON 解析失败重试一次，两次失败 → 502。
 - 请求校验：`story_sentences` 1–20 条、每条 ≤200 字符；`transcript` 1–1000 字符；`level` ∈ A1/A2/B1/B2，否则 400。
 - 不落盘、不缓存（每次内容不同）。
+
+## 19. 文生图：故事 → 儿童绘本插画（task-52，智谱 GLM-Image）
+
+`POST /v1/image/illustrate`（JSON）：`{"story_text": "...", "title_en": "可选", "style": "watercolor"}`
+查询参数 `?force=1` 强制重新生成（默认优先用缓存，**避免重复花钱**）。
+
+响应：
+```json
+{"image_b64": "<PNG base64>", "mime": "image/png",
+ "prompt_used": "children's picture book illustration, soft watercolor, …",
+ "provider": "zhipu", "model": "glm-image", "size": "1280x1280",
+ "width": 1280, "height": 1280, "elapsed_ms": 8400, "cached": false, "warnings": []}
+```
+
+实现：① LLM 把故事写成英文场景描述（关思考）→ ② 服务端强制套**儿童安全模板**
+（`children's picture book illustration, soft {style}, warm colors, {scene}; cute cartoon characters,
+no realistic human faces, no text in image, safe for young children`，调用方不能覆盖）
+→ ③ 调智谱 `/images/generations` → ④ **立即下载临时 URL** → ⑤ 校验 magic bytes + PIL 解码 + 尺寸/像素上限
+（2²²）后统一转 PNG → base64 返回。
+- **人名一律替换**为 `a child` / `a friend`（正则 + 提示词双重约束）；**图内不渲染文字**（文字由 web 用 HTML 叠加）。
+- 缓存：`sha1(model+size+prompt+watermark)` → `DATA_DIR/cache/images/<key>.png`；命中直接返回（`cached: true`）。
+
+配置（`.env.example` 已补）：
+| 变量 | 默认 | 说明 |
+|---|---|---|
+| `IMAGE_PROVIDER` | `none` | `zhipu` / `mock` / `none`（未启用）|
+| `IMAGE_API_KEY` | — | bigmodel.cn 的 API Key |
+| `IMAGE_BASE_URL` | `https://open.bigmodel.cn/api/paas/v4` | 国际站可覆盖为 z.ai |
+| `IMAGE_MODEL` | `glm-image` | 也支持 `cogview-4*` / `cogview-3-flash` |
+| `IMAGE_SIZE` | `1280x1280` | glm-image 推荐 1280x1280 / 1568x1056 / 1056x1568；自定义需 1024–2048 且 32 的倍数 |
+| `IMAGE_WATERMARK` | `1` | 默认开启水印（合规）；关闭需控制台签免责声明 |
+| `IMAGE_TIMEOUT_S` | `120` | 生成超时 |
+
+错误语义：未配置 key / provider=none → **503 `provider_unavailable`**；内容被过滤（响应含 `content_filter`）
+→ **400 `content_unsafe`**（"这段内容没法生成插画，换个说法试试"）；429/5xx/网络 → 重试 3 次（1s/2s 退避）仍失败
+→ **502 `provider_error`**；下载到非图片/尺寸不符 → 502（绝不把坏字节返回前端）。
+`IMAGE_PROVIDER=mock` 时本地 PIL 生成占位图（1280x1280 PNG，不联网不花钱），供 web/测试使用。
+
+健康检查：`capabilities.image: true|false` 与 `capabilities.image_provider: "zhipu"|"mock"|null`（task-52 新增）。
 

@@ -1,4 +1,4 @@
-# 接口契约 v1.8（FROZEN · 2026-10-30）
+# 接口契约 v1.9（FROZEN · 2026-10-30）
 
 > **本文件是唯一事实来源（single source of truth）。**
 
@@ -15,6 +15,7 @@
 | 2026-10-30 | v1.6 | `/v1/health` 新增 `providers_effective`（实际可用 provider）与 `degraded`（降级详情，空对象=健康）；**禁止静默降级**：配置的 provider 不可用时 TTS/ASR/PA 返回 503 `provider_unavailable`，不再回落 mock 返回 200 | 向后兼容（新增字段；行为变更：此前会静默返回 mock 音频/结果，属 bug 修复）|
 | 2026-10-30 | v1.7 | `/v1/asr` 的 `language` 支持 `zh`/`zh-CN`（响应回显规范化 locale）；新增 §15 `POST /v1/story/rewrite`（中文讲述→分级英文改写）| 向后兼容：新增端点与可选枚举值 |
 | 2026-10-30 | v1.8 | 新增 §16 `POST /v1/story/retell`（复述覆盖度评估，鼓励优先、不评发音分）；`warnings` 新增 `feedback_template` | 向后兼容：新增端点 |
+| 2026-10-30 | v1.9 | 新增 §17 `POST /v1/image/illustrate`（故事→儿童绘本插画，智谱 GLM-Image）；`capabilities.image`/`image_provider`；错误码新增 `content_unsafe`(400)；`warnings` 新增 `prompt_template` | 向后兼容 |
 > `web/` 与 `voice/` 两个模块并行开发，任何一方需要改本契约，必须先通知 Lead 并同步改本文件。
 > 冻结范围：路径、请求字段名、响应字段名、枚举值、错误码。
 > 未冻结范围：各 provider 内部实现、日志格式、额外字段（允许追加 `provider_meta` 等可选字段，不得删除或改名已有字段）。
@@ -685,3 +686,35 @@ blind_tests
 
 **错误语义**：参数非法 → 400；LLM 未配置 → 503 `provider_unavailable`；JSON 两次解析失败 → 502 `provider_error`。
 **不落盘、不缓存**（内容每次不同）。
+
+---
+
+## 17. v1.9 新增：`POST /v1/image/illustrate`（故事 → 儿童绘本插画）
+
+请求（JSON）：
+```json
+{"story_text": "Today I built a tall block tower with Ming. Hua knocked it down. I was very angry.",
+ "title_en": "My Block Tower",     // 可选，用于构图
+ "style": "watercolor"}            // 可选，默认 watercolor
+```
+查询参数：`?force=1` 强制重新生成（绕过缓存）。
+
+响应：
+```json
+{"image_b64": "<PNG base64>", "mime": "image/png", "prompt_used": "...",
+ "provider": "zhipu", "model": "glm-image", "size": "1280x1280",
+ "width": 1280, "height": 1280, "elapsed_ms": 8400, "cached": false, "warnings": []}
+```
+
+**实现与安全约束**：
+- 两步：LLM 把故事变成英文绘画提示词 → **服务端强制套写死的儿童安全模板**（儿童绘本/水彩/暖色/**无真实人脸**/**图内无文字**/适龄），调用方不可覆盖；
+  LLM 不可用时用服务端模板并给 `warnings:["prompt_template"]`
+- **真实人名替换**为 `a child` / `a friend`
+- 生成后**立即下载临时 URL**（智谱返回的是 url），校验 magic bytes + PIL 解码 + 像素上限（2^22），统一转 PNG
+- 缓存：`sha1(model+size+prompt+watermark)` → `cache/images/<key>.png`；命中直接返回（避免重复计费）
+- 配置：`IMAGE_PROVIDER=zhipu|mock|none`（默认 none）、`IMAGE_API_KEY`、`IMAGE_BASE_URL`（默认 `https://open.bigmodel.cn/api/paas/v4`）、
+  `IMAGE_MODEL=glm-image`、`IMAGE_SIZE=1280x1280`、`IMAGE_WATERMARK=1`（默认开，合规）、`IMAGE_TIMEOUT_S=120`
+- `capabilities.image: true|false`、`capabilities.image_provider: "zhipu"|"mock"|null`
+
+**错误语义**：未配置 → **503 `provider_unavailable`**；智谱 `content_filter` → **400 `content_unsafe`**
+（message「这段内容没法生成插画，换个说法试试」）；429/5xx/网络重试 3 次后 → **502 `provider_error`**；下载到非图片/尺寸不符 → 502。

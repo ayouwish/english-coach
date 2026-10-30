@@ -27,6 +27,7 @@ from .errors import BadRequest, PayloadTooLarge, ProviderUnavailable
 from .voice_names import is_valid_voice_name
 from .languages import SUPPORTED_ASR_LANGUAGES, normalize_language
 from .story import retell_story, rewrite_story
+from .image_gen import active_provider as image_provider_name, generate_illustration, image_available
 from .feedback_templates import (
     CHILD_EXTRA_RULE,
     FEEDBACK_SYSTEM_PROMPT,
@@ -41,7 +42,15 @@ from .llm import LLMClient
 from .ocr import active_ocr_provider, heif_available, ocr_available, recognize_image
 from .phonemes import PHONEME_SPACE_ID, canonicalize_pa_result
 from .providers.registry import get_providers, provider_availability
-from .schemas import DialogueRequest, FeedbackRequest, StoryRetellRequest, StoryRewriteRequest, TTSRequest, WarmupRequest
+from .schemas import (
+    DialogueRequest,
+    FeedbackRequest,
+    ImageIllustrateRequest,
+    StoryRetellRequest,
+    StoryRewriteRequest,
+    TTSRequest,
+    WarmupRequest,
+)
 from .store import AudioStore, CACHE_CONTROL, CONTENT_TYPES
 from .warmup import tts_provider_name
 from .text import estimate_word_timings, strip_terminal_punct, tokens
@@ -149,6 +158,8 @@ async def health() -> dict:
     capabilities["ocr"] = ocr_available()  # task-27：任一 OCR provider 可用（LLM 视觉 或 本地 rapidocr）
     capabilities["ocr_provider"] = active_ocr_provider()  # "llm" | "local" | null（自检用）
     capabilities["heic"] = heif_available()  # task-38：是否支持从相册选 iPhone HEIC/HEIF 照片
+    capabilities["image"] = image_available()  # task-52：文生图是否可用（mock 也算可用）
+    capabilities["image_provider"] = image_provider_name()  # "zhipu" | "mock" | null
     # task-44：如实上报"配置的 provider 是否真的可用"（线上曾谎报 azure、实际回落到 mock）
     degraded, effective = _provider_status(providers, settings)
     return {
@@ -556,6 +567,22 @@ async def dialogue(payload: DialogueRequest) -> dict:
     # 返回体始终带 provider 与 degraded_llm（降级不伪装成大模型）。
     # httpx 是阻塞调用，放线程池避免卡住事件循环。
     return await run_in_threadpool(complete_dialogue, LLMClient(), body, execution.TIMEOUTS["dialogue"])
+
+
+# --------------------------------------------------------------------------------------
+# 11. image/illustrate（task-52：故事 -> 儿童绘本插画，智谱 GLM-Image）
+# --------------------------------------------------------------------------------------
+@router.post("/image/illustrate")
+async def image_illustrate(payload: ImageIllustrateRequest, force: bool = False) -> dict:
+    settings = get_settings()
+    return await run_in_threadpool(
+        generate_illustration,
+        payload.story_text,
+        title_en=payload.title_en,
+        style=payload.style,
+        force=force,
+        settings=settings,
+    )
 
 
 # --------------------------------------------------------------------------------------
