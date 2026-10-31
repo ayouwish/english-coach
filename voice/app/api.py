@@ -37,6 +37,7 @@ from .image_gen import (
     validate_style,
 )
 from .avatar_presets import presets_for_api
+from .dialogue import done_turn_index
 from .feedback_templates import (
     CHILD_EXTRA_RULE,
     FEEDBACK_SYSTEM_PROMPT,
@@ -66,6 +67,23 @@ from .text import estimate_word_timings, strip_terminal_punct, tokens
 from .warmup import prepare_reference, resolve_item, run_warmup, validate_item
 
 logger = logging.getLogger("voice.api")
+
+# task-73：静态声明本构建包含的端点/能力，便于部署自查（旧镜像缺少某项即说明没更新）
+CONTRACT_FEATURES: tuple[str, ...] = (
+    "asr",
+    "pronounce",
+    "feedback",
+    "dialogue",
+    "tts",
+    "audio/concat",
+    "warmup",
+    "ocr",
+    "story/rewrite",
+    "story/retell",
+    "image/illustrate",
+    "image/avatar",
+    "image/avatar/presets",
+)
 
 
 def _errors_are_no_speech(errors: list) -> bool:
@@ -180,6 +198,10 @@ async def health() -> dict:
     # task-63：image_avatar 语义 = "照片生成是否启用"（隐私策略默认关闭）；预置形象库静态可用
     capabilities["image_avatar"] = bool(settings.image_avatar_photo) and avatar_available()
     capabilities["avatar_presets"] = True
+    # task-73：部署自查用静态标记（端点存在即 true，不做远程/耗时探测）
+    capabilities["audio_concat"] = True
+    capabilities["chat_done_turn_index"] = done_turn_index(settings)  # 0 = 不限轮数（默认）
+    capabilities["features"] = list(CONTRACT_FEATURES)
     # task-44：如实上报"配置的 provider 是否真的可用"（线上曾谎报 azure、实际回落到 mock）
     degraded, effective = _provider_status(providers, settings)
     return {

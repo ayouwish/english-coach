@@ -8,6 +8,18 @@ import { jsonOk } from "@/lib/http";
 
 export const dynamic = "force-dynamic";
 
+/** correction_json 解析（旧行可能是 null / 空对象） */
+function parseCorrection(raw: string | null): unknown {
+  if (!raw) return null;
+  try {
+    const v = JSON.parse(raw) as unknown;
+    if (!v || (typeof v === "object" && Object.keys(v as Record<string, unknown>).length === 0)) return null;
+    return v;
+  } catch {
+    return null;
+  }
+}
+
 /**
  * GET /api/chat/sessions/:id/messages —— 会话内轮询用（task-57）：
  * 发音评分是后台完成的，前端发完一轮后拉几次，把 pron 补到对应消息上。
@@ -35,6 +47,9 @@ export async function GET(_req: NextRequest, ctx: { params: Promise<{ id: string
         text_zh: m.textZh,
         audio_url: m.audioPath ? `/api/audio/${m.id}` : null,
         pron: parsePron(m.pronJson),
+        // task-74 ②：把「更自然：…」校正提示也返回，历史详情才能保留
+        correction: parseCorrection(m.correctionJson),
+        flag: m.flag,
       })),
     });
   } catch (err) {

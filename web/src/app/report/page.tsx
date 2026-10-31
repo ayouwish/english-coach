@@ -1,5 +1,8 @@
 import Link from "next/link";
 import { redirect } from "next/navigation";
+import { desc, eq } from "drizzle-orm";
+import { getDb } from "@/db";
+import { attempts } from "@/db/schema";
 import { ensureBootstrap } from "@/db";
 import { AudioButton } from "@/components/AudioButton";
 import { ContrastButton } from "@/components/ContrastButton";
@@ -63,6 +66,21 @@ export default async function ReportPage({
     if (!a) return null;
     return isChild ? toChildArticulation(a) : a;
   };
+
+  // task-74 ⑤：最近练习记录（最近 20 条 attempts，可回溯 + 听自己读的）
+  const recentAttempts = await getDb()
+    .select({
+      id: attempts.id,
+      text: attempts.referenceText,
+      createdAt: attempts.createdAt,
+      scoresJson: attempts.scoresJson,
+      audioPath: attempts.audioPath,
+      materialId: attempts.materialId,
+    })
+    .from(attempts)
+    .where(eq(attempts.userId, user.id))
+    .orderBy(desc(attempts.createdAt))
+    .limit(20);
 
   const startView = views.find((v) => v.view.status === "weak")?.view ?? views[0]?.view;
   const startToken = startView?.focus_token ?? raw.focus_phonemes[0];
@@ -170,6 +188,54 @@ export default async function ReportPage({
           </ul>
         </details>
       ) : null}
+
+      {/* task-74 ⑤：最近练习记录（跟读也能回溯） */}
+      <section className="ec-card" data-testid="recent-practice">
+        <h2 className="text-base font-extrabold">🧾 最近练习记录</h2>
+        {recentAttempts.length === 0 ? (
+          <p className="mt-2 text-sm text-[var(--ec-muted)]">还没有练习记录，去跟读一句吧。</p>
+        ) : (
+          <ul className="mt-2 flex flex-col gap-2">
+            {recentAttempts.map((a) => {
+              let pron: number | null = null;
+              try {
+                const parsed = JSON.parse(a.scoresJson ?? "null") as { pron?: number } | null;
+                pron = typeof parsed?.pron === "number" ? parsed.pron : null;
+              } catch {
+                pron = null;
+              }
+              return (
+                <li
+                  key={a.id}
+                  className="flex flex-wrap items-center gap-2 rounded-lg bg-[#f8f9ff] px-2 py-1.5 text-sm"
+                  data-testid="practice-record-item"
+                >
+                  <span className="min-w-0 flex-1 truncate">{a.text}</span>
+                  <span className="text-xs text-[var(--ec-muted)]">{new Date(a.createdAt).toLocaleString("zh-CN")}</span>
+                  {isChild ? (
+                    <span className="text-xs text-[var(--ec-muted)]">读过了</span>
+                  ) : pron !== null ? (
+                    <span className="rounded-full bg-[#eef0f8] px-2 py-0.5 text-xs">{pron} 分</span>
+                  ) : null}
+                  {a.audioPath ? (
+                    <audio
+                      controls
+                      preload="metadata"
+                      src={`/api/audio/${a.id}`}
+                      data-testid="practice-record-audio"
+                      aria-label={`播放我读的这句话：${a.text}`}
+                      className="h-8 w-40"
+                    />
+                  ) : null}
+                </li>
+              );
+            })}
+          </ul>
+        )}
+        <p className="mt-2 text-xs text-[var(--ec-muted)]">
+          记录包含跟读、故事朗读与连读练习；家长可听每次录音并对照诊断。
+        </p>
+      </section>
 
       <p className="text-xs text-[var(--ec-muted)]">
         诊断依据：每个音素的历次评测均分与最近 3 次趋势；1 次的记录不参与（噪声太大）。

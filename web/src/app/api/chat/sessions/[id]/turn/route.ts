@@ -2,6 +2,7 @@ import { NextRequest, after } from "next/server";
 import { asc, eq } from "drizzle-orm";
 import { saveAudio } from "@/lib/audio";
 import { buildSessionAudio } from "@/lib/chat-audio";
+import { computeSessionSummary } from "@/lib/chat-summary";
 import { scoreChatTurn } from "@/lib/chat-pronunciation";
 import { ensureBootstrap, getDb } from "@/db";
 import { chatMessages, chatScenarios, chatSessions } from "@/db/schema";
@@ -156,13 +157,15 @@ export const POST = route(async (req: NextRequest, ctx: { params: Promise<{ id: 
   const nextTurn = turnIndex + 1;
   const maxTurns = chatMaxTurns();
   const done = reply.done || (maxTurns > 0 && nextTurn >= maxTurns);
+  // task-74 ③：自然结束时同样保存本次评价汇总（平均分/最弱音），历史可回溯
+  const summary = done ? await computeSessionSummary(id, scenario.id) : null;
   await db
     .update(chatSessions)
     .set({
       turnCount: nextTurn,
       endedAt: done ? new Date().toISOString() : null,
       summaryJson: done
-        ? JSON.stringify({ turns: nextTurn, scenario: scenario.id, degraded })
+        ? JSON.stringify({ ...(summary ?? {}), turns: nextTurn, scenario: scenario.id, degraded, ended_by: "assistant" })
         : null,
     })
     .where(eq(chatSessions.id, id));

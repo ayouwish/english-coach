@@ -5,7 +5,12 @@ from __future__ import annotations
 import sys
 
 MODES = {"mock", "local", "cloud", "hybrid"}
-CAPABILITY_KEYS = {"phoneme_level", "prosody", "intonation_curve", "nbest_phonemes", "ssml", "gpu", "ocr", "ocr_provider", "heic", "image", "image_provider", "image_avatar", "avatar_presets"}
+CAPABILITY_KEYS = {
+    "phoneme_level", "prosody", "intonation_curve", "nbest_phonemes", "ssml", "gpu",
+    "ocr", "ocr_provider", "heic", "image", "image_provider", "image_avatar", "avatar_presets",
+    # task-73：部署自查标记
+    "audio_concat", "chat_done_turn_index", "features",
+}
 PROVIDER_KEYS = {"asr", "pa", "tts", "llm"}
 
 
@@ -28,6 +33,14 @@ def test_health_shape_and_defaults(client):
     assert set(body["providers_effective"]) == PROVIDER_KEYS
     assert body["providers_effective"] == {"asr": "mock", "pa": "mock", "tts": "mock", "llm": "template"}
     assert body["degraded"] == {}
+    # task-73：部署自查标记（旧镜像没有 /v1/audio/concat 时这里会缺失）
+    assert body["capabilities"]["audio_concat"] is True
+    assert body["capabilities"]["chat_done_turn_index"] == 0
+    features = body["capabilities"]["features"]
+    assert isinstance(features, list)
+    assert "audio/concat" in features
+    for expected in ("asr", "pronounce", "feedback", "dialogue", "tts", "warmup", "ocr", "story/rewrite", "image/illustrate"):
+        assert expected in features, expected
 
 
 def test_health_needs_no_auth(client):
@@ -51,3 +64,17 @@ def test_azure_sdk_is_lazy_imported(tmp_path):
 def test_faster_whisper_not_imported(client):
     assert "faster_whisper" not in sys.modules
     assert "edge_tts" not in sys.modules
+
+
+def test_health_reports_effective_chat_done_turn_index(client, monkeypatch):
+    """task-73：health 返回生效的轮数阈值（默认 0=不限；配置 6 时回 6）。"""
+    from app.config import reset_settings_cache
+
+    monkeypatch.setenv("CHAT_DONE_TURN_INDEX", "6")
+    reset_settings_cache()
+    try:
+        caps = client.get("/v1/health").json()["capabilities"]
+        assert caps["chat_done_turn_index"] == 6
+        assert caps["audio_concat"] is True
+    finally:
+        reset_settings_cache()

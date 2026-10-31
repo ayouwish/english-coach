@@ -33,6 +33,10 @@ curl -s -X POST localhost:8100/v1/pronounce \
 
 ---
 
+> **部署自查**：`curl -s http://127.0.0.1:8100/v1/health | grep -o '"audio_concat":true'`
+> —— 有输出说明 voice 构建包含 `/v1/audio/concat`（task-67）；`capabilities.features` 也可看出本构建包含哪些端点，
+> `capabilities.chat_done_turn_index` 为生效的轮数阈值（默认 `0` = 不限轮数，task-69）。
+
 ## 2. 端点（严格按契约）
 
 | # | 端点 | 说明 |
@@ -1112,6 +1116,7 @@ no realistic human faces, no text in image, safe for young children`，调用方
 | 同上 | 250 | 9240 | — |
 | 同上 | 2000 | 12740 | — |
 
+部署自查：`/v1/health` 的 `capabilities.audio_concat == true` 且 `features` 含 `"audio/concat"` 才说明镜像包含本端点。
 错误实测：坏第 2 段 → `400 unsupported_audio`「第 2 段音频无法解码：…」；空 parts → `400 bad_request`；
 `gap_ms=5000` → `400 bad_request`；201 段 → `413 payload_too_large`。
 

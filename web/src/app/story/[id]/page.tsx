@@ -6,6 +6,7 @@ import { attempts, storyRetells } from "@/db/schema";
 import { getCurrentUser } from "@/lib/auth";
 import { getMaterial } from "@/lib/materials";
 import { IllustrateBox } from "@/components/IllustrateBox";
+import { StoryAudioReplay } from "@/components/StoryAudioReplay";
 import { SuggestButton } from "@/components/SuggestButton";
 import { RetellPanel } from "@/components/RetellPanel";
 import { splitSentences } from "@/lib/sentence-split";
@@ -171,6 +172,8 @@ export default async function StoryDetailPage({ params }: { params: Promise<{ id
         <p className="mt-2 text-xs text-[var(--ec-muted)]">
           {user.isChild ? `你已经读过这个故事 ${reads.length} 次。` : `朗读记录 ${reads.length} 次${avg !== null ? `，平均 ${avg} 分` : ""}（仅家长可见分数）`}
         </p>
+        {/* task-74 ①：整段朗读回放（多条录音拼一段；只有 1 条就直接用那条） */}
+        {lastWithAudio ? <StoryAudioReplay materialId={material.id} isChild={user.isChild} /> : null}
         {!user.isChild && scores.length > 0 ? (
           <div className="mt-2 flex flex-wrap gap-1" data-testid="detail-scores">
             {scores.slice(0, 10).map((s, i) => (

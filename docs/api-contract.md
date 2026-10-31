@@ -856,6 +856,24 @@ POST /api/auth/revoke
 
 ---
 
+## 21.0 `GET /v1/health` 的能力自查字段（v1.13 起）
+
+为便于部署排查，`capabilities` 增加**静态**标记（端点存在即 true，不做远程探测）：
+
+```json
+{"capabilities": {
+  "audio_concat": true,              // 本构建含 /v1/audio/concat
+  "chat_done_turn_index": 0,         // 生效值：0 = 对话不因轮数结束（默认）
+  "features": ["asr","pronounce","feedback","dialogue","tts","audio/concat","warmup",
+               "ocr","story/rewrite","story/retell","image/illustrate","image/avatar",
+               "image/avatar/presets"]
+}}
+```
+
+自查：`curl -s http://<nas>:8100/v1/health | grep -o '"audio_concat":true'`
+
+---
+
 ## 21. v1.13 新增：`POST /v1/audio/concat`（多段音频按序拼接）
 
 用途：对话训练结束后，把「用户每轮录音 + 助手每轮 TTS」按时间顺序拼成**一段音频连续播放**，便于对比感受。

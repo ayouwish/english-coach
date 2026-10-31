@@ -4,6 +4,7 @@ import { ensureBootstrap, getDb } from "@/db";
 import { chatSessions } from "@/db/schema";
 import { HttpError, requireUser } from "@/lib/auth";
 import { buildSessionAudio } from "@/lib/chat-audio";
+import { computeSessionSummary } from "@/lib/chat-summary";
 import { jsonOk } from "@/lib/http";
 
 export const dynamic = "force-dynamic";
@@ -17,11 +18,13 @@ export async function POST(_req: NextRequest, ctx: { params: Promise<{ id: strin
   const [session] = await db.select().from(chatSessions).where(eq(chatSessions.id, id)).limit(1);
   if (!session || session.userId !== user.id) throw new HttpError(404, "not_found", "会话不存在");
   if (!session.endedAt) {
+    // task-74 ③：结束即把本次评价（平均发音/准确/流利/完整 + 最弱音）写进 summary_json
+    const summary = await computeSessionSummary(id, session.scenarioId);
     await db
       .update(chatSessions)
       .set({
         endedAt: new Date().toISOString(),
-        summaryJson: JSON.stringify({ turns: session.turnCount, scenario: session.scenarioId, ended_by: "user" }),
+        summaryJson: JSON.stringify({ ...summary, turns: session.turnCount, ended_by: "user" }),
       })
       .where(and(eq(chatSessions.id, id), isNull(chatSessions.endedAt)));
   }

@@ -1,3 +1,4 @@
+import Link from "next/link";
 import { redirect } from "next/navigation";
 import { asc, desc, eq } from "drizzle-orm";
 import { ensureBootstrap, getDb } from "@/db";
@@ -5,6 +6,8 @@ import { chatMessages, chatScenarios, chatSessions } from "@/db/schema";
 import { ChatSessionAudio } from "@/components/ChatSessionAudio";
 import { PronunciationNote } from "@/components/PronunciationNote";
 import { parsePron } from "@/lib/chat-pronunciation";
+import { parseSessionSummary } from "@/lib/chat-summary";
+import { readChatAudioMeta } from "@/lib/chat-audio";
 import { ttsUrl } from "@/lib/tts-url";
 import { getCurrentUser } from "@/lib/auth";
 import { audienceForUser, scenarioAudience } from "@/lib/chat";
@@ -50,6 +53,14 @@ export default async function ChatPage() {
     .where(eq(chatSessions.userId, user.id))
     .orderBy(desc(chatSessions.startedAt))
     .limit(1);
+  // task-74 ④：历史对话列表（最近 30 次，倒序）——不再只保留最后一次
+  const historySessions = await getDb()
+    .select()
+    .from(chatSessions)
+    .where(eq(chatSessions.userId, user.id))
+    .orderBy(desc(chatSessions.startedAt))
+    .limit(30);
+  const scenarioTitleById = new Map(rows.map((r) => [r.id, r.titleZh]));
   const lastMessages = lastSession
     ? await getDb()
         .select()
@@ -139,6 +150,38 @@ export default async function ChatPage() {
             ))}
           </div>
         </details>
+      ) : null}
+
+      {/* task-74 ④：历史对话列表（可点进详情页看完整消息 + 校正 + 评价 + 整段回放） */}
+      {historySessions.length > 0 ? (
+        <section className="ec-card" data-testid="chat-history-list">
+          <h2 className="font-bold">📚 历史对话（{historySessions.length} 次）</h2>
+          <ul className="mt-2 flex flex-col gap-1">
+            {historySessions.map((sess) => {
+              const summary = parseSessionSummary(sess.summaryJson);
+              const audioReady = readChatAudioMeta(sess.id)?.status === "ready";
+              return (
+                <li key={sess.id}>
+                  <Link
+                    href={`/chat/sessions/${sess.id}`}
+                    data-testid="chat-history-item"
+                    className="flex flex-wrap items-center gap-2 rounded-lg px-2 py-1.5 text-sm hover:bg-[var(--ec-primary-soft)]"
+                  >
+                    <span className="text-xs text-[var(--ec-muted)]">{new Date(sess.startedAt).toLocaleString("zh-CN")}</span>
+                    <span className="font-medium">{scenarioTitleById.get(sess.scenarioId) ?? sess.scenarioId}</span>
+                    <span className="text-xs text-[var(--ec-muted)]">{sess.turnCount} 轮</span>
+                    {user.isChild ? (
+                      <span className="text-xs text-[var(--ec-muted)]">聊完了</span>
+                    ) : summary?.avg_pron !== null && summary?.avg_pron !== undefined ? (
+                      <span className="rounded-full bg-[#eef0f8] px-2 py-0.5 text-xs">平均发音 {summary.avg_pron}</span>
+                    ) : null}
+                    {audioReady ? <span className="text-xs">🎧 有回放</span> : null}
+                  </Link>
+                </li>
+              );
+            })}
+          </ul>
+        </section>
       ) : null}
     </div>
   );
