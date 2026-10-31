@@ -28,7 +28,8 @@
     "check:materials": "node scripts/check-materials.mjs",
     "check:encouragement": "node scripts/check-encouragement.mjs",
     "check:story": "node scripts/check-story.mjs",
-    "check:family": "node scripts/check-family.mjs"
+    "check:family": "node scripts/check-family.mjs",
+    "check:auth": "node scripts/check-auth.mjs"
   },
   "dependencies": {
     "bcryptjs": "^3.0.2",

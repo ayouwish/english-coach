@@ -1,4 +1,4 @@
-# 接口契约 v1.9（FROZEN · 2026-10-30）
+# 接口契约 v1.10（FROZEN · 2026-10-31）
 
 > **本文件是唯一事实来源（single source of truth）。**
 
@@ -16,6 +16,7 @@
 | 2026-10-30 | v1.7 | `/v1/asr` 的 `language` 支持 `zh`/`zh-CN`（响应回显规范化 locale）；新增 §15 `POST /v1/story/rewrite`（中文讲述→分级英文改写）| 向后兼容：新增端点与可选枚举值 |
 | 2026-10-30 | v1.8 | 新增 §16 `POST /v1/story/retell`（复述覆盖度评估，鼓励优先、不评发音分）；`warnings` 新增 `feedback_template` | 向后兼容：新增端点 |
 | 2026-10-30 | v1.9 | 新增 §17 `POST /v1/image/illustrate`（故事→儿童绘本插画，智谱 GLM-Image）；`capabilities.image`/`image_provider`；错误码新增 `content_unsafe`(400)；`warnings` 新增 `prompt_template` | 向后兼容 |
+| 2026-10-31 | v1.10 | **Web 层新增 Bearer Token 认证**（`/api/auth/token` `/refresh` `/revoke`），接口支持 `Authorization: Bearer` 与 Cookie **双模式**；新增 `auth_tokens` 表（迁移 0011）| 向后兼容：Cookie 登录不变；移动端可用 Token |
 > `web/` 与 `voice/` 两个模块并行开发，任何一方需要改本契约，必须先通知 Lead 并同步改本文件。
 > 冻结范围：路径、请求字段名、响应字段名、枚举值、错误码。
 > 未冻结范围：各 provider 内部实现、日志格式、额外字段（允许追加 `provider_meta` 等可选字段，不得删除或改名已有字段）。
@@ -718,3 +719,49 @@ blind_tests
 
 **错误语义**：未配置 → **503 `provider_unavailable`**；智谱 `content_filter` → **400 `content_unsafe`**
 （message「这段内容没法生成插画，换个说法试试」）；429/5xx/网络重试 3 次后 → **502 `provider_error`**；下载到非图片/尺寸不符 → 502。
+
+---
+
+## 18. v1.10 新增：Web 层 Bearer Token 认证（供原生客户端）
+
+> 这是 **web 层**（Next.js `/api/*`）的认证扩展，不是 voice 契约。Web 端继续用 Cookie；移动端用 Token。
+
+### 18.1 三个接口
+
+```
+POST /api/auth/token
+  body {email, password, user_agent?}
+  200 {access_token, refresh_token, token_type:"Bearer", expires_in:3600,
+       refresh_expires_in:2592000,
+       user:{id,email,displayName,role,cefrLevel,ageBand,avatar}}
+  401 {error:{code:"bad_request", message:"邮箱或密码不正确"}}
+  429 同 email 连续失败 5 次后 60s 内
+
+POST /api/auth/refresh
+  body {refresh_token}
+  200 同 /token 的响应结构（**一次性轮换**：旧 refresh 立即作废，签发新一对）
+  401 refresh 无效/已用/已过期/已吊销
+
+POST /api/auth/revoke
+  body {refresh_token}
+  204（幂等；吊销该 refresh 以及**它签发的配对 access**）
+```
+
+### 18.2 Token 形态与安全
+- **不透明 token**（`randomBytes(32).base64url`，43 字符），**不是 JWT**；库里只存 `sha256(token)` 十六进制（唯一索引）
+- 校验用 `timingSafeEqual`；token/密码**不进日志**、错误信息**不回显 token**
+- `auth_tokens` 表（迁移 `0011`）：`id, user_id, token_hash, kind(access|refresh), expires_at, used_at, revoked_at, created_at, user_agent, parent_id`
+  （`parent_id` 记录签发关系，用于精确连带吊销）
+- 过期：access 默认 1h（`AUTH_ACCESS_TTL_S`）、refresh 默认 30d（`AUTH_REFRESH_TTL_S`）
+
+### 18.3 双模式身份解析
+- **优先** `Authorization: Bearer <access>`；无 Bearer 时**回退** Cookie 会话
+- 两种凭据落到**同一个 userId**；带 Bearer 但无效 → 视为未登录（**不静默回退 Cookie**）
+- `/api/auth/login` 仍下发 Cookie（Web 流程不变）
+
+### 18.4 并发语义
+- 同一 refresh 并发请求：**只有一个成功**（条件 UPDATE 抢占 `used_at`），另一个 401 —— 客户端需处理为"重新登录"（或实现单飞刷新避免发生）
+- 客户端要求：网络层**单飞刷新**（并发 401 只 refresh 一次，其余等待后重放）
+
+### 18.5 已知限制
+- 429 计数是**进程内存**：多实例部署时各实例独立，需换成共享存储/网关限流

@@ -20,6 +20,28 @@ export const users = sqliteTable("users", {
   createdAt: text("created_at").notNull(),
 });
 
+/** Bearer Token（task-60）：只存 sha256(token)；refresh 一次性轮换。 */
+export const authTokens = sqliteTable(
+  "auth_tokens",
+  {
+    id: text("id").primaryKey(),
+    userId: text("user_id").notNull(),
+    tokenHash: text("token_hash").notNull().unique(),
+    kind: text("kind").notNull(),
+    expiresAt: text("expires_at").notNull(),
+    usedAt: text("used_at"),
+    revokedAt: text("revoked_at"),
+    createdAt: text("created_at").notNull(),
+    userAgent: text("user_agent"),
+    parentId: text("parent_id"),
+  },
+  (t) => [
+    index("idx_auth_tokens_user").on(t.userId),
+    index("idx_auth_tokens_hash").on(t.tokenHash),
+    index("idx_auth_tokens_parent").on(t.parentId),
+  ],
+);
+
 export const sessions = sqliteTable(
   "sessions",
   {

@@ -1,4 +1,4 @@
-import { cookies } from "next/headers";
+import { cookies, headers } from "next/headers";
 import { randomBytes } from "node:crypto";
 import { and, eq, gt, lt } from "drizzle-orm";
 import { getDb } from "@/db";
@@ -91,8 +91,23 @@ export async function clearSessionCookie() {
   store.set(SESSION_COOKIE, "", { httpOnly: true, path: "/", maxAge: 0 });
 }
 
-/** 读取当前登录用户；未登录返回 null（服务端校验，绝不靠前端隐藏菜单）。 */
+/**
+ * 读取当前登录用户；未登录返回 null（服务端校验，绝不靠前端隐藏菜单）。
+ *
+ * 双模式（task-60）：**优先** `Authorization: Bearer <access>`（移动端），
+ * 没有 Bearer 才回退 Cookie 会话（Web 端）。两种凭据都落到同一个 `userId`。
+ * 注意：带了 Bearer 但无效时**直接视为未登录**（不静默回退 Cookie，避免混淆）。
+ */
 export async function getCurrentUser(): Promise<SessionUser | null> {
+  const h = await headers();
+  const auth = h.get("authorization") ?? "";
+  if (auth.toLowerCase().startsWith("bearer ")) {
+    const token = auth.slice(7).trim();
+    if (!token) return null;
+    const { resolveAccessToken } = await import("./auth-tokens");
+    const userId = await resolveAccessToken(token);
+    return userId ? getSessionUserById(userId) : null;
+  }
   const store = await cookies();
   const token = store.get(SESSION_COOKIE)?.value;
   if (!token) return null;
