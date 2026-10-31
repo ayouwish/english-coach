@@ -30,6 +30,8 @@ export const TIMEOUTS = {
   story: 60_000,
   /** 文生图（智谱）：10–30s，给 90s */
   illustrate: 90_000,
+  /** 虚拟形象生成（文生图/图生图）：给 90s */
+  avatar: 90_000,
   pronounce: 60_000,
   tts: 20_000,
   feedback: 40_000,
@@ -243,6 +245,8 @@ export async function callStoryRetell(input: {
 
 export interface IllustrateResult {
   image_b64: string;
+  /** 是否参考了虚拟形象（task-62） */
+  character_used?: boolean;
   mime?: string;
   prompt_used?: string;
   provider?: string;
@@ -258,6 +262,10 @@ export async function callIllustrate(input: {
   title_en: string;
   style?: string;
   force?: boolean;
+  /** 虚拟形象角色卡（task-62）：有值时 voice 会把人物画成这个形象 */
+  character_desc?: string | null;
+  /** 虚拟形象风格（watercolor/cartoon/...） */
+  character_style?: string | null;
 }): Promise<IllustrateResult> {
   const qs = input.force ? "?force=1" : "";
   return callVoice<IllustrateResult>(
@@ -269,10 +277,37 @@ export async function callIllustrate(input: {
         story_text: input.story_text,
         title_en: input.title_en,
         style: input.style ?? "watercolor",
+        character_desc: input.character_desc ?? "",
+        character_style: input.character_style ?? "",
       }),
     },
     TIMEOUTS.illustrate,
   );
+}
+
+export interface AvatarResult {
+  image_b64: string;
+  mime?: string;
+  prompt_used?: string;
+  character_desc?: string;
+  style?: string;
+  provider?: string;
+  warnings?: string[];
+}
+
+/** 虚拟形象（task-62）：上传照片 + 风格 → voice `/v1/image/avatar`。 */
+export async function callAvatar(input: {
+  data: Uint8Array;
+  mime: string;
+  filename: string;
+  style: string;
+  characterDesc?: string | null;
+}): Promise<AvatarResult> {
+  const form = new FormData();
+  form.append("photo", new Blob([new Uint8Array(input.data)], { type: input.mime }), input.filename);
+  form.append("style", input.style);
+  if (input.characterDesc) form.append("character_desc", input.characterDesc);
+  return callVoice<AvatarResult>("/v1/image/avatar", { method: "POST", body: form }, TIMEOUTS.avatar);
 }
 
 /** 契约 §5：40s 超时，1 次重试后由调用方降级到本地模板。 */

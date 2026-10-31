@@ -38,11 +38,13 @@ class StoryRetellRequest(_Loose):
 
 
 class ImageIllustrateRequest(_Loose):
-    """故事 -> 儿童绘本插画（task-52）。"""
+    """故事 -> 儿童绘本插画（task-52）；task-61 支持角色卡。"""
 
     story_text: str = ""
     title_en: str | None = None
     style: str = "watercolor"
+    character_desc: str | None = None
+    character_style: str | None = None
 
 
 class FeedbackScores(_Loose):

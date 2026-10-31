@@ -4,6 +4,7 @@ import { getCurrentUser } from "@/lib/auth";
 import { listVisibleSentences } from "@/lib/corpus";
 import { getPrefs } from "@/lib/prefs";
 import { getDailyUsage } from "@/lib/usage";
+import { AvatarSection } from "@/components/AvatarSection";
 import { CorpusManager } from "./CorpusManager";
 import { SettingsForm } from "./SettingsForm";
 
@@ -35,6 +36,7 @@ export default async function SettingsPage() {
       prefs={prefs}
       usage={usage}
     />
+    <AvatarSection isChild={user.isChild} />
     {user.role === "parent" ? <CorpusManager initial={mySentences} /> : null}
     </>
   );

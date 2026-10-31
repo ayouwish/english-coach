@@ -49,6 +49,7 @@ curl -s -X POST localhost:8100/v1/pronounce \
 | 10 | `POST /v1/story/rewrite` | v1.8：中文讲述 → 分级英文故事（见 §18）|
 | 11 | `POST /v1/story/retell` | v1.9：复述覆盖度评估（鼓励优先、不评发音分，见 §18.5）|
 | 12 | `POST /v1/image/illustrate` | v2.0：故事 → 儿童绘本插画（智谱 GLM-Image，见 §19）|
+| 13 | `POST /v1/image/avatar` | v2.1：照片 → 风格化虚拟形象 + 角色卡（见 §19.1）|
 
 统一错误格式：`{"error":{"code","message","detail"}}`，错误码为契约 §8 的固定集合。
 
@@ -1016,3 +1017,27 @@ no realistic human faces, no text in image, safe for young children`，调用方
 
 健康检查：`capabilities.image: true|false` 与 `capabilities.image_provider: "zhipu"|"mock"|null`（task-52 新增）。
 
+### 19.1 虚拟形象（照片 → 角色卡 → 风格化头像）与提示词可见（task-61）
+
+**重要限制**：智谱图片生成端点只支持**文生图**，不支持图片输入/参考图/图生图。
+所以形象一致性靠 **「英文角色卡（character_desc）+ 固定风格词」** 实现，**不是**身份级还原（不传照片给智谱）。
+
+`POST /v1/image/avatar`（multipart/form-data）：
+- 表单：`photo`（file，≤10MB，支持 EXIF 转正）+ `style`（枚举，默认 `watercolor`）；查询 `?force=1` 强制重生成
+- **style 枚举**：`watercolor | cartoon | pixel | papercut | clay`（五种各有独立 style tokens；非法 → 400）
+- 流程：① 视觉 LLM 分析照片 → 儿童安全英文角色卡（不推测种族/宗教/年龄，不输出真实姓名；若模型返回嵌套 JSON 会自动拍平并过滤敏感字段）
+  ② `character_desc` + 风格预设 → 文生图（固定模板）③ 校验解码/尺寸 → base64 返回
+- 响应：`{image_b64, mime, character_desc, style, provider, model, size, width, height, prompt_used, prompt_parts, elapsed_ms, cached, warnings}`
+- 缓存：`sha1("avatar" + style + model + size + watermark + 照片内容hash)` → `cache/images/avatar_<key>.png` + `.json` 元数据；
+  命中时**不再调视觉 LLM**（省钱），`force=1` 重新分析+生成。
+- `character_desc` 清洗（两接口共用）：去换行/控制字符、压缩空白、截断 **300 字符**、**拒绝 prompt 注入词**
+  （`ignore previous instructions` / `system prompt` / `api key` / `http(s)://` / ` ``` ` / `<script>` 等）→ 400。
+
+`/v1/image/illustrate` 支持角色卡：请求新增可选 `character_desc`、`character_style`；
+- 给了 `character_desc` → 插入提示词**固定位置**（style 之后、scene 之前，`featuring …`），
+  且用 `character_style`（或 `style`）的同一套 style tokens，提升与头像的一致性；
+- 响应新增 `character_used: true|false`，并**始终返回** `prompt_used` 与 `prompt_parts: {style, character, scene, safety}`；
+- 不带角色卡时**提示词与旧行为逐字节一致**（向后兼容）。
+
+**prompt 可见性**：两个接口都返回最终实际提示词 `prompt_used`（+ 四段 `prompt_parts`），供前端展示与用户反馈；
+不会回显 API key 或内部路径。`capabilities.image_avatar: true|false`（文生图 + 视觉 LLM 都可用才为 true）。

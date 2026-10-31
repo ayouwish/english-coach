@@ -31,6 +31,9 @@ export interface SessionUser {
   cefrLevel: string;
   birthYear: number | null;
   avatar: string | null;
+  /** 虚拟形象图片相对路径（task-62）；NULL = 没设 */
+  avatarImagePath: string | null;
+  avatarStyle: string | null;
   dailyLimitMinutes: number;
   allowFreeChat: boolean;
   nativeLanguage: string;
@@ -47,6 +50,8 @@ function toSessionUser(row: typeof users.$inferSelect): SessionUser {
     cefrLevel: row.cefrLevel,
     birthYear: row.birthYear,
     avatar: row.avatar,
+    avatarImagePath: row.avatarImagePath ?? null,
+    avatarStyle: row.avatarStyle ?? null,
     dailyLimitMinutes: row.dailyLimitMinutes,
     allowFreeChat: row.allowFreeChat === 1,
     nativeLanguage: row.nativeLanguage,

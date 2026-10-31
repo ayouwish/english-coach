@@ -1,4 +1,4 @@
-# 接口契约 v1.10（FROZEN · 2026-10-31）
+# 接口契约 v1.11（FROZEN · 2026-10-31）
 
 > **本文件是唯一事实来源（single source of truth）。**
 
@@ -17,6 +17,7 @@
 | 2026-10-30 | v1.8 | 新增 §16 `POST /v1/story/retell`（复述覆盖度评估，鼓励优先、不评发音分）；`warnings` 新增 `feedback_template` | 向后兼容：新增端点 |
 | 2026-10-30 | v1.9 | 新增 §17 `POST /v1/image/illustrate`（故事→儿童绘本插画，智谱 GLM-Image）；`capabilities.image`/`image_provider`；错误码新增 `content_unsafe`(400)；`warnings` 新增 `prompt_template` | 向后兼容 |
 | 2026-10-31 | v1.10 | **Web 层新增 Bearer Token 认证**（`/api/auth/token` `/refresh` `/revoke`），接口支持 `Authorization: Bearer` 与 Cookie **双模式**；新增 `auth_tokens` 表（迁移 0011）| 向后兼容：Cookie 登录不变；移动端可用 Token |
+| 2026-10-31 | v1.11 | 新增 §19 虚拟形象：`POST /v1/image/avatar`（照片→角色卡→5 种风格头像）、`/v1/image/illustrate` 支持 `character_desc`/`character_style` 与 `character_used`；`capabilities.image_avatar` | 向后兼容：illustrate 不带角色卡时提示词逐字节不变 |
 > `web/` 与 `voice/` 两个模块并行开发，任何一方需要改本契约，必须先通知 Lead 并同步改本文件。
 > 冻结范围：路径、请求字段名、响应字段名、枚举值、错误码。
 > 未冻结范围：各 provider 内部实现、日志格式、额外字段（允许追加 `provider_meta` 等可选字段，不得删除或改名已有字段）。
@@ -765,3 +766,54 @@ POST /api/auth/revoke
 
 ### 18.5 已知限制
 - 429 计数是**进程内存**：多实例部署时各实例独立，需换成共享存储/网关限流
+
+---
+
+## 19. v1.11 新增：虚拟形象（照片 → 角色卡 → 风格化头像）
+
+> **重要限制**：智谱图片生成端点**只支持文生图，不支持图片输入/参考图/图生图**。
+> 因此"形象一致性"靠 **角色卡（英文外观描述）+ 固定风格词** 实现，**不是**身份级还原；
+> 照片**只发给视觉 LLM**（产出文字描述），**不会**发给智谱。
+
+### 19.1 `POST /v1/image/avatar`
+`multipart/form-data`：`photo`(file, ≤10MB) + `style`（默认 `watercolor`）；查询 `?force=1` 绕过缓存。
+
+```json
+200 {
+  "image_b64": "<PNG base64>", "mime": "image/png",
+  "character_desc": "a child with short black hair, round face, red shirt, smiling expression",
+  "style": "watercolor",
+  "provider": "zhipu", "model": "glm-image", "size": "1280x1280",
+  "width": 1280, "height": 1280,
+  "prompt_used": "<最终实际提示词>",
+  "prompt_parts": {"style": "soft watercolor", "character": "a child with …",
+                   "scene": "friendly expression, upper body, …", "safety": "no text in image, safe for young children"},
+  "elapsed_ms": 1570, "cached": false, "warnings": []
+}
+```
+- **风格枚举**（严格校验，非法 400）：`watercolor | cartoon | pixel | papercut | clay`
+- 视觉 LLM 产出的角色卡**过滤敏感字段**（race/ethnicity/religion/age/name/location），只保留可画的卡通特征；
+  兼容模型返回嵌套 JSON 或纯文本，服务端拍平成一句
+- 缓存键含**照片内容 hash** + style + model + size + watermark：命中时**不再调视觉 LLM**（省钱）；`force=1` 重生成
+- 错误：非图片 400；`content_filter` 400 `content_unsafe`；未配置 provider 或无视觉 LLM → 503 `provider_unavailable`
+
+### 19.2 `/v1/image/illustrate` 新增角色卡参数
+请求新增可选字段（向后兼容）：
+```json
+{"story_text": "...", "title_en": "...", "style": "watercolor",
+ "character_desc": "a child with short black hair, ...",   // ≤300 字符，会清洗
+ "character_style": "watercolor"}                          // 与头像同一套风格词
+```
+响应新增：`character_used: true|false`、`prompt_parts: {style, character, scene, safety}`（`prompt_used` 原本就有，仍必返回）。
+- 角色卡插入提示词**固定位置**（style 之后、scene 之前）
+- **不带** `character_desc` 时，`prompt_used` 与旧版本**逐字节一致**（回归测试锁定）
+- **清洗与注入防护**：去换行/控制字符、压缩空白、≤300 字符截断；命中注入词
+  （`ignore previous instructions`/`system prompt`/`reveal your`/`api key`/`password`/`jailbreak`/<script>/URL 等）
+  → **400**；视觉模型自己吐出注入词 → **502**
+
+### 19.3 `capabilities.image_avatar: true|false`
+**文生图 provider 可用 且 视觉 LLM 可用** 才为 true。客户端应据此决定是否显示"设置虚拟形象"入口。
+
+### 19.4 隐私
+- 照片 → **DeepSeek**（视觉描述）；**不发给智谱**
+- 生成的头像与角色卡存本地；故事插画只发送**文字**提示词（含角色卡）

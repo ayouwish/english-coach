@@ -15,16 +15,20 @@ export function IllustrateBox({
   hasImage,
   isChild = false,
   autoTrigger = true,
+  characterUsedInitial = false,
 }: {
   materialId: string;
   hasImage: boolean;
   isChild?: boolean;
   autoTrigger?: boolean;
+  /** 上次生成是否参考了虚拟形象（task-62） */
+  characterUsedInitial?: boolean;
 }) {
   const [phase, setPhase] = useState<"idle" | "loading" | "done" | "error">(hasImage ? "done" : "idle");
   const [imageUrl, setImageUrl] = useState<string | null>(hasImage ? `/api/materials/${materialId}/image` : null);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+  const [characterUsed, setCharacterUsed] = useState(characterUsedInitial);
   const startedRef = useRef(false);
 
   const generate = useCallback(
@@ -39,7 +43,14 @@ export function IllustrateBox({
           body: JSON.stringify({ force }),
         });
         const data = (await res.json().catch(() => null)) as
-          | { image_url?: string; mime?: string; elapsed_ms?: number; error?: { code?: string; message?: string } }
+          | {
+              image_url?: string;
+              mime?: string;
+              elapsed_ms?: number;
+              character_used?: boolean;
+              prompt_used?: string | null;
+              error?: { code?: string; message?: string };
+            }
           | null;
         if (!res.ok) {
           const code = data?.error?.code;
@@ -53,6 +64,7 @@ export function IllustrateBox({
           return;
         }
         setImageUrl(`${data?.image_url ?? `/api/materials/${materialId}/image`}?t=${Date.now()}`);
+        setCharacterUsed(Boolean(data?.character_used));
         setPhase("done");
         setNotice(
           force
@@ -147,6 +159,11 @@ export function IllustrateBox({
       {error ? (
         <p className="mt-2 rounded-xl bg-[#fff3d6] p-2 text-sm text-[#7a4d00]" role="alert" data-testid="illustration-error">
           {error}
+        </p>
+      ) : null}
+      {characterUsed && imageUrl ? (
+        <p className="mt-1 text-xs text-[#166534]" data-testid="illustration-character-used">
+          ✅ 已按你的虚拟形象生成
         </p>
       ) : null}
       {notice ? (

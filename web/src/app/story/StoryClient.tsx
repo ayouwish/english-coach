@@ -21,6 +21,7 @@ interface MaterialItem {
   created_at: string;
   created_by: string | null;
   created_by_name: string | null;
+  created_by_avatar_url: string | null;
 }
 
 interface Readability {
@@ -544,6 +545,18 @@ export function StoryClient({
                                 {s.sentence_count} 句{s.level ? ` · ${s.level}` : ""} ·{" "}
                                 {new Date(s.created_at).toLocaleDateString("zh-CN")}
                                 {s.created_by_name ? ` · ${s.created_by_name}` : ""}
+                                {s.created_by_avatar_url ? (
+                                  <>
+                                    {" "}
+                                    {/* eslint-disable-next-line @next/next/no-img-element -- 本地 API 图片 */}
+                                    <img
+                                      src={s.created_by_avatar_url}
+                                      alt={`${s.created_by_name ?? "作者"}的虚拟形象`}
+                                      data-testid="story-author-avatar"
+                                      className="inline-block h-4 w-4 rounded-full border border-[#e6e8f5] align-text-bottom object-cover"
+                                    />
+                                  </>
+                                ) : null}
                               </span>
                             </Link>
                             <Link

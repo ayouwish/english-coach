@@ -27,7 +27,13 @@ from .errors import BadRequest, PayloadTooLarge, ProviderError, ProviderUnavaila
 from .voice_names import is_valid_voice_name
 from .languages import SUPPORTED_ASR_LANGUAGES, normalize_language
 from .story import retell_story, rewrite_story
-from .image_gen import active_provider as image_provider_name, generate_illustration, image_available
+from .image_gen import (
+    active_provider as image_provider_name,
+    avatar_available,
+    generate_avatar,
+    generate_illustration,
+    image_available,
+)
 from .feedback_templates import (
     CHILD_EXTRA_RULE,
     FEEDBACK_SYSTEM_PROMPT,
@@ -168,6 +174,7 @@ async def health() -> dict:
     capabilities["heic"] = heif_available()  # task-38：是否支持从相册选 iPhone HEIC/HEIF 照片
     capabilities["image"] = image_available()  # task-52：文生图是否可用（mock 也算可用）
     capabilities["image_provider"] = image_provider_name()  # "zhipu" | "mock" | null
+    capabilities["image_avatar"] = avatar_available()  # task-61：照片→虚拟形象（需文生图 + 视觉 LLM）
     # task-44：如实上报"配置的 provider 是否真的可用"（线上曾谎报 azure、实际回落到 mock）
     degraded, effective = _provider_status(providers, settings)
     return {
@@ -599,9 +606,20 @@ async def image_illustrate(payload: ImageIllustrateRequest, force: bool = False)
         payload.story_text,
         title_en=payload.title_en,
         style=payload.style,
+        character_desc=payload.character_desc,
+        character_style=payload.character_style,
         force=force,
         settings=settings,
     )
+
+
+@router.post("/image/avatar")
+async def image_avatar(photo: UploadFile = File(...), style: str = Form("watercolor"), force: bool = False) -> dict:
+    settings = get_settings()
+    data = await _read_upload(photo, settings.max_ocr_bytes)
+    if not data:
+        raise BadRequest("empty photo")
+    return await run_in_threadpool(generate_avatar, data, style=style, force=force, settings=settings)
 
 
 # --------------------------------------------------------------------------------------

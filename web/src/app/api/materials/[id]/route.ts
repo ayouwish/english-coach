@@ -32,6 +32,8 @@ export async function GET(_req: NextRequest, ctx: { params: Promise<{ id: string
       created_at: material.createdAt,
       updated_at: material.updatedAt,
       image_url: material.imagePath ? `/api/materials/${material.id}/image` : null,
+      image_prompt: material.imagePrompt,
+      image_character_used: material.imageCharacterUsed,
     });
   } catch (err) {
     if (err instanceof HttpError) return errorJson(err.status, err.code, err.message);

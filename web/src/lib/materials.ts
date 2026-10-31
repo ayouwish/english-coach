@@ -72,6 +72,9 @@ export interface MaterialRow {
   title: string;
   text: string;
   imagePath: string | null;
+  /** 画插画用的提示词（task-62，详情页展示、供用户反馈） */
+  imagePrompt: string | null;
+  imageCharacterUsed: boolean;
   sentenceCount: number;
   source: string;
   kind: string;
@@ -86,6 +89,8 @@ export interface MaterialSummary {
   id: string;
   title: string;
   created_by_name: string | null;
+  /** 作者的虚拟形象图片 URL（task-62；没有则不显示） */
+  created_by_avatar_url: string | null;
   sentence_count: number;
   has_image: boolean;
   source: string;
@@ -97,11 +102,16 @@ export interface MaterialSummary {
   updated_at: string;
 }
 
-function toSummary(r: typeof readingMaterials.$inferSelect, authorName: string | null = null): MaterialSummary {
+function toSummary(
+  r: typeof readingMaterials.$inferSelect,
+  authorName: string | null = null,
+  authorAvatarPath: string | null = null,
+): MaterialSummary {
   return {
     id: r.id,
     title: r.title,
     created_by_name: authorName,
+    created_by_avatar_url: r.createdBy && authorAvatarPath ? `/api/avatar/image?user=${encodeURIComponent(r.createdBy)}` : null,
     sentence_count: r.sentenceCount,
     has_image: Boolean(r.imagePath),
     source: r.source,
@@ -208,14 +218,24 @@ export async function listMaterials(
   // 作者昵称（家庭应用成员很少，直接一次查 map）
   const ids = [...new Set(rows.map((r) => r.createdBy).filter((x): x is string => Boolean(x)))];
   const names = new Map<string, string>();
+  const avatars = new Map<string, string>();
   if (ids.length > 0) {
     const authorRows = await db
-      .select({ id: users.id, displayName: users.displayName })
+      .select({ id: users.id, displayName: users.displayName, avatarImagePath: users.avatarImagePath })
       .from(users)
       .where(inArray(users.id, ids));
-    for (const a of authorRows) names.set(a.id, a.displayName);
+    for (const a of authorRows) {
+      names.set(a.id, a.displayName);
+      if (a.avatarImagePath) avatars.set(a.id, a.avatarImagePath);
+    }
   }
-  return rows.map((r) => toSummary(r, r.createdBy ? (names.get(r.createdBy) ?? null) : null));
+  return rows.map((r) =>
+    toSummary(
+      r,
+      r.createdBy ? (names.get(r.createdBy) ?? null) : null,
+      r.createdBy ? (avatars.get(r.createdBy) ?? null) : null,
+    ),
+  );
 }
 
 export async function getMaterial(id: string): Promise<MaterialRow | null> {
@@ -227,6 +247,8 @@ export async function getMaterial(id: string): Promise<MaterialRow | null> {
     title: row.title,
     text: row.text,
     imagePath: row.imagePath,
+    imagePrompt: row.imagePrompt ?? null,
+    imageCharacterUsed: row.imageCharacterUsed === 1,
     sentenceCount: row.sentenceCount,
     source: row.source,
     kind: row.kind,

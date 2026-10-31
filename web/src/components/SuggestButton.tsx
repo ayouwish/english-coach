@@ -19,9 +19,29 @@ import {
  *  - 文案里不写 markdown 星号（用 <strong>）；
  *  - 不把用户输入直接渲染成 HTML（React 默认转义，无 dangerouslySetInnerHTML）。
  */
-export function SuggestButton({ isChild }: { isChild: boolean }) {
+export function SuggestButton({
+  isChild,
+  presetCategory,
+  presetContent,
+  triggerLabel,
+  triggerTestId,
+  context,
+  triggerClassName,
+}: {
+  isChild: boolean;
+  /** 打开弹窗时预选分类（例如提示词问题用 bug） */
+  presetCategory?: SuggestionCategory;
+  /** 打开弹窗时预填正文（例如故事标题+提示词摘要） */
+  presetContent?: string;
+  /** 自定义按钮文案（不传 = 导航栏默认「💡 提建议」） */
+  triggerLabel?: string;
+  triggerTestId?: string;
+  /** 随建议一起上报的上下文（task-62：prompt/story_id/style） */
+  context?: Record<string, string | number | null>;
+  triggerClassName?: string;
+}) {
   const [open, setOpen] = useState(false);
-  const [category, setCategory] = useState<SuggestionCategory>("experience");
+  const [category, setCategory] = useState<SuggestionCategory>(presetCategory ?? "experience");
   const [content, setContent] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -50,6 +70,7 @@ export function SuggestButton({ isChild }: { isChild: boolean }) {
         body: JSON.stringify({
           category,
           content,
+          context,
           page: typeof window !== "undefined" ? window.location.pathname + window.location.search : null,
           viewport:
             typeof window !== "undefined"
@@ -79,17 +100,20 @@ export function SuggestButton({ isChild }: { isChild: boolean }) {
     <>
       <button
         type="button"
-        data-testid="suggest-open"
+        data-testid={triggerTestId ?? "suggest-open"}
         aria-haspopup="dialog"
-        aria-label="提建议"
+        aria-label={triggerLabel ?? "提建议"}
         onClick={() => {
+          // 预填（提示词反馈场景）：分类 + 正文摘要，用户可再改
+          if (presetCategory) setCategory(presetCategory);
+          if (presetContent !== undefined) setContent(presetContent.slice(0, MAX_SUGGESTION_LENGTH));
           setOpen(true);
           setError(null);
           setDone(false);
         }}
-        className="ec-btn ec-btn-ghost"
+        className={triggerClassName ?? "ec-btn ec-btn-ghost"}
       >
-        💡 {isChild ? "我想说" : "提建议"}
+        {triggerLabel ?? `💡 ${isChild ? "我想说" : "提建议"}`}
       </button>
 
       {open ? (

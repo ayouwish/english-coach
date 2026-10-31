@@ -4,6 +4,7 @@ import { ensureBootstrap, getDb } from "@/db";
 import { readingMaterials } from "@/db/schema";
 import { HttpError, requireUser } from "@/lib/auth";
 import { base64ToBytes, MAX_ILLUSTRATION_BYTES, writeIllustration } from "@/lib/illustration";
+import { getAvatar } from "@/lib/avatar";
 import { getMaterial } from "@/lib/materials";
 import { callIllustrate, VoiceError } from "@/lib/voice";
 
@@ -23,7 +24,7 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
   let oldImagePath: string | null = null;
   try {
     await ensureBootstrap();
-    await requireUser();
+    const user = await requireUser();
     const material = await getMaterial(id);
     if (!material) throw new HttpError(404, "not_found", "找不到这个故事");
     oldImagePath = material.imagePath;
@@ -32,11 +33,15 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
     const force = req.nextUrl.searchParams.get("force") === "1" || body?.force === true;
     const style = typeof body?.style === "string" ? body.style : "watercolor";
 
+    // task-62：把当前用户的虚拟形象（角色卡 + 风格）作为参考传给 voice
+    const avatar = await getAvatar(user.id);
     const result = await callIllustrate({
       story_text: material.text,
       title_en: material.title,
       style,
       force,
+      character_desc: avatar.character_desc,
+      character_style: avatar.style,
     });
 
     const bytes = base64ToBytes(result.image_b64 ?? "");
@@ -50,7 +55,12 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
     // 只有写成功之后才更新 image_path；「换一张」= 替换旧文件地址（旧图是同名文件，已覆盖）
     await getDb()
       .update(readingMaterials)
-      .set({ imagePath: written.relativePath, updatedAt: new Date().toISOString() })
+      .set({
+        imagePath: written.relativePath,
+        imagePrompt: typeof result.prompt_used === "string" ? result.prompt_used.slice(0, 2000) : null,
+        imageCharacterUsed: (result as { character_used?: unknown }).character_used ? 1 : 0,
+        updatedAt: new Date().toISOString(),
+      })
       .where(eq(readingMaterials.id, material.id));
 
     return NextResponse.json({
@@ -58,12 +68,16 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
       image_url: `/api/materials/${material.id}/image`,
       image_path: written.relativePath,
       mime: written.mime,
-      prompt_used: result.prompt_used ?? null,
       provider: result.provider ?? null,
       model: result.model ?? null,
       size: result.size ?? null,
       elapsed_ms: result.elapsed_ms ?? null,
       warnings: result.warnings ?? [],
+      // task-62：提示词可见 + 是否用了虚拟形象
+      prompt_used: typeof result.prompt_used === "string" ? result.prompt_used : null,
+      character_used: Boolean((result as { character_used?: unknown }).character_used),
+      character_desc_used: avatar.character_desc,
+      character_style_used: avatar.style,
       force,
     });
   } catch (err) {

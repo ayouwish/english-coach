@@ -16,6 +16,7 @@ from __future__ import annotations
 import base64
 import hashlib
 import io
+import json
 import logging
 import re
 import time
@@ -25,7 +26,7 @@ import httpx
 
 from .config import Settings, get_settings
 from .errors import BadRequest, ContentUnsafe, ProviderError, ProviderUnavailable
-from .llm import LLMClient
+from .llm import LLMClient, _loads_json
 from .story import COMMON_WORDS  # 复用常用词做"是否为普通英文词"判断
 
 logger = logging.getLogger("voice.image")
@@ -34,6 +35,33 @@ PROVIDER_ZHIPU = "zhipu"
 PROVIDER_MOCK = "mock"
 PROVIDER_NONE = "none"
 SUPPORTED_PROVIDERS = (PROVIDER_ZHIPU, PROVIDER_MOCK, PROVIDER_NONE)
+
+# 风格枚举（task-61）：五种儿童友好风格，每种有独立的 style tokens（头像/插画共用同一套词）
+STYLE_PRESETS: dict[str, str] = {
+    "watercolor": "soft watercolor",
+    "cartoon": "friendly flat cartoon style",
+    "pixel": "cute pixel art style, chunky pixels",
+    "papercut": "layered paper-cut collage style, soft shadows",
+    "clay": "soft 3D clay / plasticine style, rounded shapes, matte finish",
+}
+ALLOWED_STYLES: tuple[str, ...] = tuple(STYLE_PRESETS)
+DEFAULT_STYLE = "watercolor"
+AVATAR_SAFETY = "no text in image, safe for young children"
+AVATAR_SCENE = "friendly expression, upper body, plain soft background"
+AVATAR_TEMPLATE = (
+    "children's picture book character portrait, {style}, {character}, "
+    "{scene}, {safety}"
+)
+MAX_CHARACTER_DESC = 300
+# prompt 注入词（不区分大小写）：命中直接拒绝
+_INJECTION_MARKERS: tuple[str, ...] = (
+    "ignore previous instructions", "ignore all previous", "ignore the previous",
+    "disregard previous", "disregard all previous", "forget your instructions",
+    "system prompt", "you are now", "new instructions", "reveal your",
+    "api key", "password", "jailbreak", "developer mode", "act as",
+    "<script", "```", "http://", "https://",
+)
+_CONTROL_CHARS_RE = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")
 
 SAFETY_TEMPLATE = (
     "children's picture book illustration, soft {style}, warm colors, {scene}; "
@@ -49,6 +77,71 @@ MAX_RETRIES = 3
 MAX_STORY_CHARS = 2000
 
 DEFAULT_SCENE = "a child and a friend playing together happily in a warm, cheerful place"
+
+
+# --------------------------------------------------------------------------------------
+# 风格 / 角色卡（task-61）
+# --------------------------------------------------------------------------------------
+def validate_style(style: str | None) -> str:
+    """头像/角色卡用：必须是五种预设之一，否则 400。"""
+    value = (style or DEFAULT_STYLE).strip().lower()
+    if value not in STYLE_PRESETS:
+        raise BadRequest(f"style must be one of {list(ALLOWED_STYLES)}, got {style!r}")
+    return value
+
+
+def style_phrase(style: str | None) -> str:
+    """风格词：预设直接映射；插画接口的历史自由文本保持 "soft {style}" 的行为。"""
+    value = (style or DEFAULT_STYLE).strip().lower()
+    if value in STYLE_PRESETS:
+        return STYLE_PRESETS[value]
+    sanitized = re.sub(r"[^a-zA-Z -]", "", style or DEFAULT_STYLE).strip() or DEFAULT_STYLE
+    return f"soft {sanitized}"
+
+
+def clean_character_desc(text: str | None, *, source: str = "character_desc") -> str:
+    """清洗角色卡：去换行/控制字符、压缩空白、拒绝 prompt 注入词、截断 300 字符。
+
+    - 调用方传入的 character_desc 命中注入词 → 400（不允许把指令塞进提示词）
+    - 空输入 → 空字符串（illustrate 会当作"没有角色卡"，向后兼容）
+    """
+    if text is None:
+        return ""
+    cleaned = _CONTROL_CHARS_RE.sub(" ", str(text))
+    cleaned = " ".join(cleaned.replace("\n", " ").replace("\r", " ").replace("\t", " ").split())
+    if not cleaned:
+        return ""
+    lowered = cleaned.lower()
+    for marker in _INJECTION_MARKERS:
+        if marker in lowered:
+            raise BadRequest(f"{source} 包含不允许的指令词（疑似 prompt 注入）：{marker!r}")
+    if len(cleaned) > MAX_CHARACTER_DESC:
+        cleaned = cleaned[:MAX_CHARACTER_DESC].rstrip(" ,;")
+    return cleaned
+
+
+def compose_illustration_prompt(
+    scene: str, style: str | None = DEFAULT_STYLE, character_desc: str = ""
+) -> tuple[str, dict]:
+    """拼最终提示词 + 四段 prompt_parts（style/character/scene/safety）。
+
+    角色段固定在 style 之后、scene 之前（"插入固定位置"）；没有角色卡时与历史提示词**逐字节一致**。
+    """
+    phrase = style_phrase(style)
+    character = f"featuring {character_desc}, " if character_desc else ""
+    safety = "cute cartoon characters, no realistic human faces, no text in image, safe for young children"
+    prompt = f"children's picture book illustration, {phrase}, warm colors, {character}{scene}; {safety}"
+    if len(prompt) > MAX_PROMPT_CHARS:
+        prompt = prompt[:MAX_PROMPT_CHARS].rstrip(" ,;")
+    return prompt, {"style": phrase, "character": character_desc, "scene": scene, "safety": safety}
+
+
+def compose_avatar_prompt(character_desc: str, style: str | None = DEFAULT_STYLE) -> tuple[str, dict]:
+    phrase = style_phrase(style)
+    prompt = AVATAR_TEMPLATE.format(style=phrase, character=character_desc, scene=AVATAR_SCENE, safety=AVATAR_SAFETY)
+    if len(prompt) > MAX_PROMPT_CHARS:
+        prompt = prompt[:MAX_PROMPT_CHARS].rstrip(" ,;")
+    return prompt, {"style": phrase, "character": character_desc, "scene": AVATAR_SCENE, "safety": AVATAR_SAFETY}
 
 _CJK_RE = re.compile(r"[\u4e00-\u9fff]+")
 _CAPITAL_WORD_RE = re.compile(r"\b[A-Z][A-Za-z]{1,30}\b")
@@ -75,6 +168,16 @@ def active_provider(settings: Settings | None = None) -> str | None:
 
 def image_available(settings: Settings | None = None) -> bool:
     return active_provider(settings) is not None
+
+
+def avatar_available(settings: Settings | None = None) -> bool:
+    """虚拟形象需要文生图 + 视觉 LLM 都可用。"""
+    if not image_available(settings):
+        return False
+    try:
+        return LLMClient(settings or get_settings()).vision_available
+    except Exception:
+        return False
 
 
 def parse_size(size: str | None) -> tuple[int, int]:
@@ -151,18 +254,19 @@ def _llm_scene_prompt(story_text: str, title_en: str | None, style: str) -> tupl
 def build_prompt(
     story_text: str,
     title_en: str | None = None,
-    style: str = "watercolor",
-) -> tuple[str, list[str]]:
-    """-> (最终提示词, warnings)。人名一律被替换；安全模板写死在服务端。"""
+    style: str = DEFAULT_STYLE,
+    character_desc: str = "",
+) -> tuple[str, list[str], dict]:
+    """-> (最终提示词, warnings, prompt_parts)。
+
+    角色卡（character_desc）由调用方先清洗；这里只负责放到固定位置（style 之后、scene 之前）。
+    """
     scene, warnings, _client = _llm_scene_prompt(story_text, title_en, style)
     if not scene:
         scene = DEFAULT_SCENE
     scene = sanitize_names(scene)[:400] or DEFAULT_SCENE
-    safe_style = re.sub(r"[^a-zA-Z -]", "", style or "watercolor").strip() or "watercolor"
-    prompt = SAFETY_TEMPLATE.format(style=safe_style, scene=scene)
-    if len(prompt) > MAX_PROMPT_CHARS:
-        prompt = prompt[:MAX_PROMPT_CHARS].rstrip(" ,;")
-    return prompt, warnings
+    prompt, parts = compose_illustration_prompt(scene, style, character_desc)
+    return prompt, warnings, parts
 
 
 # --------------------------------------------------------------------------------------
@@ -326,11 +430,303 @@ def _download_image(url: str, settings: Settings) -> bytes:
 # --------------------------------------------------------------------------------------
 # 入口
 # --------------------------------------------------------------------------------------
+# --------------------------------------------------------------------------------------
+# 虚拟形象（task-61）：照片 → 视觉 LLM 角色卡 → 文生图风格化头像
+# --------------------------------------------------------------------------------------
+MAX_AVATAR_PHOTO_SIDE = 1280
+
+_AVATAR_ANALYSIS_SYSTEM = (
+    "You analyze a photo ONLY to design a stylized picture-book character card. "
+    "Describe drawable visual traits in English: hair colour/length/style, face shape, glasses, "
+    "clothing colours and items, distinctive accessories. "
+    "STRICT child-safety rules: never guess or mention race, ethnicity, religion, nationality, "
+    "health, or any sensitive trait; do not estimate a precise age (say 'a child'); "
+    "never include any real name or location; do not describe other people; keep it wholesome "
+    "and simple (<= 60 words).\n"
+    'Output ONLY this flat JSON (character_desc MUST be ONE English sentence): '
+    '{"character_desc": "a child with ...", "safety_notes": []}'
+)
+_AVATAR_ANALYSIS_PROMPT = (
+    "Describe this child's appearance as a picture-book character card (drawable traits only). JSON only."
+)
+
+
+def _load_photo(data: bytes) -> tuple[object, int, int]:
+    """校验并预处理上传照片：EXIF 转正 → RGB → 长边 ≤1280；非法 → 400。"""
+    from PIL import Image, ImageOps
+
+    if not data:
+        raise BadRequest("empty photo")
+    try:
+        probe = Image.open(io.BytesIO(data))
+        if probe.width * probe.height > MAX_PIXELS:
+            raise BadRequest(f"photo too large: {probe.width}x{probe.height} > {MAX_PIXELS} pixels")
+        image = ImageOps.exif_transpose(probe).convert("RGB")
+    except BadRequest:
+        raise
+    except Exception as exc:
+        raise BadRequest(f"cannot decode photo: {type(exc).__name__}") from exc
+    width, height = image.size
+    if min(width, height) < 8:
+        raise BadRequest(f"photo too small: {width}x{height}")
+    longest = max(width, height)
+    if longest > MAX_AVATAR_PHOTO_SIDE:
+        scale = MAX_AVATAR_PHOTO_SIDE / float(longest)
+        image = image.resize((max(1, round(width * scale)), max(1, round(height * scale))), Image.LANCZOS)
+    return image, image.size[0], image.size[1]
+
+
+def _jpeg_data_url(image, quality: int = 85) -> str:
+    buffer = io.BytesIO()
+    image.save(buffer, format="JPEG", quality=quality, optimize=True)
+    return "data:image/jpeg;base64," + base64.b64encode(buffer.getvalue()).decode("ascii")
+
+
+_SENSITIVE_KEY_PARTS = (
+    "race", "ethnic", "relig", "nation", "age", "name", "location", "school",
+    "gender", "address", "health", "disab", "identity",
+)
+_VISUAL_KEY_HINTS = (
+    "desc", "hair", "eye", "face", "skin", "cloth", "wear", "glass", "freckle",
+    "accessor", "mouth", "shape", "color", "colour", "body", "head", "shoe", "hat",
+    "expression",
+)
+_COLOR_WORDS = {
+    "red", "orange", "yellow", "green", "blue", "purple", "pink", "brown", "black",
+    "white", "gray", "grey", "peach", "dark", "light", "blonde", "golden", "tan",
+}
+
+
+def _looks_like_color(text: str) -> bool:
+    words = {word.strip(".,").lower() for word in text.split()}
+    return bool(words & _COLOR_WORDS)
+
+
+_TRAIT_NOUNS = {
+    "head": "head shape", "face": "face shape", "hair": "hair", "eyes": "eyes", "eye": "eyes",
+    "mouth": "mouth", "skin": "skin", "clothing": "clothing", "cloth": "clothing",
+    "body": "body", "glasses": "glasses", "hat": "hat", "shoe": "shoes", "shoes": "shoes",
+    "expression": "expression", "shape": "face shape", "accessories": "accessories",
+}
+_TRAIT_ORDER = ("hair", "eyes", "skin", "face shape", "head shape", "glasses", "mouth",
+                "clothing", "body", "hat", "shoes", "accessories", "expression")
+
+
+def _trait_noun(key: str) -> str:
+    lowered = key.lower()
+    return _TRAIT_NOUNS.get(lowered, lowered if lowered in _TRAIT_NOUNS.values() else "")
+
+
+def _flatten_character_payload(payload) -> str:
+    """把视觉模型返回的嵌套 JSON（head/hair/eyes…）拍平成一句英文外观描述。
+
+    跳过敏感字段（race/ethnicity/religion/age/name/location…），只保留可画的外观特征；
+    同一性状（如 hair 的 style+color）合并成一个短语。
+    """
+    traits: dict[str, list[str]] = {}
+
+    def add(noun: str, value: str) -> None:
+        if not noun:
+            return
+        entry = traits.setdefault(noun, [])
+        if value.lower() not in {item.lower() for item in entry}:
+            entry.append(value)
+
+    def walk(node, path: list[str]) -> None:
+        if isinstance(node, dict):
+            for key, value in node.items():
+                lowered = str(key).lower()
+                if any(bad in lowered for bad in _SENSITIVE_KEY_PARTS):
+                    continue
+                walk(value, path + [str(key)])
+        elif isinstance(node, list):
+            for item in node:
+                walk(item, path)
+        elif isinstance(node, str):
+            text = node.strip().rstrip(".,;")
+            if not text or len(text) > 80:
+                return
+            leaf = path[-1].lower() if path else ""
+            parent = path[-2].lower() if len(path) > 1 else ""
+            if "skin" in leaf:
+                add("skin", text)
+            elif leaf in ("color", "colour", "style", "shape", "type", "item", "pattern"):
+                noun = _trait_noun(parent) or _trait_noun(leaf)
+                add(noun, text)
+            elif leaf in ("glasses", "hat", "shoes", "accessories", "expression"):
+                add(_trait_noun(leaf) or leaf, text)
+            elif leaf in _TRAIT_NOUNS:
+                add(_trait_noun(leaf), text)
+            elif _looks_like_color(text):
+                add(_trait_noun(parent) or "details", text)
+
+    walk(payload, [])
+    phrases = []
+    for noun in _TRAIT_ORDER:
+        values = traits.get(noun)
+        if values:
+            phrases.append(f"{' '.join(values)} {noun}")
+    for noun, values in traits.items():
+        if noun not in _TRAIT_ORDER:
+            phrases.append(f"{' '.join(values)} {noun}")
+    return ", ".join(phrases)
+
+
+def analyze_photo_character(photo: bytes, settings: Settings | None = None) -> str:
+    """视觉 LLM 分析照片 → 英文角色卡（儿童安全，已清洗）。失败 → 502/503。"""
+    settings = settings or get_settings()
+    client = LLMClient(settings)
+    if not client.vision_available:
+        raise ProviderUnavailable(
+            "虚拟形象需要视觉 LLM：请配置 .env 的 LLM_BASE_URL / LLM_API_KEY / LLM_MODEL（并重建镜像）",
+            provider="image",
+            code="provider_unavailable",
+        )
+    image, _width, _height = _load_photo(photo)
+    data_url = _jpeg_data_url(image)
+    last_error = ""
+    for attempt in range(2):
+        outcome = client.read_image(
+            data_url, _AVATAR_ANALYSIS_PROMPT, timeout_s=60.0, max_tokens=600, disable_thinking=True
+        )
+        if outcome.truncated:
+            outcome = client.read_image(
+                data_url, _AVATAR_ANALYSIS_PROMPT, timeout_s=60.0, max_tokens=1200, disable_thinking=True
+            )
+        if outcome.ok:
+            raw_text = (outcome.text or "").strip()
+            payload = _loads_json(raw_text)
+            description = ""
+            if isinstance(payload, dict):
+                top = payload.get("character_desc")
+                if isinstance(top, str) and top.strip():
+                    description = top.strip()
+                else:
+                    flattened = _flatten_character_payload(payload)
+                    if flattened:
+                        description = "a child with " + flattened
+            elif raw_text:
+                # 模型没给 JSON（直接写了一段英文描述）→ 把纯文本当角色卡
+                plain = re.sub(r"^```[a-zA-Z]*\s*|\s*```$", "", raw_text).strip()
+                if plain and len(plain.split()) <= 80:
+                    description = plain
+            if description:
+                try:
+                    cleaned = clean_character_desc(description, source="character_desc（由视觉模型生成）")
+                except BadRequest as exc:
+                    raise ProviderError(f"视觉模型返回的角色卡不合规：{exc.message}", provider="image") from exc
+                if cleaned:
+                    return cleaned
+        last_error = outcome.error or "invalid_character_card"
+        logger.warning("avatar character analysis failed (attempt %d): %s", attempt + 1, last_error)
+    raise ProviderError(f"视觉模型没能生成可用的角色卡（{last_error}），请重试", provider="image")
+
+
+def _write_cache(cache_path: Path, data: bytes, meta: dict | None = None) -> None:
+    try:
+        cache_path.parent.mkdir(parents=True, exist_ok=True)
+        temp_path = cache_path.with_name(cache_path.name + f".{time.time_ns()}.tmp")
+        temp_path.write_bytes(data)
+        temp_path.replace(cache_path)
+        if meta is not None:
+            meta_path = cache_path.with_suffix(".json")
+            temp_meta = meta_path.with_name(meta_path.name + f".{time.time_ns()}.tmp")
+            temp_meta.write_text(json.dumps(meta, ensure_ascii=False), encoding="utf-8")
+            temp_meta.replace(meta_path)
+    except Exception as exc:  # 缓存写失败不影响返回图片
+        logger.warning("image cache write failed: %s", exc)
+
+
+def generate_avatar(
+    photo: bytes,
+    *,
+    style: str = DEFAULT_STYLE,
+    force: bool = False,
+    settings: Settings | None = None,
+) -> dict:
+    """照片 → 风格化虚拟形象。返回契约 JSON（含 character_desc / prompt_used / prompt_parts）。"""
+    settings = settings or get_settings()
+    style = validate_style(style)
+    provider = active_provider(settings)
+    if provider is None:
+        raise ProviderUnavailable(
+            "文生图未启用：请在 .env 配置 IMAGE_PROVIDER=zhipu 且填写 IMAGE_API_KEY（并重建镜像）；"
+            "本地/测试可用 IMAGE_PROVIDER=mock",
+            provider="image",
+            code="provider_unavailable",
+        )
+    expected_size = parse_size(settings.image_size)
+    size = f"{expected_size[0]}x{expected_size[1]}"
+    _load_photo(photo)  # 先做格式/尺寸校验（非法 → 400）
+
+    photo_hash = hashlib.sha1(photo).hexdigest()
+    cache_key = hashlib.sha1(
+        f"avatar|{style}|{settings.image_model}|{size}|{int(bool(settings.image_watermark))}|{photo_hash}".encode()
+    ).hexdigest()
+    cache_dir = image_cache_dir(settings)
+    cache_path = cache_dir / f"avatar_{cache_key}.png"
+    started = time.perf_counter()
+
+    def _result(image_bytes: bytes, width: int, height: int, cached: bool, character: str, prompt: str, parts: dict) -> dict:
+        return {
+            "image_b64": base64.b64encode(image_bytes).decode("ascii"),
+            "mime": "image/png",
+            "character_desc": character,
+            "style": style,
+            "provider": provider,
+            "model": settings.image_model,
+            "size": size,
+            "width": width,
+            "height": height,
+            "prompt_used": prompt,
+            "prompt_parts": parts,
+            "elapsed_ms": int(round((time.perf_counter() - started) * 1000)),
+            "cached": cached,
+            "warnings": [],
+        }
+
+    meta_path = cache_path.with_suffix(".json")
+    if not force and cache_path.is_file() and meta_path.is_file():
+        try:
+            meta = json.loads(meta_path.read_text(encoding="utf-8"))
+            normalized, width, height = validate_and_normalize_image(cache_path.read_bytes(), expected_size)
+            return _result(
+                normalized, width, height, True,
+                meta.get("character_desc") or "", meta.get("prompt_used") or "",
+                meta.get("prompt_parts") or {},
+            )
+        except Exception as exc:
+            logger.warning("avatar cache unreadable, regenerating: %s", exc)
+
+    character_desc = analyze_photo_character(photo, settings)  # 视觉 LLM（缓存未命中才调用）
+    prompt, parts = compose_avatar_prompt(character_desc, style)
+    if provider == PROVIDER_MOCK:
+        raw = _mock_image_bytes(expected_size)
+    else:
+        url, _extra = _zhipu_generate(prompt, size, settings)
+        raw = _download_image(url, settings)
+    normalized, width, height = validate_and_normalize_image(raw, expected_size)
+    _write_cache(
+        cache_path, normalized,
+        {
+            "character_desc": character_desc,
+            "prompt_used": prompt,
+            "prompt_parts": parts,
+            "style": style,
+            "model": settings.image_model,
+            "size": size,
+        },
+    )
+    return _result(normalized, width, height, False, character_desc, prompt, parts)
+
+
 def generate_illustration(
     story_text: str,
     *,
     title_en: str | None = None,
-    style: str = "watercolor",
+    style: str = DEFAULT_STYLE,
+    character_desc: str | None = None,
+    character_style: str | None = None,
     force: bool = False,
     settings: Settings | None = None,
 ) -> dict:
@@ -352,7 +748,16 @@ def generate_illustration(
         )
     expected_size = parse_size(settings.image_size)
     size = f"{expected_size[0]}x{expected_size[1]}"
-    prompt, warnings = build_prompt(story_text, title_en=title_en, style=style)
+    # task-61：可选角色卡（清洗；注入词 → 400）。角色风格保持与头像同一套 style tokens。
+    clean_desc = clean_character_desc(character_desc, source="character_desc")
+    render_style = style
+    if character_desc is not None and str(character_desc).strip() == "":
+        clean_desc = ""
+    if character_style:
+        render_style = validate_style(character_style)
+    prompt, warnings, prompt_parts = build_prompt(
+        story_text, title_en=title_en, style=render_style, character_desc=clean_desc
+    )
     cache_key = image_cache_key(settings.image_model, size, prompt, settings.image_watermark)
     cache_dir = image_cache_dir(settings)
     cache_path = cache_dir / f"{cache_key}.png"
@@ -368,6 +773,8 @@ def generate_illustration(
             "size": size,
             "width": width,
             "height": height,
+            "prompt_parts": prompt_parts,
+            "character_used": bool(clean_desc),
             "elapsed_ms": int(round((time.perf_counter() - started) * 1000)),
             "cached": cached,
             "warnings": warnings,

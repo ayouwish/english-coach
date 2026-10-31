@@ -15,6 +15,12 @@ export const users = sqliteTable("users", {
   cefrLevel: text("cefr_level").notNull().default("A1"),
   nativeLanguage: text("native_language").notNull().default("zh"),
   avatar: text("avatar"),
+  /** 虚拟形象（task-62）：图片相对路径 / 风格 / 角色卡 / 生成提示词 / 更新时间 */
+  avatarImagePath: text("avatar_image_path"),
+  avatarStyle: text("avatar_style"),
+  avatarDesc: text("avatar_desc"),
+  avatarPrompt: text("avatar_prompt"),
+  avatarUpdatedAt: text("avatar_updated_at"),
   dailyLimitMinutes: integer("daily_limit_minutes").notNull().default(20),
   allowFreeChat: integer("allow_free_chat").notNull().default(1),
   createdAt: text("created_at").notNull(),
@@ -290,6 +296,10 @@ export const readingMaterials = sqliteTable(
     sourceZh: text("source_zh"),
     /** 难度 A1/A2/B1/B2（故事改写用） */
     level: text("level"),
+    /** 画插画用的提示词（task-62：前端可见、可反馈） */
+    imagePrompt: text("image_prompt"),
+    /** 插画是否参考了虚拟形象（1 = 用了） */
+    imageCharacterUsed: integer("image_character_used"),
     createdAt: text("created_at").notNull(),
     updatedAt: text("updated_at").notNull(),
   },

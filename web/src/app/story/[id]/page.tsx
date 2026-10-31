@@ -6,6 +6,7 @@ import { attempts, storyRetells } from "@/db/schema";
 import { getCurrentUser } from "@/lib/auth";
 import { getMaterial } from "@/lib/materials";
 import { IllustrateBox } from "@/components/IllustrateBox";
+import { SuggestButton } from "@/components/SuggestButton";
 import { RetellPanel } from "@/components/RetellPanel";
 import { splitSentences } from "@/lib/sentence-split";
 
@@ -106,7 +107,50 @@ export default async function StoryDetailPage({ params }: { params: Promise<{ id
         <p className="mt-1 text-xs text-[var(--ec-muted)]">
           每天给这个故事画一张画（水彩风格）。画的时候可以先去读，不影响练习。
         </p>
-        <IllustrateBox materialId={material.id} hasImage={Boolean(material.imagePath)} isChild={user.isChild} />
+        <IllustrateBox
+          materialId={material.id}
+          hasImage={Boolean(material.imagePath)}
+          isChild={user.isChild}
+          characterUsedInitial={material.imageCharacterUsed}
+        />
+        {material.imagePrompt ? (
+          <div className="mt-3" data-testid="image-prompt-block">
+            <details className="rounded-xl bg-[#f8f9ff] p-3 text-xs">
+              <summary className="cursor-pointer font-semibold">🖼️ 生成用的提示词（可复制）</summary>
+              <pre
+                className="mt-2 max-h-60 overflow-auto whitespace-pre-wrap break-words rounded-lg bg-white p-2"
+                data-testid="image-prompt-text"
+              >
+                {material.imagePrompt}
+              </pre>
+              <div className="mt-2 flex flex-wrap items-center gap-2">
+                <SuggestButton
+                  isChild={user.isChild}
+                  presetCategory="bug"
+                  presetContent={`提示词有问题：
+故事：${material.title}
+风格：${material.level ?? ""}
+提示词摘要：${material.imagePrompt.slice(0, 200)}`}
+                  triggerLabel="🧑‍🏫 这个提示词有点问题"
+                  triggerTestId="prompt-feedback"
+                  triggerClassName="ec-btn ec-btn-ghost !px-2 !py-0.5 text-xs"
+                  context={{
+                    kind: "illustration_prompt",
+                    story_id: material.id,
+                    story_title: material.title,
+                    style: material.imagePrompt.slice(0, 120),
+                    prompt: material.imagePrompt,
+                  }}
+                />
+                <span className="text-[var(--ec-muted)]">会带着这条提示词一起提交给家长看</span>
+              </div>
+            </details>
+          </div>
+        ) : (
+          <p className="mt-2 text-xs text-[var(--ec-muted)]" data-testid="image-prompt-empty">
+            还没有插画提示词（先点「生成插画」，生成后这里会显示这次用的提示词，方便你反馈问题）。
+          </p>
+        )}
       </section>
 
       <section className="ec-card" data-testid="detail-audio">
