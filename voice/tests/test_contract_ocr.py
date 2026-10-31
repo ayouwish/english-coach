@@ -28,6 +28,28 @@ REQUIRES_OCR = pytest.mark.skipif(
 )
 
 
+@pytest.fixture
+def fake_ocr_provider(monkeypatch):
+    """无 rapidocr 时注入假本地引擎，让路由级测试不依赖真实 OCR 依赖（CI 干净环境）。
+
+    背景：`.venv` 里残留 rapidocr 时这些用例能过，但 CI 只装 requirements（不含 rapidocr），
+    `ocr_chain()` 为空 → `/v1/ocr` 一律 503 → 测试必红。这里只替换 provider 选择与引擎调用，
+    保留 `preprocess_image` / `_recognize_with_local` 的真实逻辑（尺寸、编码、warning 等仍被覆盖）。
+    """
+    if ocr_module.engine_available():
+        yield
+        return
+
+    monkeypatch.setattr(ocr_module, "ocr_chain", lambda settings=None: [ocr_module.PROVIDER_LOCAL])
+
+    class _FakeEngine:
+        def __call__(self, array):
+            return ([[[[0, 0], [100, 0], [100, 20], [0, 20]], "Hello world", 0.99]], 0.01)
+
+    monkeypatch.setattr(ocr_module, "_get_engine", lambda: _FakeEngine())
+    yield
+
+
 def _post_image(client, payload: bytes, name: str = "page.jpg", content_type: str = "image/jpeg"):
     return client.post("/v1/ocr", files={"image": (name, payload, content_type)})
 
@@ -111,6 +133,7 @@ def test_ocr_does_not_write_anything_to_disk(client):
 # --------------------------------------------------------------------------------------
 # 错误语义
 # --------------------------------------------------------------------------------------
+@pytest.mark.usefixtures("fake_ocr_provider")
 def test_ocr_non_image_returns_400(client):
     response = _post_image(client, b"this is definitely not an image", name="notes.txt", content_type="text/plain")
     assert response.status_code == 400
@@ -132,6 +155,7 @@ def test_ocr_oversized_returns_413(client):
     assert response.json()["error"]["code"] == "payload_too_large"
 
 
+@pytest.mark.usefixtures("fake_ocr_provider")
 def test_ocr_accepts_at_limit_size(client, monkeypatch):
     """恰好 10MB 的上限不应被 413（大小判断是 > 而不是 >=），随后因不是图片而 400。"""
     payload = b"\xff\xd8\xff" + b"x" * (10 * 1024 * 1024 - 3)
@@ -265,6 +289,7 @@ def test_ocr_response_contract_types(client):
     json.dumps(body)  # 必须可 JSON 序列化
 
 
+@pytest.mark.usefixtures("fake_ocr_provider")
 def test_recognize_image_returns_no_text_warning_for_blank_page(monkeypatch):
     """空白页：不报错，text=""、lines=[]，warnings 里显式说明没找到文字。"""
     from PIL import Image
@@ -283,6 +308,7 @@ def test_recognize_image_returns_no_text_warning_for_blank_page(monkeypatch):
     assert "no_text_found" in result.warnings
 
 
+@pytest.mark.usefixtures("fake_ocr_provider")
 def test_engine_singleton_is_reused(monkeypatch, tmp_path):
     created = []
 
@@ -327,12 +353,14 @@ def _decode_jpeg(b64: str):
     return Image.open(io.BytesIO(raw))
 
 
+@pytest.mark.usefixtures("fake_ocr_provider")
 def test_return_image_absent_by_default(client):
     body = _post_fixture(client, {}).json()
     assert "image_jpeg_b64" not in body, "未请求时字段应缺失（不是 null）"
     assert set(body) == OCR_KEYS
 
 
+@pytest.mark.usefixtures("fake_ocr_provider")
 def test_return_image_local_path(client):
     """本地路径：返回实际识别用的预处理图（JPEG，尺寸与 width/height 一致）。"""
     body = _post_fixture(client, {"return_image": "1"}).json()
@@ -346,6 +374,7 @@ def test_return_image_local_path(client):
     assert body["text"].startswith("Hello")
 
 
+@pytest.mark.usefixtures("fake_ocr_provider")
 def test_return_image_true_string(client):
     body = _post_fixture(client, {"return_image": "true"}).json()
     assert "image_jpeg_b64" in body
@@ -357,6 +386,7 @@ def test_return_image_false_values_absent(client):
         assert "image_jpeg_b64" not in body, f"return_image={value!r} 不应返回图片"
 
 
+@pytest.mark.usefixtures("fake_ocr_provider")
 def test_return_image_downscales_3000x2000(client):
     """3000×2000 大图 → 返回的 JPEG 长边 ≤1280（web 存小图）。"""
     from PIL import Image
@@ -378,6 +408,7 @@ def test_return_image_downscales_3000x2000(client):
     assert "image_downscaled" in body["warnings"]
 
 
+@pytest.mark.usefixtures("fake_ocr_provider")
 def test_return_image_encode_failure_warning(client, monkeypatch):
     """编码失败：warnings 里明确说明，且不返回该字段（不是返回空串/null）。"""
     monkeypatch.setattr(ocr_module, "encode_jpeg_b64", lambda *a, **k: None)
