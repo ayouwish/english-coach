@@ -114,6 +114,17 @@ export default async function ChatPage() {
                 {m.role === "user" && ((m.pronJson ?? null) !== null || Boolean(m.audioPath)) ? (
                   <PronunciationNote pron={parsePron(m.pronJson ?? null)} isChild={user.isChild} testid="history-pron" />
                 ) : null}
+                {/* 用户自己的录音回放（task-70）：有录音才渲染，旧消息没录音不显示坏播放器 */}
+                {m.role === "user" && m.audioPath ? (
+                  <audio
+                    controls
+                    preload="metadata"
+                    src={`/api/audio/${m.id}`}
+                    data-testid="user-audio"
+                    aria-label={`播放我说的这句话：${m.text}`}
+                    className="mt-2 h-9 w-full max-w-[280px]"
+                  />
+                ) : null}
                 {m.role === "assistant" ? (
                   <audio
                     controls

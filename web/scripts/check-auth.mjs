@@ -21,6 +21,18 @@ import { fileURLToPath } from "node:url";
 import { spawn } from "node:child_process";
 import Database from "better-sqlite3";
 
+/** 杀掉整条进程组：`next start` 是 pnpm 的子进程，只 kill pnpm 会留下孤儿占着端口，
+ *  导致后续守卫静默跑到旧实例上（"假失败"）。因此 spawn 时 detached:true，这里杀进程组。 */
+function killTree(child) {
+  if (!child || child.killed) return;
+  try {
+    process.kill(-child.pid, "SIGTERM");
+  } catch {
+    try { child.kill("SIGTERM"); } catch { /* ignore */ }
+  }
+}
+
+
 const WEB_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const PORT = Number(process.env.AUTH_PORT ?? 3030);
 const BASE = (process.env.BASE_URL ?? `http://127.0.0.1:${PORT}`).replace(/\/$/, "");
@@ -141,6 +153,7 @@ async function main() {
   {
     const port2 = PORT + 11;
     const child = spawn("pnpm", ["exec", "next", "start", "-p", String(port2)], {
+      detached: true,
       cwd: WEB_ROOT,
       env: {
         ...process.env,
@@ -179,7 +192,7 @@ async function main() {
         check("★ 过期 access → 受保护接口 401", after.status === 401, `status=${after.status}`);
       }
     } finally {
-      child.kill("SIGTERM");
+      killTree(child);
     }
   }
 

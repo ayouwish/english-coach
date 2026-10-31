@@ -80,10 +80,24 @@ def test_dialogue_grammar_correction(client):
     assert body["correction"]["type"] == "grammar"
 
 
-def test_dialogue_done_after_turn_six(client):
-    assert client.post("/v1/dialogue", json=_payload(turn_index=5)).json()["done"] is False
-    assert client.post("/v1/dialogue", json=_payload(turn_index=6)).json()["done"] is True
-    assert client.post("/v1/dialogue", json=_payload(turn_index=9)).json()["done"] is True
+def test_dialogue_done_not_forced_by_turn_default(client):
+    """task-69：默认 CHAT_DONE_TURN_INDEX=0 → 不再因轮数结束（只由模型语义/web 安全阀决定）。"""
+    for turn in (5, 6, 9, 20):
+        assert client.post("/v1/dialogue", json=_payload(turn_index=turn)).json()["done"] is False
+
+
+def test_dialogue_done_after_turn_six_when_configured(client, monkeypatch):
+    """CHAT_DONE_TURN_INDEX=6 时保留旧能力（测试/演示用）。"""
+    from app.config import reset_settings_cache
+
+    monkeypatch.setenv("CHAT_DONE_TURN_INDEX", "6")
+    reset_settings_cache()
+    try:
+        assert client.post("/v1/dialogue", json=_payload(turn_index=5)).json()["done"] is False
+        assert client.post("/v1/dialogue", json=_payload(turn_index=6)).json()["done"] is True
+        assert client.post("/v1/dialogue", json=_payload(turn_index=9)).json()["done"] is True
+    finally:
+        reset_settings_cache()
 
 
 def test_dialogue_unsafe_input_is_filtered(client):

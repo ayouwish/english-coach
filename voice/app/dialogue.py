@@ -22,7 +22,35 @@ logger = logging.getLogger("voice.dialogue")
 CORRECTION_TYPES = ("grammar", "vocabulary", "politeness", "pronunciation", "none")
 CORRECTION_LEVELS = ("gentle", "standard", "none")
 FLAGS = ("ok", "unsafe_filtered", "off_topic")
-DONE_TURN_INDEX = 6  # 契约 §6：turn_index >= 6 时 done=true（prompt 里让模型从 5 开始自然收尾）
+# 已废弃（保留名字兼容，默认 0）：不再按轮数硬性结束。实际阈值来自 CHAT_DONE_TURN_INDEX。
+DONE_TURN_INDEX = 0
+MAX_DONE_TURN_INDEX = 200
+
+
+def done_turn_index(settings=None) -> int:
+    """CHAT_DONE_TURN_INDEX：>0 时到该轮次强制收尾；0（默认）= 永远不因轮数结束。"""
+    if settings is None:
+        from .config import get_settings
+
+        settings = get_settings()
+    try:
+        value = int(getattr(settings, "chat_done_turn_index", 0) or 0)
+    except (TypeError, ValueError):
+        value = 0
+    return max(0, min(MAX_DONE_TURN_INDEX, value))
+
+
+def is_done(turn_index, model_done: bool = False, settings=None) -> bool:
+    """done 语义：模型判断"语义收尾"优先；只有配置了 >0 的阈值才允许按轮数结束。"""
+    if model_done:
+        return True
+    threshold = done_turn_index(settings)
+    if threshold <= 0:
+        return False
+    try:
+        return int(turn_index or 0) >= threshold
+    except (TypeError, ValueError):
+        return False
 MAX_HISTORY = 8
 MAX_REPLY_CHARS = 300
 MAX_SUGGESTION_WORDS = 6
@@ -144,7 +172,10 @@ Rules for the fields:
   say immediately (not a repetition of your reply, not a translation exercise).
 - target_words: 1-3 words taken from your reply.
 - flag: "ok" | "unsafe_filtered" | "off_topic".
-- done: true when the scenario should wrap up (from turn_index >= 5, wrap up naturally).
+- done: true ONLY when the conversation has naturally reached its end (the learner says goodbye,
+  the task/scenario is completed, or the role-play goal is achieved). Otherwise always false.
+- NEVER set done=true just because there have been many turns: keep the conversation going as long
+  as the learner wants to practise, and keep each reply short with one question.
 
 EXAMPLE A (turn 2, child, gentle; learner said "I like the red one"):
 {"reply": "The red one is nice! Do you want it hot or cold?",
@@ -268,7 +299,7 @@ def template_dialogue(payload: dict) -> dict:
         "suggested_replies": _normalize_suggestions(suggested),
         "target_words": target_words[:3],
         "flag": flag,
-        "done": turn_index >= DONE_TURN_INDEX,
+        "done": is_done(turn_index, False),
     }
 
 
@@ -372,7 +403,7 @@ def sanitize_dialogue(data: dict, payload: dict) -> dict:
         "suggested_replies": _normalize_suggestions(data.get("suggested_replies")),
         "target_words": targets,
         "flag": flag,
-        "done": bool(data.get("done")) or turn_index >= DONE_TURN_INDEX,
+        "done": is_done(turn_index, bool(data.get("done"))),
     }
 
 
@@ -460,5 +491,8 @@ __all__ = [
     "FLAGS",
     "MAX_HISTORY",
     "DONE_TURN_INDEX",
+    "MAX_DONE_TURN_INDEX",
+    "done_turn_index",
+    "is_done",
     "json",
 ]

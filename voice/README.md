@@ -124,6 +124,7 @@ routes(/v1/*) ──> ProviderSet{ asr, pa, tts } ──> 调用链: 主 provide
 | `MAX_UPLOAD_BYTES` | `26214400` | 上传体积上限 → `413` |
 | `VOICE_MAX_AUDIO_SECONDS` | `120` | 超长音频 → `413 audio_too_long` |
 | `VOICE_GPU` | `false` | 上报到 `capabilities.gpu` |
+| `CHAT_DONE_TURN_INDEX` | `0` | 对话"按轮数强制收尾"阈值；**0 = 不限**（默认），>0 保留轮数收尾能力 |
 | `CACHE_ENABLED` | `true` | 关掉后 `provider_meta.cache` 全为 `disabled`，不写缓存（v1.0 行为）|
 | `CACHE_MAX_BYTES` | `524288000`（500MB）| 缓存字节上限，超出按 LRU 淘汰 |
 | `CACHE_MAX_ENTRIES` | `2000` | 缓存文件条数上限（audio + f0 合计）|
@@ -261,7 +262,10 @@ F0 用 praat 自相关法，搜索区间 **60–500 Hz**，输出网格 20ms（�
   standard 有错纠 1 处 / none 恒不纠；纠正必须真的改变内容，否则视为无错）、**儿童安全**与
   两段 few-shot JSON 示例。history 只带最近 8 条；JSON 非法或缺 `reply` 时**严格重试一次**再降级。
   降级用内置场景话术 + 规则纠错（`I want` → 礼貌、`I is` → be 动词、三单 -s …），
-  `suggested_replies` 保证 2–3 条且每条 ≤6 词、互不相同；`turn_index>=6` 时 `done=true`；
+  `suggested_replies` 保证 2–3 条且每条 ≤6 词、互不相同；
+  **`done` 只在对话自然到达终点时由模型返回 true**（说 goodbye / 任务完成 / 目标达成）；
+  **默认不因轮数结束**（`CHAT_DONE_TURN_INDEX=0`）；只有显式设为 >0 时才在到达该轮次强制 `done=true`
+  （测试/演示用）。会话上限由 web 的 `CHAT_MAX_TURNS` 安全阀兜底。
   不安全内容 → `flag="unsafe_filtered"` 且 `reply`/建议被替换。
 - **`degraded_llm`（契约 v1.4 新增，可选字段）**：`/v1/dialogue` 响应里的布尔值，
   `true` = 本条不是大模型生成的（模板降级）。前端据此提示"当前为离线对话"，

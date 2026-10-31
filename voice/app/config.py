@@ -233,6 +233,8 @@ class Settings:
     llm_model: str = "deepseek-chat"
     llm_timeout_s: float = 30.0
     llm_enabled: bool = False
+    # task-69：对话"按轮数强制收尾"的阈值；0（默认）= 不因轮数结束（只由模型语义/web 安全阀决定）
+    chat_done_turn_index: int = 0
 
     # 本地模型（ModelScope 镜像下载，绝不访问 HuggingFace）
     whisper_model: str = "small.en"
@@ -364,6 +366,7 @@ def get_settings() -> Settings:
         llm_model=model,
         llm_timeout_s=_env_float("LLM_TIMEOUT_S", 30.0),
         llm_enabled=llm_enabled,
+        chat_done_turn_index=_env_int("CHAT_DONE_TURN_INDEX", 0),
         whisper_model=_env("WHISPER_MODEL", "small.en") or "small.en",
         whisper_model_path=_env("WHISPER_MODEL_PATH"),
         whisper_device=_env("WHISPER_DEVICE", "cpu") or "cpu",

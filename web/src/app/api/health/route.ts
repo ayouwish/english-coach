@@ -7,6 +7,20 @@ export const dynamic = "force-dynamic";
 const WEB_VERSION = "0.1.0";
 
 /**
+ * 本构建包含的能力（静态标记，route 存在即 true）——task-70：
+ * 用户/运维一条 `curl /api/health | grep features` 就能确认 NAS 上跑的是不是新构建，
+ * 避免"我更新了但没生效"的扯皮。**不读运行时配置**。
+ */
+const FEATURES = {
+  chat_unlimited_turns: true,
+  chat_audio_replay: true,
+  chat_scenarios_audience: true,
+  avatar_presets: true,
+  story_mode: true,
+  async_scoring: true,
+} as const;
+
+/**
  * web 探活（容器 healthcheck 用）。
  * 即使 voice 不可达也返回 200 —— web 自身健康，voice 状态在 body 里显式标出。
  */
@@ -31,6 +45,7 @@ export async function GET(req: NextRequest) {
       version: WEB_VERSION,
       time: new Date().toISOString(),
       db: { ok: dbOk, error: dbError },
+      features: FEATURES,
       voice: {
         reachable,
         mode,

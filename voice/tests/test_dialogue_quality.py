@@ -12,7 +12,8 @@ import pytest
 from app import dialogue as dlg
 from app.dialogue import (
     DIALOGUE_SYSTEM_PROMPT,
-    DONE_TURN_INDEX,
+    done_turn_index,
+    is_done,
     MAX_HISTORY,
     STRICT_JSON_REMINDER,
     build_dialogue_user_prompt,
@@ -338,11 +339,58 @@ def test_target_words_capped_to_three():
 # --------------------------------------------------------------------------------------
 # 4) done / 儿童安全
 # --------------------------------------------------------------------------------------
-def test_done_boundary_matches_contract(client):
-    """契约 §6 写的是 turn_index >= 6；prompt 让模型从 5 开始自然收尾。"""
-    assert _run(client, _payload(turn_index=5))["done"] is False
-    assert _run(client, _payload(turn_index=DONE_TURN_INDEX))["done"] is True
-    assert _run(client, _payload(turn_index=9))["done"] is True
+def test_done_boundary_default_is_unlimited(client):
+    """task-69：默认不因轮数结束；只有显式 CHAT_DONE_TURN_INDEX>0 才保留轮数收尾。"""
+    for turn in (5, 6, 9):
+        assert _run(client, _payload(turn_index=turn))["done"] is False
+
+
+def test_done_boundary_when_configured(client, monkeypatch):
+    from app.config import reset_settings_cache
+
+    monkeypatch.setenv("CHAT_DONE_TURN_INDEX", "6")
+    reset_settings_cache()
+    try:
+        assert _run(client, _payload(turn_index=5))["done"] is False
+        assert _run(client, _payload(turn_index=6))["done"] is True
+        assert _run(client, _payload(turn_index=9))["done"] is True
+    finally:
+        reset_settings_cache()
+
+
+def test_default_config_ten_turns_never_done(client, fake_llm, llm_configured):
+    """默认配置连续 10 轮（fake LLM 每次 done=false）→ 全部 done=false。"""
+    _calls, queue = fake_llm
+    for turn in range(10):
+        queue.append(_fake_response(_good_llm_json(done=False)))
+        assert _run(client, _payload(turn_index=turn))["done"] is False, turn
+
+
+def test_prompt_no_turn_based_ending():
+    prompt = DIALOGUE_SYSTEM_PROMPT
+    assert "from turn_index >= 5" not in prompt
+    assert "wrap up naturally" not in prompt.lower()
+    assert "naturally reached its end" in prompt
+    assert "NEVER set done=true just because there have been many turns" in prompt
+
+
+def test_config_default_and_override(monkeypatch):
+    from app.config import get_settings, reset_settings_cache
+
+    reset_settings_cache()
+    assert get_settings().chat_done_turn_index == 0
+    assert done_turn_index() == 0
+    assert is_done(50, False) is False
+    monkeypatch.setenv("CHAT_DONE_TURN_INDEX", "6")
+    reset_settings_cache()
+    try:
+        assert get_settings().chat_done_turn_index == 6
+        assert done_turn_index() == 6
+        assert is_done(5, False) is False
+        assert is_done(6, False) is True
+        assert is_done(1, True) is True, "模型语义 done 始终透传"
+    finally:
+        reset_settings_cache()
 
 
 def test_llm_done_flag_is_respected(client, fake_llm, llm_configured):

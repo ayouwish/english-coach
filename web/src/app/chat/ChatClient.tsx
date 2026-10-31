@@ -612,7 +612,7 @@ export function ChatClient({
               {active.title} <span className="text-sm text-[var(--ec-muted)]">{active.title_zh}</span>
             </h2>
             <span className="text-xs text-[var(--ec-muted)]">
-              第 {messages.filter((m) => m.role === "user").length} 轮 / 最多 6 轮
+              第 {messages.filter((m) => m.role === "user").length} 轮 · 不限轮数
             </span>
           </div>
 

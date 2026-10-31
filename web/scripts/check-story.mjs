@@ -21,6 +21,18 @@ import { spawn } from "node:child_process";
 import module from "node:module";
 import Database from "better-sqlite3";
 
+/** 杀掉整条进程组：`next start` 是 pnpm 的子进程，只 kill pnpm 会留下孤儿占着端口，
+ *  导致后续守卫静默跑到旧实例上（"假失败"）。因此 spawn 时 detached:true，这里杀进程组。 */
+function killTree(child) {
+  if (!child || child.killed) return;
+  try {
+    process.kill(-child.pid, "SIGTERM");
+  } catch {
+    try { child.kill("SIGTERM"); } catch { /* ignore */ }
+  }
+}
+
+
 // Node 直接 import TS 时需要补 .ts 后缀钩子（与 check-encouragement 相同做法）
 if (typeof module.registerHooks === "function") {
   module.registerHooks({
@@ -276,6 +288,7 @@ try {
     await new Promise((r) => stub.listen(8126, "127.0.0.1", r));
     const port = 3050;
     const child = spawn("pnpm", ["exec", "next", "start", "-p", String(port)], {
+      detached: true,
       cwd: WEB_ROOT,
       env: { ...process.env, VOICE_SERVICE_URL: "http://127.0.0.1:8126" },
       stdio: "ignore",
@@ -466,7 +479,7 @@ try {
       }
 
     } finally {
-      child.kill("SIGTERM");
+      killTree(child);
       stub.close();
     }
   }

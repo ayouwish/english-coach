@@ -16,6 +16,18 @@ import path from "node:path";
 import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 
+/** 杀掉整条进程组：`next start` 是 pnpm 的子进程，只 kill pnpm 会留下孤儿占着端口，
+ *  导致后续守卫静默跑到旧实例上（"假失败"）。因此 spawn 时 detached:true，这里杀进程组。 */
+function killTree(child) {
+  if (!child || child.killed) return;
+  try {
+    process.kill(-child.pid, "SIGTERM");
+  } catch {
+    try { child.kill("SIGTERM"); } catch { /* ignore */ }
+  }
+}
+
+
 const WEB_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
 // 守卫会连续发很多轮对话；当天免费额度常被别的自测耗尽 → 临时把这两个测试账号额度调大，进程退出恢复。
@@ -426,6 +438,7 @@ check("不再写死过时秒数（1–11s）", !girlChatHtml.includes("1–11s")
 
   const PORT = 3027;
   const child = spawn("pnpm", ["exec", "next", "start", "-p", String(PORT)], {
+      detached: true,
     cwd: WEB_ROOT,
     env: { ...process.env, VOICE_SERVICE_URL: "http://127.0.0.1:8137" },
     stdio: "ignore",
@@ -630,11 +643,60 @@ check("不再写死过时秒数（1–11s）", !girlChatHtml.includes("1–11s")
       check("★ 儿童页面没有该开关", !girlChatHtml2.includes('data-testid="chat-include-child"'));
     }
 
+    // ⑪ task-70：文案不再写「最多 6 轮」+ 历史对话用户录音可回放 + health features
+    {
+      const chatSrc = fs.readFileSync(path.join(WEB_ROOT, "src/app/chat/ChatClient.tsx"), "utf8");
+      check("★ 源码不含「最多 6 轮」误导文案", !/最多\s*6\s*轮/.test(chatSrc));
+      check("★ 源码含轮次展示「第 N 轮」", /第 \{messages\.filter\(\(m\) => m\.role === "user"\)\.length\} 轮/.test(chatSrc) || chatSrc.includes("第 {messages.filter((m) => m.role === \"user\").length} 轮"));
+      const health = await (await fetch(`http://127.0.0.1:${PORT}/api/health`)).json();
+      check(
+        "★ /api/health 暴露 features.chat_audio_replay=true",
+        health?.features?.chat_audio_replay === true &&
+          health?.features?.chat_unlimited_turns === true &&
+          health?.features?.chat_scenarios_audience === true &&
+          health?.features?.avatar_presets === true &&
+          health?.features?.story_mode === true &&
+          health?.features?.async_scoring === true,
+        JSON.stringify(health?.features ?? {}),
+      );
+
+      // 新会话：一轮带录音 + 一轮纯文本 → 历史页只给带录音的用户消息渲染播放器
+      const audioSession = await startSession(childCookie);
+      const withAudio = await voiceTurn(childCookie, audioSession, "I have a recording.");
+      const audioMsgId = withAudio?.body?.user_message_id ?? null;
+      const textOnly = await fetch(`http://127.0.0.1:${PORT}/api/chat/sessions/${audioSession}/turn`, {
+        method: "POST",
+        headers: { "content-type": "application/json", cookie: childCookie },
+        body: JSON.stringify({ text: "This turn has no recording." }),
+      }).then((r) => r.json());
+      const textMsgId = textOnly?.user_message_id ?? null;
+      const historyHtml = await (await fetch(`http://127.0.0.1:${PORT}/chat`, { headers: { cookie: childCookie } })).text();
+      check("★ 历史对话含用户录音播放器（user-audio）", historyHtml.includes('data-testid="user-audio"'));
+      check(
+        "★ 录音播放器 src 指向 /api/audio/<消息 id>",
+        Boolean(audioMsgId) && historyHtml.includes(`src="/api/audio/${audioMsgId}"`),
+        `msg=${audioMsgId}`,
+      );
+      check(
+        "★ 无录音的用户消息不渲染播放器",
+        Boolean(textMsgId) && textMsgId !== audioMsgId && !historyHtml.includes(`/api/audio/${textMsgId}`),
+        `textMsg=${textMsgId}`,
+      );
+      if (audioMsgId) {
+        const audioRes = await fetch(`http://127.0.0.1:${PORT}/api/audio/${audioMsgId}`, { headers: { cookie: childCookie } });
+        check(
+          "★ /api/audio/<id> 实际可播放（200 audio/*）",
+          audioRes.status === 200 && (audioRes.headers.get("content-type") ?? "").startsWith("audio/"),
+          `status=${audioRes.status} type=${audioRes.headers.get("content-type")}`,
+        );
+      }
+    }
+
     // ⑥ 助手音频不再 0:00：preload=metadata（SSR HTML 断言）
     check("★ 助手音频 preload=metadata（不再 0:00 / 0:00）", /<audio[^>]*preload="metadata"[^>]*data-testid="tts-audio"/.test(dadChatHtml) || /data-testid="tts-audio"[^>]*preload="metadata"/.test(dadChatHtml), "tts-audio preload=metadata");
     check("助手音频不再用 preload=none", !/<audio[^>]*data-testid="tts-audio"[^>]*preload="none"/.test(dadChatHtml));
   } finally {
-    child.kill("SIGTERM");
+    killTree(child);
     stub.close();
   }
 }

@@ -20,6 +20,18 @@ import { fileURLToPath } from "node:url";
 import { spawn } from "node:child_process";
 import Database from "better-sqlite3";
 
+/** 杀掉整条进程组：`next start` 是 pnpm 的子进程，只 kill pnpm 会留下孤儿占着端口，
+ *  导致后续守卫静默跑到旧实例上（"假失败"）。因此 spawn 时 detached:true，这里杀进程组。 */
+function killTree(child) {
+  if (!child || child.killed) return;
+  try {
+    process.kill(-child.pid, "SIGTERM");
+  } catch {
+    try { child.kill("SIGTERM"); } catch { /* ignore */ }
+  }
+}
+
+
 const WEB_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const PORT = Number(process.env.AVATAR_PORT ?? 3037);
 const BASE = (process.env.BASE_URL ?? `http://127.0.0.1:${PORT}`).replace(/\/$/, "");
@@ -118,6 +130,7 @@ async function main() {
   {
     const deadPort = PORT + 10;
     const dead = spawn("pnpm", ["exec", "next", "start", "-p", String(deadPort)], {
+      detached: true,
       cwd: WEB_ROOT,
       env: { ...process.env, VOICE_SERVICE_URL: "http://127.0.0.1:9" },
       stdio: "ignore",
@@ -145,7 +158,7 @@ async function main() {
         `up=${up} status=${res.status} count=${(body?.characters ?? []).length}`,
       );
     } finally {
-      dead.kill("SIGTERM");
+      killTree(dead);
     }
   }
 
@@ -320,6 +333,7 @@ const stub = http.createServer((req, res) => {
 try {
   await new Promise((r) => stub.listen(8139, "127.0.0.1", r));
   const child = spawn("pnpm", ["exec", "next", "start", "-p", String(PORT)], {
+      detached: true,
     cwd: WEB_ROOT,
     env: { ...process.env, VOICE_SERVICE_URL: "http://127.0.0.1:8139" },
     stdio: "ignore",
@@ -342,7 +356,7 @@ try {
     if (up) await main();
     else failed += 1;
   } finally {
-    child.kill("SIGTERM");
+    killTree(child);
   }
 } catch (err) {
   failed += 1;
