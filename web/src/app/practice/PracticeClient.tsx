@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import { ScopedDiagnosisCard } from "@/components/ScopedDiagnosisCard";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Recorder } from "@/components/Recorder";
 import { RecordedAudio } from "@/components/RecordedAudio";
@@ -477,6 +478,9 @@ export function PracticeClient({
       {response ? (
         <>
           <section className="ec-card" data-testid="result-card">
+            {response?.attempt_id ? (
+              <ScopedDiagnosisCard scope="attempt" attemptIds={[response.attempt_id]} isChild={isChild} label="这一句的问题" />
+            ) : null}
             <div className="flex flex-wrap items-center justify-between gap-3">
               {noSpeech ? (
                 <p className="text-lg font-bold">— 本次没有有效评分</p>

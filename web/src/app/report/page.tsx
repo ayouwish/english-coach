@@ -8,6 +8,11 @@ import { getArticulation } from "@/lib/articulation";
 import type { Articulation } from "@/lib/articulation";
 import { getCurrentUser } from "@/lib/auth";
 import { buildDiagnosis, buildDiagnosisRaw, toChildArticulation, type DiagnosisItem } from "@/lib/diagnosis";
+import {
+  buildScopedDiagnosis,
+  buildScopedDiagnosisRaw,
+  type ScopedDiagnosisPayload,
+} from "@/lib/diagnosis-scope";
 
 export const dynamic = "force-dynamic";
 
@@ -19,16 +24,34 @@ export const dynamic = "force-dynamic";
  * 儿童硬约束：只用 childLabel / tipChildZh / examples；不给 IPA、不给常见错误（成人向）。
  * 下发给 client 组件的 articulation 对象也会先剥掉 ipa 字段。
  */
-export default async function ReportPage() {
+export default async function ReportPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ scope?: string }>;
+}) {
   await ensureBootstrap();
   const user = await getCurrentUser();
   if (!user) redirect("/login");
 
   const isChild = user.isChild;
+  // task-71：默认「最近 7 天」，可切「全部累计」(?scope=all)
+  const params = await searchParams;
+  const scope = params.scope === "all" ? "all" : "recent";
   // raw：含 IPA，仅在服务端用于查发音参数（不会下发给浏览器）
   // safe：儿童版本（文案已剥离 IPA），用于渲染文字
-  const raw = await buildDiagnosisRaw(user);
-  const safe = isChild ? await buildDiagnosis(user) : null;
+  let raw: ScopedDiagnosisPayload;
+  let safe: ScopedDiagnosisPayload | null = null;
+  if (scope === "all") {
+    raw = (await buildDiagnosisRaw(user)) as ScopedDiagnosisPayload;
+    raw.scope = "all";
+    raw.range = { scope: "all", attempt_count: 0 };
+    safe = isChild ? ((await buildDiagnosis(user)) as ScopedDiagnosisPayload) : null;
+  } else {
+    raw = await buildScopedDiagnosisRaw(user, { scope: "recent", days: 7 });
+    safe = isChild ? await buildScopedDiagnosis(user, { scope: "recent", days: 7 }) : null;
+  }
+  const rangeAttempts = raw.range?.attempt_count ?? 0;
+  const focusTop = (isChild ? safe! : raw).items.filter((i) => i.status !== "ok").slice(0, 2);
   const views = raw.items.map((r, i) => ({ raw: r, view: isChild ? safe!.items[i] : r }));
 
   const visible = views.filter((v) => v.view.status !== "ok");
@@ -49,13 +72,42 @@ export default async function ReportPage() {
     <div className="flex flex-col gap-5" data-testid="report-page">
       <section className="ec-card">
         <h1 className="text-xl font-extrabold">{isChild ? "🔍 我的发音报告" : "🔍 发音诊断报告"}</h1>
+        <div className="mt-2 flex flex-wrap gap-2" data-testid="diagnosis-scope-tabs">
+          <Link
+            href="/report"
+            data-testid="scope-recent"
+            className={`ec-btn ${scope === "recent" ? "ec-btn-primary" : "ec-btn-ghost"} !px-2 !py-0.5 text-xs`}
+          >
+            最近 7 天
+          </Link>
+          <Link
+            href="/report?scope=all"
+            data-testid="scope-all"
+            className={`ec-btn ${scope === "all" ? "ec-btn-primary" : "ec-btn-ghost"} !px-2 !py-0.5 text-xs`}
+          >
+            全部累计
+          </Link>
+        </div>
         <p className="mt-2 text-base font-semibold" data-testid="diagnosis-summary">
           {summary}
         </p>
         <p className="mt-1 text-xs text-[var(--ec-muted)]">
-          统计口径：每个音素至少 {raw.min_samples} 次记录才计入（共 {raw.counted_phonemes} 个达标，
-          薄弱 {raw.counts.weak} / 待巩固 {raw.counts.watch} / 已掌握 {raw.counts.ok}）。
+          {scope === "all"
+            ? `统计口径：每个音素至少 ${raw.min_samples} 次记录才计入（共 ${raw.counted_phonemes} 个达标，薄弱 ${raw.counts.weak} / 待巩固 ${raw.counts.watch} / 已掌握 ${raw.counts.ok}）。`
+            : `统计口径：最近 7 天共 ${rangeAttempts} 次练习 · ${raw.counted_phonemes} 个音素出现（薄弱 ${raw.counts.weak} / 待巩固 ${raw.counts.watch} / 已掌握 ${raw.counts.ok}）。`}
         </p>
+        {focusTop.length > 0 ? (
+          <div className="mt-2 rounded-xl bg-[#fff7e8] p-3 text-sm" data-testid="recent-focus">
+            <p className="font-semibold">🎯 最近最需要练的{isChild ? "" : "音"}：</p>
+            <ul className="mt-1 flex flex-wrap gap-2">
+              {focusTop.map((it, idx) => (
+                <li key={`focus-${idx}`} className="rounded-full bg-white px-2 py-0.5">
+                  {isChild ? it.child_label : `/${it.phoneme}/`}（{it.avg_score} 分）
+                </li>
+              ))}
+            </ul>
+          </div>
+        ) : null}
         <div className="mt-3 flex flex-wrap gap-2">
           {startToken ? (
             <Link
@@ -77,7 +129,9 @@ export default async function ReportPage() {
       {visible.length === 0 ? (
         <section className="ec-card">
           <p className="text-sm" data-testid="no-weak-phonemes">
-            目前没有明显薄弱的音素 🎉 继续日常跟读就好；多读几句之后这里会自动出现诊断卡片。
+            {scope === "recent" && raw.items.length === 0
+              ? "最近 7 天还没有练习记录，跟读一句就有了。"
+              : "目前没有明显薄弱的音素 🎉 继续日常跟读就好；多读几句之后这里会自动出现诊断卡片。"}
           </p>
         </section>
       ) : (

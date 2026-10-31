@@ -15,6 +15,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import Database from "better-sqlite3";
 const WEB_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const BASE = (process.env.BASE_URL ?? "http://127.0.0.1:3010").replace(/\/$/, "");
 const IPA = ["θ", "ð", "ɹ", "ŋ", "æ", "ʃ", "ɪ", "ʌ", "ɔ", "ɜ", "ə", "ʊ", "ʒ", "ɑ", "ɒ", "ɛ", "ˈ", "ˌ"];
@@ -258,6 +259,140 @@ check("SVG 有 <title>/<desc>（无障碍）", svg.includes("<title>") && svg.in
 console.log(`\n   ↳ SVG 片段（前 420 字符）：\n${svg.replace(/\s+/g, " ").slice(0, 420)}`);
 const tonguePathAttr = /data-part="tongue" d="([^"]+)"/.exec(svg)?.[1] ?? "";
 console.log(`   ↳ 舌头 path（由 tongueHigh/tongueBack 变形）：${tonguePathAttr}`);
+
+
+// ── task-71：作用域诊断（单句/批次/最近）+ 对子去重 ───────────────────────────
+section("task-71 · 作用域诊断（attempt / batch / recent）+ 对子去重");
+{
+  const DB_PATH = process.env.DB_PATH ?? path.join(WEB_ROOT, "data/app.db");
+  const db = new Database(DB_PATH);
+  const now = Date.now();
+  const iso = (ms) => new Date(ms).toISOString();
+  const ids = {
+    dadA: `att_test71_dad_a_${now}`,
+    dadB: `att_test71_dad_b_${now}`,
+    dadOld: `att_test71_dad_old_${now}`,
+    momB: `att_test71_mom_b_${now}`,
+  };
+  const insertAttempt = db.prepare(
+    `INSERT INTO attempts (id, user_id, reference_text, created_at, status, scored_at, scores_json, warnings_json)
+     VALUES (?, ?, ?, ?, 'done', ?, ?, '[]')`,
+  );
+  const insertScore = db.prepare(
+    `INSERT INTO phoneme_scores (id, attempt_id, user_id, word, phoneme, score, created_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?)`,
+  );
+  try {
+    // 家长：A=θ 50（now）/ B=s 95（now）/ OLD=ʒ 40（8 天前）；妈妈：ŋ 60（now，用于越权断言）
+    insertAttempt.run(ids.dadA, "u-dad", "I think this is thin.", iso(now), iso(now), JSON.stringify({ pron: 55 }));
+    insertAttempt.run(ids.dadB, "u-dad", "Sun is so nice.", iso(now - 1000), iso(now), JSON.stringify({ pron: 92 }));
+    insertAttempt.run(ids.dadOld, "u-dad", "Usually it is pleasure.", iso(now - 8 * 86400000), iso(now), JSON.stringify({ pron: 45 }));
+    insertAttempt.run(ids.momB, "u-mom", "Singing morning.", iso(now), iso(now), JSON.stringify({ pron: 60 }));
+    insertScore.run(`ps_${ids.dadA}_th`, ids.dadA, "u-dad", "think", "θ", 50, iso(now));
+    insertScore.run(`ps_${ids.dadB}_s`, ids.dadB, "u-dad", "sun", "s", 95, iso(now));
+    insertScore.run(`ps_${ids.dadOld}_zh`, ids.dadOld, "u-dad", "usually", "ʒ", 40, iso(now));
+    insertScore.run(`ps_${ids.momB}_ng`, ids.momB, "u-mom", "singing", "ŋ", 60, iso(now));
+
+    const scoped = async (qs) => getJson(`/api/diagnosis?${qs}`, dad.cookie);
+    const childScoped = async (qs) => getJson(`/api/diagnosis?${qs}`, girl.cookie);
+    const phonemes = (r) => (r.json?.items ?? []).map((i) => i.phoneme || i.child_label).filter(Boolean);
+
+    // ① all 结构回归（旧字段都在）
+    const all = await getJson("/api/diagnosis", dad.cookie);
+    check(
+      "★ scope=all 结构兼容（items/counts/summary_zh/focus_phonemes 都在）",
+      all.status === 200 &&
+        Array.isArray(all.json?.items) &&
+        typeof all.json?.summary_zh === "string" &&
+        Array.isArray(all.json?.focus_phonemes) &&
+        typeof all.json?.counts?.weak === "number" &&
+        all.json?.scope === "all",
+      `status=${all.status} scope=${all.json?.scope}`,
+    );
+
+    // ② attempt：只含这一句的音素
+    const a = await scoped(`scope=attempt&attempt_id=${ids.dadA}`);
+    check("★ scope=attempt → 200 且只含这一句的音素", a.status === 200 && phonemes(a).includes("θ") && !phonemes(a).includes("s"), JSON.stringify(phonemes(a)));
+    check("attempt scope summary 用「这一句」口吻", /这一句/.test(a.json?.summary_zh ?? ""), a.json?.summary_zh ?? "");
+    const b = await scoped(`scope=attempt&attempt_id=${ids.dadB}`);
+    check("两次不同句子的 attempt 互不包含", phonemes(b).includes("s") && !phonemes(b).includes("θ"), JSON.stringify(phonemes(b)));
+    check("★ 别人的 attempt_id → 404（不泄漏）", (await scoped(`scope=attempt&attempt_id=${ids.momB}`)).status === 404);
+    check("attempt 缺 attempt_id → 400", (await scoped("scope=attempt")).status === 400);
+
+    // ③ batch：只含 A+B 的音素（不含 8 天前的 ʃ）
+    const batch = await scoped(`scope=batch&attempt_ids=${ids.dadA},${ids.dadB}`);
+    check(
+      "★ scope=batch → 只含这一批的音素（θ+s，排除旧的 ʒ）",
+      batch.status === 200 && phonemes(batch).includes("θ") && phonemes(batch).includes("s") && !phonemes(batch).includes("ʒ"),
+      JSON.stringify(phonemes(batch)),
+    );
+    check("batch summary 含「这一批」+ 句数", /这一批/.test(batch.json?.summary_zh ?? ""), batch.json?.summary_zh ?? "");
+    const tooMany = await scoped(`scope=batch&attempt_ids=${Array.from({ length: 21 }, (_, i) => `x${i}`).join(",")}`);
+    check("batch 超过 20 个 id → 400", tooMany.status === 400);
+    const foreignBatch = await scoped(`scope=batch&attempt_ids=${ids.dadA},${ids.momB}`);
+    check("★ batch 含别人的 id → 404（不泄漏）", foreignBatch.status === 404);
+
+    // ④ recent&days=7：排除 8 天前的旧数据
+    const recent = await scoped("scope=recent&days=7");
+    check(
+      "★ scope=recent&days=7 → 排除 8 天前的旧音素（ʒ）",
+      recent.status === 200 && !phonemes(recent).includes("ʒ") && phonemes(recent).includes("θ"),
+      JSON.stringify(phonemes(recent)),
+    );
+    const recentAll = await scoped("scope=recent&days=30");
+    check("scope=recent&days=30 → 旧音素（ʒ）重新出现", phonemes(recentAll).includes("ʒ"), JSON.stringify(phonemes(recentAll)));
+
+    // ⑤ 对子去重：同一对子（a-b 与 b-a）只出现一次
+    const pairs = (rows) =>
+      (rows ?? []).flatMap((i) => (i.contrasts ?? []).map((c) => [...(c.pair ?? [])].sort().join("-")));
+    const allPairs = pairs(all.json?.items);
+    const dup = allPairs.filter((k, i) => allPairs.indexOf(k) !== i);
+    check("★ 对子去重：没有任何重复 pair（a→b 与 b→a 合并）", allPairs.length > 0 && dup.length === 0, `pairs=${allPairs.length} dup=${JSON.stringify(dup.slice(0, 3))}`);
+    const scopedPairs = pairs(batch.json?.items);
+    check(
+      "★ 作用域结果里也没有重复对子",
+      scopedPairs.length === 0 || scopedPairs.every((k, i) => scopedPairs.indexOf(k) === i),
+      `pairs=${JSON.stringify(scopedPairs.slice(0, 4))}`,
+    );
+
+    // ⑥ 儿童零 IPA（四个 scope 全覆盖）
+    const childPayloads = await Promise.all([
+      childScoped("scope=all"),
+      childScoped("scope=recent&days=7"),
+      childScoped(`scope=attempt&attempt_id=${ids.dadA}`), // 别人的 id → 404 也不算泄漏
+      childScoped(`scope=batch&attempt_ids=${ids.dadA},${ids.dadB}`),
+    ]);
+    const leaks = childPayloads.flatMap((r) => IPA.filter((c) => JSON.stringify(r.json ?? {}).includes(c)));
+    check("★ 儿童四种 scope 的响应均零 IPA", leaks.length === 0, `leaked=${[...new Set(leaks)].join("")}`);
+
+    // ⑦ 页面：/report 默认 recent + 可切 all
+    const report = await get("/report", girl.cookie);
+    check(
+      "★ /report 默认 recent 且有切换（scope-recent / scope-all）",
+      report.status === 200 &&
+        report.text.includes('data-testid="scope-recent"') &&
+        report.text.includes('data-testid="scope-all"') &&
+        /最近 7 天/.test(report.text),
+      `status=${report.status}`,
+    );
+    check("★ /report 有「最近最需要练的」高亮块", report.text.includes('data-testid="recent-focus"'));
+    check("/report?scope=all → 200", (await get("/report?scope=all", girl.cookie)).status === 200);
+    check("儿童 /report 零 IPA", IPA.filter((c) => report.text.includes(c)).length === 0, IPA.filter((c) => report.text.includes(c)).join(""));
+
+    // ⑧ practice / flow 页面（client 组件，源码级断言）
+    const practiceSrc = fs.readFileSync(path.join(WEB_ROOT, "src/app/practice/PracticeClient.tsx"), "utf8");
+    const flowSrc = fs.readFileSync(path.join(WEB_ROOT, "src/app/flow/FlowClient.tsx"), "utf8");
+    check("★ practice 结果卡含「这一句的问题」（scope=attempt）", practiceSrc.includes('scope="attempt"') && practiceSrc.includes("这一句的问题"));
+    check("★ flow 汇总含「这一批（N 句）的问题」（scope=batch）", flowSrc.includes('scope="batch"') && flowSrc.includes("这一批"));
+  } finally {
+    // 清理测试数据（attempts + phoneme_scores 级联手动删）
+    for (const id of Object.values(ids)) {
+      db.prepare("DELETE FROM phoneme_scores WHERE attempt_id = ?").run(id);
+      db.prepare("DELETE FROM attempts WHERE id = ?").run(id);
+    }
+    db.close();
+  }
+}
 
 console.log(`\n合计失败 ${failed} 项`);
 console.log(failed === 0 ? "结论：全部通过 ✅" : "结论：存在失败 ❌");

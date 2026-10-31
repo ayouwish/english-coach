@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import { ScopedDiagnosisCard } from "@/components/ScopedDiagnosisCard";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { EncouragementBox } from "@/components/EncouragementBox";
 import { RetellPanel } from "@/components/RetellPanel";
@@ -1217,6 +1218,14 @@ export function FlowClient({
             noSpeech={doneItems.length === 0}
             words={encouragementWords}
             isChild={isChild}
+          />
+
+          {/* task-71：这一批（N 句）的问题——只看本次连读的这些句子 */}
+          <ScopedDiagnosisCard
+            scope="batch"
+            attemptIds={doneItems.map((it) => it.attemptId).filter((x): x is string => Boolean(x))}
+            isChild={isChild}
+            label={`这一批（${doneItems.length} 句）的问题`}
           />
 
           {/* P3 复述：读完故事后"不看屏幕讲一遍"（不显示发音分）*/}

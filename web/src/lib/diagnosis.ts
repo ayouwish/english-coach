@@ -70,13 +70,13 @@ export function toChildArticulation(art: Articulation): Articulation {
   };
 }
 
-function statusOf(avg: number): DiagnosisStatus {
+export function statusOf(avg: number): DiagnosisStatus {
   if (avg < 65) return "weak";
   if (avg < 80) return "watch";
   return "ok";
 }
 
-function trendOf(points: number[]): DiagnosisItem["trend"] {
+export function trendOf(points: number[]): DiagnosisItem["trend"] {
   const last3 = points.slice(-3);
   if (last3.length < 2) return { direction: "flat", delta: null, points: last3 };
   const delta = Math.round((last3[last3.length - 1] - last3[0]) * 10) / 10;
@@ -95,6 +95,54 @@ function parseTrend(raw: string | null): number[] {
   } catch {
     return [];
   }
+}
+
+/** 稳定去重（保序）：用于 common_errors / examples */
+export function dedupeStrings(list: readonly string[]): string[] {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const v of list) {
+    if (!v || seen.has(v)) continue;
+    seen.add(v);
+    out.push(v);
+  }
+  return out;
+}
+
+/** 对子归一：a→b 与 b→a 视为同一对（排序后拼 key） */
+export function pairKey(pair: readonly [string, string] | readonly string[]): string {
+  return [...pair].slice(0, 2).sort().join("-");
+}
+
+/**
+ * 对子去重（task-71 B）——**跨音素全局去重**：
+ * `/θ/→/s/` 与 `/s/→/θ/` 只保留一条；保留先出现的那条（items 已按 weak→ok 排序，先出现=更该练的），
+ * 后出现的同对子只把 note 合并进来（去重后拼接）。
+ */
+export function dedupeContrasts(items: DiagnosisItem[]): void {
+  const kept = new Map<string, DiagnosisItem["contrasts"][number]>();
+  for (const item of items) {
+    const next: DiagnosisItem["contrasts"] = [];
+    for (const c of item.contrasts) {
+      const key = pairKey(c.pair);
+      const exist = kept.get(key);
+      if (!exist) {
+        const copy = { ...c, pair: ([...c.pair].slice(0, 2).sort() as [string, string]) };
+        kept.set(key, copy);
+        next.push(copy);
+      } else if (c.note && !exist.note.includes(c.note)) {
+        // 同对子：合并 note（取并集、保持稳定顺序）
+        exist.note = dedupeStrings([...exist.note.split("；"), c.note]).join("；");
+      }
+    }
+    item.contrasts = next;
+  }
+}
+
+/** 单个 item 内部去重（常见错误/例词） */
+function dedupeItemFields(item: DiagnosisItem): void {
+  item.common_errors = dedupeStrings(item.common_errors);
+  item.examples = dedupeStrings(item.examples);
 }
 
 /**
@@ -158,6 +206,9 @@ async function aggregate(user: SessionUser, forChild: boolean): Promise<Diagnosi
       })),
     };
   });
+
+  items.forEach(dedupeItemFields);
+  dedupeContrasts(items);
 
   const order: Record<DiagnosisStatus, number> = { weak: 0, watch: 1, ok: 2 };
   items.sort((a, b) => {
