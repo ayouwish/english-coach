@@ -145,6 +145,16 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--out-dir", default=None, help="输出目录（默认 web/public/avatars/presets）")
     parser.add_argument("--force", action="store_true", help="全部重新生成")
     parser.add_argument("--json", action="store_true", help="额外输出机器可读 JSON")
+    parser.add_argument(
+        "--characters",
+        default="",
+        help="只生成指定角色（逗号分隔，如 c1,c3）；默认全部。用于先少量试水省费用",
+    )
+    parser.add_argument(
+        "--styles",
+        default="",
+        help="只生成指定风格（逗号分隔，如 watercolor,cartoon）；默认全部",
+    )
     args = parser.parse_args(argv)
 
     settings = get_settings()
@@ -166,8 +176,22 @@ def main(argv: list[str] | None = None) -> int:
     total_bytes = 0
     failures: list[str] = []
     presets: list[dict] = []
-    for character in PRESET_CHARACTERS:
-        for style in preset_style_ids():
+    wanted_characters = {x.strip() for x in args.characters.split(",") if x.strip()}
+    wanted_styles = {x.strip() for x in args.styles.split(",") if x.strip()}
+    known_characters = {c["id"] for c in PRESET_CHARACTERS}
+    known_styles = set(preset_style_ids())
+    unknown_c = wanted_characters - known_characters
+    unknown_s = wanted_styles - known_styles
+    if unknown_c or unknown_s:
+        print(f"错误     : 未知角色 {sorted(unknown_c)} / 未知风格 {sorted(unknown_s)}")
+        return 2
+    characters = [c for c in PRESET_CHARACTERS if not wanted_characters or c["id"] in wanted_characters]
+    styles = [s for s in preset_style_ids() if not wanted_styles or s in wanted_styles]
+    if wanted_characters or wanted_styles:
+        print(f"采样范围 : 角色 {[c['id'] for c in characters]} × 风格 {styles}（共 {len(characters) * len(styles)} 张）")
+
+    for character in characters:
+        for style in styles:
             filename = preset_filename(character["id"], style)
             path = out_dir / filename
             placeholder = provider == "mock"
