@@ -208,6 +208,10 @@ try {
   // ── 6) /api/asr 转发 language（stub voice 抓 outbound）──────────────────────
   {
     const captured = [];
+    /** task-74：concat 调用计数 / 每次 parts 数 + stub 返回的小 WAV */
+    const TINY_WAV = Buffer.from("UklGRiQAAABXQVZFZm10IBAAAAABAAEAQB8AAEAfAAABAAgAZGF0YQAAAAA=", "base64");
+    let concatCalls = 0;
+    const concatPartCounts = [];
     /** task-53：插画 stub 行为（ok / 503 / 400 / 502） */
     let illustrateMode = "ok";
     const TINY_PNG_B64 =
@@ -224,6 +228,15 @@ try {
           res.setHeader("content-type", "application/json");
           res.end(JSON.stringify(obj));
         };
+        if (String(req.url).startsWith("/v1/audio/concat")) {
+          concatCalls += 1;
+          const parts = (body.match(/name="parts"/g) ?? []).length;
+          concatPartCounts.push(parts);
+          res.statusCode = 200;
+          res.setHeader("content-type", "audio/wav");
+          res.end(TINY_WAV);
+          return;
+        }
         if (String(req.url).startsWith("/v1/image/illustrate")) {
           if (illustrateMode === "503") {
             send(503, { error: { code: "provider_unavailable", message: "未配置智谱 key" } });
@@ -476,6 +489,116 @@ try {
           "故事列表卡片有缩略图（has_image 时渲染 story-thumb）",
           storySrc.includes('data-testid="story-thumb"') && /s\.has_image/.test(storySrc),
         );
+      }
+
+      // ── task-74 ①：故事整段朗读回放（status/audio、拼接、单条直用、401/404）────
+      {
+        const DB_PATH_T = process.env.DB_PATH ?? path.join(WEB_ROOT, "data/app.db");
+        const dataDir = path.join(WEB_ROOT, "data");
+        const ts = Date.now();
+        const wavPath1 = `audio/u-girl/task74-${ts}-1.wav`;
+        const wavPath2 = `audio/u-girl/task74-${ts}-2.wav`;
+        const singlePath = `audio/u-girl/task74-${ts}-single.wav`;
+        const TINY_WAV2 = Buffer.from("UklGRiQAAABXQVZFZm10IBAAAAABAAEAQB8AAEAfAAABAAgAZGF0YQAAAAA=", "base64");
+        for (const rel of [wavPath1, wavPath2, singlePath]) {
+          const abs = path.join(dataDir, rel);
+          fs.mkdirSync(path.dirname(abs), { recursive: true });
+          fs.writeFileSync(abs, TINY_WAV2);
+        }
+        const db = new Database(DB_PATH_T);
+        const attemptIds = [`att_t74_${ts}_a`, `att_t74_${ts}_b`, `att_t74_${ts}_s`];
+        const insAttempt = db.prepare(
+          "INSERT INTO attempts (id, user_id, reference_text, material_id, created_at, status, scores_json, warnings_json, audio_path) VALUES (?, ?, ?, ?, ?, 'done', ?, '[]', ?)",
+        );
+        const mkStory = async () => {
+          const r = await fetch(`http://127.0.0.1:${port}/api/materials`, {
+            method: "POST",
+            headers: { "content-type": "application/json", cookie: cookie2 },
+            body: JSON.stringify({
+              title: `Audio Replay ${ts}`,
+              text: "Today I built a tower. Hua knocked it down. I was angry.",
+              kind: "story",
+              level: "A2",
+              source: "text",
+            }),
+          });
+          const j = await r.json().catch(() => null);
+          if (j?.id) created.push(j.id);
+          return j?.id ?? null;
+        };
+        const multiId = await mkStory();
+        const singleId = await mkStory();
+        const emptyId = await mkStory();
+        insAttempt.run(attemptIds[0], "u-girl", "Today I built a tower.", multiId, new Date(ts).toISOString(), JSON.stringify({ pron: 70 }), wavPath1);
+        insAttempt.run(attemptIds[1], "u-girl", "Hua knocked it down.", multiId, new Date(ts + 1000).toISOString(), JSON.stringify({ pron: 75 }), wavPath2);
+        insAttempt.run(attemptIds[2], "u-girl", "I was angry.", singleId, new Date(ts + 2000).toISOString(), JSON.stringify({ pron: 80 }), singlePath);
+        db.close();
+        const cacheFiles = [multiId, singleId].filter(Boolean).map((id) => [
+          path.join(dataDir, "story-audio", `${id}.wav`),
+          path.join(dataDir, "story-audio", `${id}.json`),
+        ]);
+        try {
+          const statusOf = async (mid, cookie = cookie2) =>
+            (await (await fetch(`http://127.0.0.1:${port}/api/story/${mid}/audio/status`, { headers: { cookie } })).json()).status;
+          const audioOf = async (mid, cookie = cookie2, qs = "") =>
+            fetch(`http://127.0.0.1:${port}/api/story/${mid}/audio${qs}`, { headers: { cookie } });
+
+          check("未登录拿故事回放 → 401", (await fetch(`http://127.0.0.1:${port}/api/story/${multiId}/audio`)).status === 401);
+          check("未登录查回放状态 → 401", (await fetch(`http://127.0.0.1:${port}/api/story/${multiId}/audio/status`)).status === 401);
+
+          const first = await audioOf(multiId);
+          check("★ 首次请求无缓存 → 202（触发后台拼接）", first.status === 202, `status=${first.status}`);
+          let ready = null;
+          for (let i = 0; i < 30; i++) {
+            await new Promise((r) => setTimeout(r, 500));
+            if ((await statusOf(multiId)) === "ready") {
+              ready = true;
+              break;
+            }
+          }
+          check("★ 轮询后状态变为 ready", ready === true);
+          const wav = await audioOf(multiId);
+          const wavBytes = Buffer.from(await wav.arrayBuffer());
+          console.log(`   ↳ story audio：HTTP ${wav.status} · ${wav.headers.get("content-type")} · ${wavBytes.length}B · single=${wav.headers.get("x-story-audio-single")}`);
+          check("★ ready 后 GET audio → 200 audio/wav 且字节 > 0", wav.status === 200 && (wav.headers.get("content-type") ?? "").includes("audio/wav") && wavBytes.length > 0, `${wavBytes.length}B`);
+          check("Content-Length 正确 + Accept-Ranges: none", Number(wav.headers.get("content-length")) === wavBytes.length && wav.headers.get("accept-ranges") === "none");
+          check("★ 多录音：确实调用了 concat 且 parts=2（按时间序两条）", concatCalls > 0 && concatPartCounts[0] === 2, `calls=${concatCalls} parts=${concatPartCounts.join(",")}`);
+          check("多录音返回不带 single 标记", wav.headers.get("x-story-audio-single") === null);
+          const cached = await audioOf(multiId);
+          check("第二次命中缓存（x-story-audio-cache=hit）", cached.headers.get("x-story-audio-cache") === "hit", String(cached.headers.get("x-story-audio-cache")));
+
+          const singleAudio = await audioOf(singleId);
+          if (singleAudio.status === 202) {
+            for (let i = 0; i < 20; i++) {
+              await new Promise((r) => setTimeout(r, 300));
+              if ((await statusOf(singleId)) === "ready") break;
+            }
+          }
+          const singleWav = await audioOf(singleId);
+          const singleBytes = Buffer.from(await singleWav.arrayBuffer());
+          check(
+            "★ 只有 1 条录音：直接返回那条（x-story-audio-single=1，不再拼接）",
+            singleWav.status === 200 && singleWav.headers.get("x-story-audio-single") === "1" && singleBytes.length > 0,
+            `status=${singleWav.status} single=${singleWav.headers.get("x-story-audio-single")}`,
+          );
+
+          const emptyAudio = await audioOf(emptyId);
+          check("★ 没有录音的故事 → 404 可读提示", emptyAudio.status === 404, `status=${emptyAudio.status}`);
+          const dadAudio = await audioOf(multiId, dad);
+          check("★ 别人看同一故事（无自己录音）→ 404，不泄漏她的录音", dadAudio.status === 404, `status=${dadAudio.status}`);
+
+          const detailReplay = await (await fetch(`http://127.0.0.1:${port}/story/${multiId}`, { headers: { cookie: cookie2 } })).text();
+          check("★ 故事详情页含整段回放区块（story-audio）", detailReplay.includes('data-testid="story-audio"') && /回放整段朗读|听一听我读的故事/.test(detailReplay));
+        } finally {
+          for (const files of cacheFiles) for (const f of files) if (fs.existsSync(f)) fs.rmSync(f);
+          for (const rel of [wavPath1, wavPath2, singlePath]) {
+            const f = path.join(dataDir, rel);
+            if (fs.existsSync(f)) fs.rmSync(f);
+          }
+          const db2 = new Database(DB_PATH_T);
+          for (const id of attemptIds) db2.prepare("DELETE FROM attempts WHERE id = ?").run(id);
+          db2.close();
+        }
       }
 
     } finally {

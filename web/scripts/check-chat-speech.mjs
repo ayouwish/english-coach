@@ -352,6 +352,10 @@ check("不再写死过时秒数（1–11s）", !girlChatHtml.includes("1–11s")
   /** task-72：concat 失败/延迟开关（验证 failed→force 重建、building→202、并发去重） */
   let concatMode = "ok";
   let concatDelayMs = 0;
+  /** task-74 追加：TTS 503（真实失败原因） */
+  let ttsMode = "ok";
+  /** task-74 ②：助手返回「更自然：…」校正提示（历史对话要保留） */
+  let emitCorrection = false;
   /** 合法的 24kHz/mono/16bit PCM WAV（10ms），保证 status.duration_ms 可解析 */
   const TINY_WAV = (() => {
     const sampleRate = 24000;
@@ -411,7 +415,16 @@ check("不再写死过时秒数（1–11s）", !girlChatHtml.includes("1–11s")
         send(200, {
           reply: "That sounds like so much fun!",
           reply_zh: "听起来很好玩！",
-          correction: null,
+          correction: emitCorrection
+            ? {
+                has_error: true,
+                type: "natural",
+                original: "everything is going good",
+                better: "everything's going well",
+                explain_zh: "母语者更常说 everything's going well。",
+                severity: "minor",
+              }
+            : null,
           flag: "ok",
           provider: "stub",
           done: dialogueDone,
@@ -442,6 +455,12 @@ check("不再写死过时秒数（1–11s）", !girlChatHtml.includes("1–11s")
       }
       if (String(req.url).startsWith("/v1/tts")) {
         ttsCalls += 1;
+        if (ttsMode === "503") {
+          res.statusCode = 503;
+          res.setHeader("content-type", "application/json");
+          res.end(JSON.stringify({ error: { code: "provider_error", message: "stub TTS 503" } }));
+          return;
+        }
         res.statusCode = 200;
         res.setHeader("content-type", "audio/wav");
         res.end(TINY_WAV);
@@ -452,6 +471,12 @@ check("不再写死过时秒数（1–11s）", !girlChatHtml.includes("1–11s")
         const mode = concatMode;
         const delay = concatDelayMs;
         const finish = () => {
+          if (mode === "404") {
+            res.statusCode = 404;
+            res.setHeader("content-type", "application/json");
+            res.end(JSON.stringify({ error: { code: "not_found", message: "stub: concat 未上线" } }));
+            return;
+          }
           if (mode === "fail") {
             res.statusCode = 502;
             res.setHeader("content-type", "application/json");
@@ -812,6 +837,139 @@ check("不再写死过时秒数（1–11s）", !girlChatHtml.includes("1–11s")
       const forcedAudio = await fetch(audioUrlFor(failSession), { headers: { cookie: childCookie } });
       check("force 重建后 GET audio → 200", forcedAudio.status === 200 && (forcedAudio.headers.get("content-type") ?? "").includes("audio/wav"), `status=${forcedAudio.status}`);
       check("force 重建只 concat 一次", concatCalls - concatBeforeForce === 1, `concatDelta=${concatCalls - concatBeforeForce}`);
+    }
+
+    // ⑪-b task-74 追加：失败归因准确 + 失败 backoff（60s 内不反复重试，避免刷爆 TTS）
+    {
+      // A) TTS 503：错误应说「语音合成暂时不可用」，而不是甩锅 concat
+      ttsMode = "503";
+      const ttsSession = await startSession(childCookie);
+      await voiceTurn(childCookie, ttsSession, "TTS failure test.");
+      const ttsFirst = await fetch(audioUrlFor(ttsSession), { headers: { cookie: childCookie } });
+      check("TTS 503 场景：首次 GET → 202", ttsFirst.status === 202, `status=${ttsFirst.status}`);
+      const ttsStatus = await pollAudioStatus(childCookie, ttsSession, 30000);
+      console.log(`   ↳ TTS 503 后 status=${ttsStatus.body?.status} code=${ttsStatus.body?.error_code} error=${String(ttsStatus.body?.error ?? "").slice(0, 70)}`);
+      check(
+        "★ TTS 503 → failed 且原因含「语音合成暂时不可用」",
+        ttsStatus.body?.status === "failed" && /语音合成暂时不可用/.test(ttsStatus.body?.error ?? ""),
+        String(ttsStatus.body?.error ?? "").slice(0, 90),
+      );
+      check("★ 错误分类 = tts_unavailable（不再误报 concat 未上线）", ttsStatus.body?.error_code === "tts_unavailable", String(ttsStatus.body?.error_code));
+      check("失败文案不含「拼接服务未就绪」", !/拼接服务/.test(ttsStatus.body?.error ?? ""));
+      const ttsCallsAfterFail = ttsCalls;
+      const repeatGets = [];
+      for (let i = 0; i < 3; i++) {
+        const r = await fetch(audioUrlFor(ttsSession), { headers: { cookie: childCookie } });
+        const b = await r.json().catch(() => null);
+        repeatGets.push({ status: r.status, msg: b?.error?.message ?? "" });
+      }
+      check(
+        "★ failed 后 60s 内重复 GET 不自动重试（TTS 调用次数不增加）",
+        ttsCalls === ttsCallsAfterFail && repeatGets.every((g) => g.status === 500),
+        `ttsDelta=${ttsCalls - ttsCallsAfterFail} statuses=${repeatGets.map((g) => g.status).join(",")}`,
+      );
+      check("★ 重复 GET 返回真实原因（不是笼统提示）", repeatGets.every((g) => /语音合成暂时不可用/.test(g.msg)), repeatGets[0]?.msg?.slice(0, 60) ?? "");
+      check("失败后 status.auto_retry=false（需手动「重新生成」）", ttsStatus.body?.auto_retry === false, String(ttsStatus.body?.auto_retry));
+      const ttsCallsBeforeForce = ttsCalls;
+      const ttsForce = await fetch(`${audioUrlFor(ttsSession)}?force=1`, { headers: { cookie: childCookie } });
+      check("★ 只有 ?force=1 才重试（202）", ttsForce.status === 202, `status=${ttsForce.status}`);
+      await pollAudioStatus(childCookie, ttsSession, 20000);
+      check("force 后确实又调用了 TTS（说明重试生效）", ttsCalls > ttsCallsBeforeForce, `ttsDelta=${ttsCalls - ttsCallsBeforeForce}`);
+      ttsMode = "ok";
+
+      // B) concat 404：文案应说「拼接服务未就绪」，与 TTS 失败不同
+      concatMode = "404";
+      const concatSession = await startSession(childCookie);
+      await voiceTurn(childCookie, concatSession, "Concat failure test.");
+      const concatFirst = await fetch(audioUrlFor(concatSession), { headers: { cookie: childCookie } });
+      check("concat 404 场景：首次 GET → 202", concatFirst.status === 202, `status=${concatFirst.status}`);
+      const concatStatus = await pollAudioStatus(childCookie, concatSession, 30000);
+      console.log(`   ↳ concat 404 后 status=${concatStatus.body?.status} code=${concatStatus.body?.error_code} error=${String(concatStatus.body?.error ?? "").slice(0, 70)}`);
+      check(
+        "★ concat 404 → failed 且原因含「拼接服务未就绪」",
+        concatStatus.body?.status === "failed" && /拼接服务/.test(concatStatus.body?.error ?? ""),
+        String(concatStatus.body?.error ?? "").slice(0, 90),
+      );
+      check("★ 错误分类 = concat_unavailable", concatStatus.body?.error_code === "concat_unavailable", String(concatStatus.body?.error_code));
+      check(
+        "★ 两种失败文案不同（TTS vs concat 不混淆）",
+        concatStatus.body?.error !== ttsStatus.body?.error && /语音合成/.test(ttsStatus.body?.error ?? "") && !/语音合成/.test(concatStatus.body?.error ?? ""),
+      );
+      concatMode = "ok";
+
+      // C) UI：failed 分支显示真实原因 + 手动「重新生成」；不自动轮询重试
+      const uiSrc = fs.readFileSync(path.join(WEB_ROOT, "src/components/ChatSessionAudio.tsx"), "utf8");
+      check("★ UI failed 分支不再自动 schedule（轮询只查状态）", (() => {
+        const failedIdx = uiSrc.indexOf('body.status === "failed"');
+        const scheduleAfter = uiSrc.indexOf("schedule()", failedIdx);
+        const returnAfter = uiSrc.indexOf("return;", failedIdx);
+        return failedIdx >= 0 && returnAfter > failedIdx && (scheduleAfter < 0 || scheduleAfter > returnAfter);
+      })());
+      check("UI 显示服务端真实错误文案 + 「重新生成」按钮", uiSrc.includes("setError(body.error") && uiSrc.includes("chat-session-audio-retry"));
+    }
+
+    // ⑮ task-74 ②③④：校正保留 + 历史列表/详情 + 评价随会话保存
+    {
+      const dbq = (sql, ...args) => {
+        const db2 = new Database(DB_PATH, { readonly: true });
+        const row = db2.prepare(sql).get(...args);
+        db2.close();
+        return row;
+      };
+      // A) 校正提示：messages API 返回 + 历史详情渲染
+      emitCorrection = true;
+      const corrSession = await startSession(childCookie);
+      const corrTurn = await voiceTurn(childCookie, corrSession, "everything is going good.");
+      emitCorrection = false;
+      check("助手返回校正（stub 触发）", corrTurn.body?.correction?.has_error === true, JSON.stringify(corrTurn.body?.correction ?? null).slice(0, 60));
+      const msgs = await (await fetch(`http://127.0.0.1:${PORT}/api/chat/sessions/${corrSession}/messages`, { headers: { cookie: childCookie } })).json();
+      const assistantMsg = [...(msgs?.messages ?? [])].reverse().find((m) => m.role === "assistant");
+      check("★ messages API 返回 correction（历史可回溯）", assistantMsg?.correction?.better === "everything's going well", JSON.stringify(assistantMsg?.correction ?? null).slice(0, 80));
+      const corrDetail = await (await fetch(`http://127.0.0.1:${PORT}/chat/sessions/${corrSession}`, { headers: { cookie: childCookie } })).text();
+      check("★ 历史详情页渲染黄色校正块（history-correction）", corrDetail.includes('data-testid="history-correction"') && /更自然/.test(corrDetail));
+
+      // B) 结束写评价汇总（家长视角可看分数）
+      const dadSession = await startSession(dadCookie);
+      await voiceTurn(dadCookie, dadSession, "Evaluation summary test.");
+      // 发音评分是后台任务：先等它写回 pron_json，再 /end 才能算出 avg_pron
+      for (let i = 0; i < 20; i++) {
+        const m = await (await fetch(`http://127.0.0.1:${PORT}/api/chat/sessions/${dadSession}/messages`, { headers: { cookie: dadCookie } })).json();
+        if ((m?.messages ?? []).some((x) => x.role === "user" && x.pron)) break;
+        await new Promise((r) => setTimeout(r, 500));
+      }
+      const dadEnd = await fetch(`http://127.0.0.1:${PORT}/api/chat/sessions/${dadSession}/end`, { method: "POST", headers: { cookie: dadCookie } });
+      check("/end 200", dadEnd.status === 200, `status=${dadEnd.status}`);
+      const sumRow = dbq("SELECT summary_json FROM chat_sessions WHERE id = ?", dadSession);
+      const sum = (() => {
+        try {
+          return JSON.parse(sumRow?.summary_json ?? "null");
+        } catch {
+          return null;
+        }
+      })();
+      console.log(`   ↳ summary_json=${JSON.stringify(sum).slice(0, 160)}`);
+      check(
+        "★ 结束时写入评价汇总（avg_pron/weak_phonemes/scored_turns）",
+        typeof sum?.avg_pron === "number" && Array.isArray(sum?.weak_phonemes) && typeof sum?.scored_turns === "number",
+        JSON.stringify(sum ?? null).slice(0, 120),
+      );
+      const dadDetail = await (await fetch(`http://127.0.0.1:${PORT}/chat/sessions/${dadSession}`, { headers: { cookie: dadCookie } })).text();
+      check("★ 家长详情页显示「本次平均发音」", /本次平均发音/.test(dadDetail) && dadDetail.includes('data-testid="session-summary"'));
+      const girlDetailSame = await (await fetch(`http://127.0.0.1:${PORT}/chat/sessions/${dadSession}`, { headers: { cookie: childCookie } }));
+      check("★ 别人（儿童）看家长会话 → 404（不越权）", girlDetailSame.status === 404, `status=${girlDetailSame.status}`);
+
+      // C) 历史对话列表（不再只保留最后一次）
+      const chatHtml = await (await fetch(`http://127.0.0.1:${PORT}/chat`, { headers: { cookie: childCookie } })).text();
+      const historyItems = (chatHtml.match(/data-testid="chat-history-item"/g) ?? []).length;
+      check("★ /chat 有历史对话列表（chat-history-list）", chatHtml.includes('data-testid="chat-history-list"'));
+      check("★ 历史对话列表 ≥ 2 条", historyItems >= 2, `items=${historyItems}`);
+      check(
+        "历史列表显示「历史对话（…次）」与轮数",
+        chatHtml.includes("历史对话（") && chatHtml.includes("次）") && chatHtml.includes("轮") && chatHtml.includes("chat-history-item"),
+      );
+      check("儿童历史列表不显示分数（只显示「聊完了」）", chatHtml.includes("聊完了") && !/平均发音/.test(chatHtml));
+      const girlSessionsJson = dbq("SELECT COUNT(*) c FROM chat_sessions WHERE user_id = 'u-girl'");
+      check("库里确实有多次会话（>1）", (girlSessionsJson?.c ?? 0) > 1, `count=${girlSessionsJson?.c}`);
     }
 
     // ⑫ 鉴权：未登录拿 status / audio 都是 401

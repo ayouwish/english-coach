@@ -34,6 +34,12 @@ export interface ChatAudioMeta {
   status: ChatAudioStatus;
   turn_count: number;
   error?: string;
+  /** 失败时间（用于 60s backoff，避免 TTS 被刷爆） */
+  failed_at?: string;
+  /** 连续失败次数（≥3 后要求手动「重新生成」） */
+  attempts?: number;
+  /** 失败分类，便于 UI/排障（tts_unavailable / concat_unavailable / provider_error / no_audio） */
+  error_code?: string;
   started_at?: string;
   ready_at?: string | null;
   /** 额外信息：拼进来的段数与缺录音的消息（排障用） */
@@ -47,6 +53,12 @@ export interface ChatAudioState {
   status: ChatAudioStatus;
   turn_count: number;
   error?: string;
+  /** 失败分类（tts_unavailable / concat_unavailable / provider_error / no_audio） */
+  error_code?: string;
+  /** 连续失败次数（≥3 必须手动重新生成） */
+  attempts?: number;
+  /** 是否允许自动重试（false 时 UI 只显示「重新生成」按钮） */
+  auto_retry: boolean;
   duration_ms?: number;
 }
 
@@ -142,20 +154,84 @@ function mimeForAudioPath(rel: string | null): string {
   return "audio/webm";
 }
 
-function readableBuildError(err: unknown): string {
-  if (err instanceof ChatAudioBuildError) return err.message;
-  if (err instanceof VoiceError) {
-    const unavailable =
-      err.code === "voice_unreachable" ||
-      err.status === 404 ||
-      err.status === 503 ||
-      err.status === 504;
-    if (unavailable) {
-      return "音频拼接服务暂未就绪（voice /v1/audio/concat 未上线）。可以先看文字记录。";
-    }
-    return `拼装对话音频失败：${err.message}`;
+/** 构建阶段标记：错误归因必须准确（TTS 失败 vs concat 未就绪，别互相甩锅） */
+class StageError extends Error {
+  stage: "tts" | "concat";
+  cause: unknown;
+  index?: number;
+  constructor(stage: "tts" | "concat", cause: unknown, index?: number) {
+    const base = cause instanceof Error ? cause.message : String(cause);
+    super(`[${stage}] ${base}`);
+    this.name = "StageError";
+    this.stage = stage;
+    this.cause = cause;
+    this.index = index;
   }
-  return GENERIC_BUILD_ERROR;
+}
+
+export interface BuildFailure {
+  message: string;
+  code: string;
+}
+
+/** 把构建异常翻译成「用户能看懂 + 归因正确」的文案（Lead：别再一律说 concat 未上线） */
+export function describeBuildFailure(err: unknown): BuildFailure {
+  if (err instanceof ChatAudioBuildError) return { message: err.message, code: "no_audio" };
+  if (err instanceof StageError) {
+    const cause = err.cause;
+    const ve = cause instanceof VoiceError ? cause : null;
+    const status = ve?.status;
+    const code = ve?.code ?? "provider_error";
+    if (err.stage === "tts") {
+      const unavailable = status === 503 || status === 429 || code === "provider_timeout" || code === "voice_unreachable";
+      if (unavailable) {
+        return {
+          message: `语音合成暂时不可用（${status ?? code}），稍后可重试。可以先看文字记录。`,
+          code: "tts_unavailable",
+        };
+      }
+      return {
+        message: `语音合成失败（${code}${status ? `/${status}` : ""}）：${(ve?.message ?? String(cause)).slice(0, 120)}`,
+        code: "tts_failed",
+      };
+    }
+    const unavailable = status === 404 || status === 503 || status === 504 || code === "voice_unreachable";
+    if (unavailable) {
+      return {
+        message: `音频拼接服务暂未就绪（voice /v1/audio/concat ${status ?? code}）。可以先看文字记录。`,
+        code: "concat_unavailable",
+      };
+    }
+    return {
+      message: `拼装对话音频失败（${code}${status ? `/${status}` : ""}）：${(ve?.message ?? String(cause)).slice(0, 120)}`,
+      code: "provider_error",
+    };
+  }
+  if (err instanceof VoiceError) {
+    const unavailable = err.code === "voice_unreachable" || err.status === 404 || err.status === 503;
+    return {
+      message: unavailable ? `音频拼接服务暂未就绪（${err.code}/${err.status ?? "-"}）。可以先看文字记录。` : `拼装对话音频失败：${err.message}`,
+      code: unavailable ? "concat_unavailable" : "provider_error",
+    };
+  }
+  return { message: GENERIC_BUILD_ERROR, code: "provider_error" };
+}
+
+const FAILED_BACKOFF_MS = 60_000;
+const MAX_AUTO_ATTEMPTS = 3;
+
+/**
+ * 失败后是否允许**自动**重建（Lead 补 bug ②）：
+ * - 60s 内 → 不自动重试（避免 TTS 被刷到 429/503 的恶性循环）
+ * - 连续失败 ≥3 次 → 必须手动「重新生成」（?force=1）
+ */
+export function shouldAutoRetry(meta: ChatAudioMeta | null, now = Date.now()): boolean {
+  if (!meta || meta.status !== "failed") return true;
+  const attempts = Number(meta.attempts ?? 1);
+  if (attempts >= MAX_AUTO_ATTEMPTS) return false;
+  const failedAt = meta.failed_at ? Date.parse(meta.failed_at) : 0;
+  if (!failedAt) return true;
+  return now - failedAt > FAILED_BACKOFF_MS;
 }
 
 /**
@@ -232,6 +308,18 @@ async function doBuildSessionAudio(
 
   const turnCount = session.turnCount;
   const startedAt = new Date().toISOString();
+
+  // 失败 backoff：60s 内或连续失败 ≥3 次 → 不自动重建（只有 force=1 才重试，避免 TTS 被刷爆）
+  if (!force) {
+    const prev = readChatAudioMeta(sessionId);
+    if (prev?.status === "failed" && !shouldAutoRetry(prev)) {
+      console.warn(
+        `[chat-audio] backoff 命中（${safeSessionId(sessionId)}）：attempts=${prev.attempts ?? "?"}，跳过自动重建`,
+      );
+      return { ...prev, turn_count: turnCount };
+    }
+  }
+
   writeChatAudioMeta(sessionId, {
     status: "building",
     turn_count: turnCount,
@@ -263,13 +351,30 @@ async function doBuildSessionAudio(
           missing.push(m.id);
         }
       } else if (m.role === "assistant" && m.text.trim()) {
-        const tts = await callTts({ text: m.text, rate: "normal", format: "wav" });
+        // 串行取 TTS（并发 1）：命中缓存秒回；单条失败只重试 1 次（间隔 500ms），仍失败 → 整体 failed（注明哪条）
+        let tts: Awaited<ReturnType<typeof callTts>> | null = null;
+        let lastErr: unknown = null;
+        for (let tryIdx = 0; tryIdx < 2; tryIdx++) {
+          try {
+            tts = await callTts({ text: m.text, rate: "normal", format: "wav" });
+            break;
+          } catch (err) {
+            lastErr = err;
+            if (tryIdx === 0) await new Promise((r) => setTimeout(r, 500));
+          }
+        }
+        if (!tts) throw new StageError("tts", lastErr, parts.length);
         parts.push({ data: new Uint8Array(tts.body), mime: "audio/wav", filename: "a.wav" });
       }
     }
     if (parts.length === 0) throw new ChatAudioBuildError(NO_AUDIO_ERROR);
 
-    const merged = await callAudioConcat(parts, GAP_MS);
+    let merged: Awaited<ReturnType<typeof callAudioConcat>>;
+    try {
+      merged = await callAudioConcat(parts, GAP_MS);
+    } catch (err) {
+      throw new StageError("concat", err);
+    }
     fs.mkdirSync(CHAT_AUDIO_DIR, { recursive: true });
     const tmp = `${audioFile}.tmp-${process.pid}-${Date.now()}`;
     fs.writeFileSync(tmp, merged.bytes);
@@ -279,6 +384,9 @@ async function doBuildSessionAudio(
     const meta: ChatAudioMeta = {
       status: "ready",
       turn_count: turnCount,
+      attempts: 0,
+      failed_at: undefined,
+      error_code: undefined,
       started_at: startedAt,
       ready_at: readyAt,
       parts: parts.length,
@@ -288,19 +396,31 @@ async function doBuildSessionAudio(
     writeChatAudioMeta(sessionId, meta);
     return meta;
   } catch (err) {
-    const error = readableBuildError(err);
+    const failure = describeBuildFailure(err);
+    const prev = readChatAudioMeta(sessionId);
+    const attempts = (prev?.status === "failed" ? Number(prev.attempts ?? 0) : 0) + 1;
+    const cause = err instanceof StageError ? err.cause : err;
     const raw =
-      err instanceof VoiceError ? `（raw: ${err.code}/${err.status ?? "-"} ${err.message}）` : "";
-    console.warn(`[chat-audio] 构建失败（${safeSessionId(sessionId)}）：${error}${raw}`);
+      cause instanceof VoiceError
+        ? `（raw: ${cause.code}/${cause.status ?? "-"} ${cause.message}）`
+        : err instanceof Error
+          ? `（raw: ${err.message}）`
+          : "";
+    console.warn(
+      `[chat-audio] 构建失败（${safeSessionId(sessionId)}，attempts=${attempts}，stage=${err instanceof StageError ? err.stage : "-"}/${failure.code}）：${failure.message}${raw}`,
+    );
     writeChatAudioMeta(sessionId, {
       status: "failed",
       turn_count: turnCount,
-      error,
+      error: failure.message,
+      error_code: failure.code,
+      attempts,
+      failed_at: new Date().toISOString(),
       started_at: startedAt,
       ready_at: null,
     });
     if (err instanceof ChatAudioBuildError) throw err;
-    throw new ChatAudioBuildError(error);
+    throw new ChatAudioBuildError(failure.message);
   }
 }
 
@@ -317,16 +437,17 @@ export function getChatAudioState(sessionId: string, turnCount: number): ChatAud
   const meta = readChatAudioMeta(sessionId);
 
   if (building) {
-    return { status: "building", turn_count: meta?.turn_count ?? turnCount };
+    return { status: "building", turn_count: meta?.turn_count ?? turnCount, auto_retry: true };
   }
   if (!meta) {
-    return { status: "building", turn_count: turnCount };
+    return { status: "building", turn_count: turnCount, auto_retry: true };
   }
   if (meta.status === "building") {
     return {
       status: "failed",
       turn_count: meta.turn_count ?? turnCount,
       error: STALE_BUILDING_ERROR,
+      auto_retry: true,
     };
   }
   if (meta.status === "failed") {
@@ -334,6 +455,9 @@ export function getChatAudioState(sessionId: string, turnCount: number): ChatAud
       status: "failed",
       turn_count: meta.turn_count ?? turnCount,
       error: meta.error ?? GENERIC_BUILD_ERROR,
+      error_code: meta.error_code,
+      attempts: meta.attempts,
+      auto_retry: shouldAutoRetry(meta),
     };
   }
 
@@ -343,12 +467,14 @@ export function getChatAudioState(sessionId: string, turnCount: number): ChatAud
       status: "failed",
       turn_count: meta.turn_count ?? turnCount,
       error: "回放文件不见了，点「重新生成」再试一次",
+      auto_retry: true,
     };
   }
   const duration = wavDurationMs(fs.readFileSync(audioFile));
   return {
     status: "ready",
     turn_count: meta.turn_count ?? turnCount,
+    auto_retry: true,
     ...(duration ? { duration_ms: duration } : {}),
   };
 }

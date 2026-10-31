@@ -49,8 +49,8 @@ export const GET = route(async (req: NextRequest, ctx: { params: Promise<{ id: s
     });
   }
 
-  if (!force && state.status === "failed" && meta?.status === "failed" && state.attempt_count === 0) {
-    // 没有录音：直接给可读提示（不反复重建）
+  if (!force && state.attempt_count === 0) {
+    // 该用户在这个故事上还没有录音：直接 404 可读提示（不打包别人的录音，也不反复重建）
     return jsonError(404, "no_audio", state.error ?? "还没有可回放的朗读录音");
   }
   if (!force && meta?.status === "failed" && state.attempt_count > 0) {

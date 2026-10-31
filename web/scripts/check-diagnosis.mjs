@@ -394,6 +394,41 @@ section("task-71 · 作用域诊断（attempt / batch / recent）+ 对子去重"
   }
 }
 
+
+// ── task-74 ⑤：/report「最近练习记录」（跟读可回溯 + 听我读的）────────────────
+section("task-74 · /report 最近练习记录（attempts 回溯 + 音频）");
+{
+  const DB_PATH = process.env.DB_PATH ?? path.join(WEB_ROOT, "data/app.db");
+  const ts = Date.now();
+  const rel = `audio/u-girl/task74-report-${ts}.wav`;
+  const abs = path.join(WEB_ROOT, "data", rel);
+  fs.mkdirSync(path.dirname(abs), { recursive: true });
+  const TINY_WAV = Buffer.from("UklGRiQAAABXQVZFZm10IBAAAAABAAEAQB8AAEAfAAABAAgAZGF0YQAAAAA=", "base64");
+  fs.writeFileSync(abs, TINY_WAV);
+  const attemptId = `att_t74_report_${ts}`;
+  const db = new Database(DB_PATH);
+  db.prepare(
+    "INSERT INTO attempts (id, user_id, reference_text, created_at, status, scored_at, scores_json, warnings_json, audio_path) VALUES (?, 'u-girl', ?, ?, 'done', ?, ?, '[]', ?)",
+  ).run(attemptId, "I think this is thin.", new Date().toISOString(), new Date().toISOString(), JSON.stringify({ pron: 88 }), rel);
+  try {
+    const report = await get("/report", girl.cookie);
+    const audioSrc = `/api/audio/${attemptId}`;
+    check("★ /report 含「最近练习记录」区块", report.status === 200 && report.text.includes('data-testid="recent-practice"') && /最近练习记录/.test(report.text));
+    check("★ 记录里有条目（practice-record-item）", report.text.includes('data-testid="practice-record-item"'));
+    check("★ 条目带「听我读的」音频（src=/api/audio/<id>）", report.text.includes(audioSrc));
+    check("儿童记录不显示数字分数（只显示「读过了」）", report.text.includes("读过了") && !/\\b88\\s*分/.test(report.text));
+    check("儿童 /report 零 IPA", IPA.filter((c) => report.text.includes(c)).length === 0, IPA.filter((c) => report.text.includes(c)).join(""));
+    const audioRes = await fetch(`${BASE}${audioSrc}`, { headers: { cookie: girl.cookie } });
+    check("★ 练习录音可播放（200 audio/*）", audioRes.status === 200 && (audioRes.headers.get("content-type") ?? "").startsWith("audio/"), `status=${audioRes.status} type=${audioRes.headers.get("content-type")}`);
+    const dadReport = await get("/report", dad.cookie);
+    check("家长 /report 也有最近练习记录", dadReport.text.includes('data-testid="recent-practice"'));
+  } finally {
+    db.prepare("DELETE FROM attempts WHERE id = ?").run(attemptId);
+    db.close();
+    if (fs.existsSync(abs)) fs.rmSync(abs);
+  }
+}
+
 console.log(`\n合计失败 ${failed} 项`);
 console.log(failed === 0 ? "结论：全部通过 ✅" : "结论：存在失败 ❌");
 process.exit(failed > 0 ? 1 : 0);

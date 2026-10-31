@@ -9,6 +9,7 @@ import {
   getChatAudioState,
   isChatAudioReady,
   readChatAudioMeta,
+  shouldAutoRetry,
   triggerChatAudioBuild,
 } from "@/lib/chat-audio";
 import { jsonError, jsonOk, route } from "@/lib/http";
@@ -56,9 +57,14 @@ export const GET = route(async (req: NextRequest, ctx: { params: Promise<{ id: s
 
   const meta = readChatAudioMeta(id);
 
-  // 2) 上次失败：不自动重试，给可读错误；用户点「重新生成」带 force=1
+  // 2) 上次失败：60s 内 / 连续失败 ≥3 次 → 不自动重试，直接给**真实原因**；
+  //    只有 ?force=1 或超过 backoff 窗口才重建（避免 TTS 被刷到 429/503 的恶性循环）
   if (!force && meta?.status === "failed") {
-    return jsonError(500, "audio_failed", meta.error ?? "拼装对话音频出错了，请稍后再试");
+    if (shouldAutoRetry(meta)) {
+      // 超过 backoff 且失败次数 <3 → 允许一次自动重试
+    } else {
+      return jsonError(500, meta.error_code ?? "audio_failed", meta.error ?? "拼装对话音频出错了，请稍后再试");
+    }
   }
 
   // 3) building / 无缓存 / 缓存过期 / force → 触发后台构建，立即 202
