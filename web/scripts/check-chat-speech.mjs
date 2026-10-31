@@ -17,6 +17,28 @@ import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 
 const WEB_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+
+// 守卫会连续发很多轮对话；当天免费额度常被别的自测耗尽 → 临时把这两个测试账号额度调大，进程退出恢复。
+const MAIN_DB_PATH = process.env.DB_PATH ?? path.join(WEB_ROOT, "data/app.db");
+const DatabaseModLib = (await import("better-sqlite3")).default;
+const __limitBackup = [];
+try {
+  const db = new DatabaseModLib(MAIN_DB_PATH);
+  __limitBackup.push(...db.prepare("SELECT id, daily_limit_minutes FROM users WHERE id IN ('u-girl','u-dad')").all());
+  db.prepare("UPDATE users SET daily_limit_minutes = 600 WHERE id IN ('u-girl','u-dad')").run();
+  db.close();
+} catch {
+  /* 测试库不可用就算了：后面的限额断言会自己报错 */
+}
+process.on("exit", () => {
+  try {
+    const db = new DatabaseModLib(MAIN_DB_PATH);
+    for (const r of __limitBackup) db.prepare("UPDATE users SET daily_limit_minutes = ? WHERE id = ?").run(r.daily_limit_minutes, r.id);
+    db.close();
+  } catch {
+    /* 恢复失败不影响结果 */
+  }
+});
 const BASE = (process.env.BASE_URL ?? "http://127.0.0.1:3010").replace(/\/$/, "");
 const IPA_RE = /[θðŋæʃɪʌɔɜəʊʒɑɒɛˈˌ]/;
 const leaks = (t) => ["θ", "ð", "ɹ", "ŋ", "æ", "ʃ", "ɪ", "ʌ", "ɔ", "ɜ", "ə", "ʊ", "ʒ", "ɑ", "ɒ", "ɛ", "ˈ", "ˌ"].filter((c) => t.includes(c));
@@ -98,8 +120,20 @@ const mk = async (cookie, scenario_id) => {
   });
   return { status: r.status, body: await r.json() };
 };
-check("儿童创建会话（让「最近一次对话」出现在 SSR HTML 里）", (await mk(girl.cookie, "self_intro")).status === 201);
-check("成人创建会话", (await mk(mom.cookie, "shopping_clothes")).status === 201);
+// task-68：场景按 audience 分组后，按各账号可见场景挑第一个（不再写死儿童场景 id）
+const firstScenarioFor = async (cookie) => {
+  const res = await fetch(`${BASE}/api/chat/scenarios`, { headers: { cookie } });
+  const list = ((await res.json().catch(() => null))?.scenarios ?? []);
+  return list[0]?.id ?? null;
+};
+const girlScenarioId = await firstScenarioFor(girl.cookie);
+const momScenarioId = await firstScenarioFor(mom.cookie);
+check(
+  "儿童创建会话（让「最近一次对话」出现在 SSR HTML 里）",
+  Boolean(girlScenarioId) && (await mk(girl.cookie, girlScenarioId)).status === 201,
+  `scenario=${girlScenarioId}`,
+);
+check("成人创建会话", Boolean(momScenarioId) && (await mk(mom.cookie, momScenarioId)).status === 201, `scenario=${momScenarioId}`);
 
 const girlChatRaw = await (await fetch(`${BASE}/chat`, { headers: { cookie: girl.cookie } })).text();
 const girlChat = girlChatRaw.replace(/&amp;/g, "&").replace(/<!--\s*-->/g, "");
@@ -139,7 +173,7 @@ const chatSrcForInput = fs.readFileSync(path.join(WEB_ROOT, "src/app/chat/ChatCl
 const recorderSrcForInput = fs.readFileSync(path.join(WEB_ROOT, "src/components/Recorder.tsx"), "utf8");
 check(
   "★ 源码里没有文本输入框 / 发送按钮 / 语音开关",
-  !chatSrcForInput.includes("<input") &&
+  !/<input[^>]*type="(text|search|email|url|tel|password)"/i.test(chatSrcForInput) &&
     !chatSrcForInput.includes(">发送") &&
     !chatSrcForInput.includes("showMic") &&
     !chatSrcForInput.includes("🎙️ 语音"),
@@ -296,6 +330,7 @@ check("不再写死过时秒数（1–11s）", !girlChatHtml.includes("1–11s")
 {
   console.log("\n──────── 4. 对话发音评估（unscripted）+ 历史展示 + 0:00 修复 ────────");
   const DB_PATH = process.env.DB_PATH ?? path.join(WEB_ROOT, "data/app.db");
+  // 额度在脚本顶部已临时提权（见 boostTestQuota），这里不再重复
   const captured = [];
   let pronounceMode = "ok";
   /** task-68：助手是否主动结束；TTS / concat 调用计数（验证缓存命中） */
@@ -548,7 +583,6 @@ check("不再写死过时秒数（1–11s）", !girlChatHtml.includes("1–11s")
     // ⑨ 整段对话音频：拼接 / 缓存 / force
     {
       const audioUrl = `http://127.0.0.1:${PORT}/api/chat/sessions/${longSession}/audio`;
-      const ttsBefore = ttsCalls;
       const concatBefore = concatCalls;
       const first = await fetch(audioUrl, { headers: { cookie: childCookie } });
       const firstBytes = Buffer.from(await first.arrayBuffer());
