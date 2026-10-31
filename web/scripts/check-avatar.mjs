@@ -99,12 +99,55 @@ async function main() {
   console.log(`   ↳ presets：HTTP ${presets.status} · styles=${presets.json?.styles?.length} characters=${presets.json?.characters?.length} placeholder=${presets.json?.placeholder}`);
   check("★ GET /api/avatar/presets → 200", presets.status === 200, `status=${presets.status}`);
   check("★ 含 5 种风格", (presets.json?.styles ?? []).length === 5, JSON.stringify((presets.json?.styles ?? []).map((s) => s.label_zh)));
-  check("★ 含 8 个角色", (presets.json?.characters ?? []).length === 8, JSON.stringify((presets.json?.characters ?? []).map((c) => c.label_zh)));
+  {
+    const chars = presets.json?.characters ?? [];
+    check("★ 含 12 个角色（8 儿童 + 4 成人）", chars.length === 12, `count=${chars.length}`);
+    const childCount = chars.filter((c) => c.audience === "child").length;
+    const adultCount = chars.filter((c) => c.audience === "adult").length;
+    check("★ audience 分组正确（8 child / 4 adult）", childCount === 8 && adultCount === 4, `child=${childCount} adult=${adultCount}`);
+    check("每个角色 5 张图（按风格）", chars.every((c) => Object.keys(c.images ?? {}).length === 5));
+    check("角色含中文名 label_zh", chars.every((c) => Boolean(c.label_zh)));
+  }
   check("占位图标记可读（placeholder 明确）", typeof presets.json?.placeholder === "boolean", String(presets.json?.placeholder));
   const c1 = presets.json?.characters?.find((c) => c.id === "c1");
   const imgPath = c1?.images?.watercolor ?? "";
   const imgRes = await fetch(`${BASE}${imgPath}`, { headers: { cookie: girlCookie } });
   check("★ 预置图静态可访问（200 image/png）", imgRes.status === 200 && (imgRes.headers.get("content-type") ?? "").includes("image/png"), `${imgPath} status=${imgRes.status}`);
+
+  // ── 1b) voice 不可用时回退 bundled manifest（离线兜底）─────────────────
+  {
+    const deadPort = PORT + 10;
+    const dead = spawn("pnpm", ["exec", "next", "start", "-p", String(deadPort)], {
+      cwd: WEB_ROOT,
+      env: { ...process.env, VOICE_SERVICE_URL: "http://127.0.0.1:9" },
+      stdio: "ignore",
+    });
+    try {
+      let up = false;
+      for (let i = 0; i < 50; i++) {
+        await new Promise((r) => setTimeout(r, 500));
+        try {
+          const r = await fetch(`http://127.0.0.1:${deadPort}/api/health`, { signal: AbortSignal.timeout(1500) });
+          if (r.ok) {
+            up = true;
+            break;
+          }
+        } catch {
+          /* retry */
+        }
+      }
+      const res = await fetch(`http://127.0.0.1:${deadPort}/api/avatar/presets`, { headers: { cookie: girlCookie } });
+      const body = await res.json().catch(() => null);
+      console.log(`   ↳ voice 不可用实例：HTTP ${res.status} · characters=${body?.characters?.length}`);
+      check(
+        "★ voice 不可用时回退 bundled manifest（仍 200 且 12 角色）",
+        up && res.status === 200 && (body?.characters ?? []).length === 12,
+        `up=${up} status=${res.status} count=${(body?.characters ?? []).length}`,
+      );
+    } finally {
+      dead.kill("SIGTERM");
+    }
+  }
 
   // ── 2) 选择立即生效（<1s，无生成）──────────────────────────────────────
   const choose = await postJson("/api/avatar", { preset_id: "c3", style: "cartoon" }, girlCookie);
@@ -127,6 +170,11 @@ async function main() {
   // 家长也能选（换风格）
   const dadChoose = await postJson("/api/avatar", { preset_id: "c5", style: "pixel" }, dadCookie);
   check("家长也能选择（pixel 风格）", dadChoose.status === 200 && dadChoose.json?.style === "pixel", `status=${dadChoose.status}`);
+  // ★ 家长选成人角色（c9–c12）
+  const dadAdult = await postJson("/api/avatar", { preset_id: "c10", style: "clay" }, dadCookie);
+  check("★ 家长能选成人角色 c10 → 200", dadAdult.status === 200 && dadAdult.json?.preset_id === "c10", `status=${dadAdult.status} preset=${dadAdult.json?.preset_id}`);
+  const dadState = await getJson("/api/avatar", dadCookie);
+  check("★ GET 与家长选择一致（c10/clay）", dadState.json?.preset_id === "c10" && dadState.json?.style === "clay", JSON.stringify(dadState.json ?? {}).slice(0, 120));
 
   // ── 3) 合法性与写实硬拒绝 ───────────────────────────────────────────────
   const badPreset = await postJson("/api/avatar", { preset_id: "nope", style: "cartoon" }, girlCookie);
@@ -160,8 +208,19 @@ async function main() {
       !/type="file"/.test(html) && !/avatar-pick|重新选照片|选择照片/.test(html) && /不用上传照片/.test(html),
     );
     check("★ 含 5 个风格卡片", ["watercolor", "cartoon", "pixel", "papercut", "clay"].every((s) => html.includes(`data-testid="avatar-style-${s}"`)));
-    check("★ 含 8 个角色网格（avatar-preset-c1..c8）", ["c1", "c2", "c3", "c4", "c5", "c6", "c7", "c8"].every((c) => html.includes(`data-testid="avatar-preset-${c}"`)));
+    check(
+      "★ 儿童页面默认分组 = 给小朋友的（c1–c8 可见）",
+      ["c1", "c2", "c3", "c4", "c5", "c6", "c7", "c8"].every((c) => html.includes(`data-testid="avatar-preset-${c}"`)),
+    );
+    check("儿童默认不展示成人角色卡片（c9–c12 不在默认组）", !["c9", "c10", "c11", "c12"].some((c) => html.includes(`data-testid="avatar-preset-${c}"`)));
+    check("★ 有分组切换 tab（给小朋友的 / 给爸爸妈妈的）", html.includes('data-testid="avatar-audience-child"') && html.includes('data-testid="avatar-audience-adult"'));
     check("儿童页面零 IPA、无字面 **", leaks(html).length === 0 && !html.includes("**"), `leaked=${leaks(html).join("")}`);
+    const dadSettings = await (await fetch(`${BASE}/settings`, { headers: { cookie: dadCookie } })).text();
+    check(
+      "★ 家长页面默认分组 = 给爸爸妈妈的（c9–c12 可见）",
+      ["c9", "c10", "c11", "c12"].every((c) => dadSettings.includes(`data-testid="avatar-preset-${c}"`)),
+    );
+    check("家长默认不展示儿童角色卡片（c1–c8 不在默认组）", !/data-testid="avatar-preset-c[1-8]"/.test(dadSettings));
     const chatHtml = await (await fetch(`${BASE}/chat`, { headers: { cookie: girlCookie } })).text();
     check("★ 导航栏显示预置头像（静态图 URL）", chatHtml.includes('data-testid="nav-avatar"') && chatHtml.includes("/avatars/presets/"));
   }

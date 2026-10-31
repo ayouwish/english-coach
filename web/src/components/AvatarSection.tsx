@@ -5,7 +5,13 @@ import { AVATAR_STYLE_LABELS, MAX_DESC_LENGTH, type AvatarStyle } from "@/lib/av
 
 interface Presets {
   styles: { id: string; label_zh: string }[];
-  characters: { id: string; label_zh: string; desc_en: string; images: Record<string, string> }[];
+  characters: {
+    id: string;
+    label_zh: string;
+    desc_en: string;
+    audience: "child" | "adult";
+    images: Record<string, string>;
+  }[];
   placeholder: boolean;
 }
 
@@ -48,6 +54,10 @@ export function AvatarSection({
 
   const [editingDesc, setEditingDesc] = useState(false);
   const [desc, setDesc] = useState(initialAvatar?.character_desc ?? "");
+  /** 形象分组（task-66：儿童/成人）——儿童默认「给小朋友的」，家长默认「给爸爸妈妈的」 */
+  const [audience, setAudience] = useState<"child" | "adult">(isChild ? "child" : "adult");
+  /** 图片加载失败的卡片（缺图时显示占位，不崩） */
+  const [brokenImages, setBrokenImages] = useState<Record<string, boolean>>({});
 
   /** 首屏已有服务端数据时，只在挂载后轻量刷新一次（不闪 loading） */
   useEffect(() => {
@@ -67,7 +77,10 @@ export function AvatarSection({
       } else {
         setPresets({
           styles: pData.styles ?? [],
-          characters: pData.characters ?? [],
+          characters: (pData.characters ?? []).map((c) => ({
+            ...c,
+            audience: c.audience === "adult" ? ("adult" as const) : ("child" as const),
+          })),
           placeholder: pData.placeholder === true,
         });
       }
@@ -176,7 +189,10 @@ export function AvatarSection({
     }
   }
 
-  const characters = presets?.characters ?? [];
+  const allCharacters = presets?.characters ?? [];
+  const characters = allCharacters.filter((c) => (c.audience ?? "child") === audience);
+  const childCount = allCharacters.filter((c) => (c.audience ?? "child") === "child").length;
+  const adultCount = allCharacters.filter((c) => c.audience === "adult").length;
   const hasAvatar = Boolean(state?.avatar_url);
 
   return (
@@ -261,11 +277,34 @@ export function AvatarSection({
             ))}
           </div>
 
-          <p className="mt-3 text-sm font-semibold">第 2 步：选一个形象（{isChild ? "选一个你喜欢的我" : "8 个角色"}）</p>
-          <div className="mt-1 grid grid-cols-2 gap-2 sm:grid-cols-4" data-testid="avatar-character-grid">
+          <p className="mt-3 text-sm font-semibold">
+            第 2 步：选一个形象（{audience === "child" ? (isChild ? "选一个你喜欢的我" : "给小朋友的") : isChild ? "给爸爸妈妈的" : "选一个你的形象"}）
+          </p>
+          <div className="mt-1 flex flex-wrap gap-2" data-testid="avatar-audience-tabs">
+            <button
+              type="button"
+              data-testid="avatar-audience-child"
+              aria-pressed={audience === "child"}
+              onClick={() => setAudience("child")}
+              className={`ec-btn ${audience === "child" ? "ec-btn-primary" : "ec-btn-ghost"} ${isChild ? "text-base" : "text-sm"}`}
+            >
+              🧒 给小朋友的（{childCount}）
+            </button>
+            <button
+              type="button"
+              data-testid="avatar-audience-adult"
+              aria-pressed={audience === "adult"}
+              onClick={() => setAudience("adult")}
+              className={`ec-btn ${audience === "adult" ? "ec-btn-primary" : "ec-btn-ghost"} ${isChild ? "text-base" : "text-sm"}`}
+            >
+              🧑 给爸爸妈妈的（{adultCount}）
+            </button>
+          </div>
+          <div className="mt-2 grid grid-cols-2 gap-2 sm:grid-cols-4" data-testid="avatar-character-grid">
             {characters.map((c) => {
               const img = c.images[style] ?? "";
               const active = presetId === c.id;
+              const broken = brokenImages[c.id];
               return (
                 <button
                   key={c.id}
@@ -277,8 +316,19 @@ export function AvatarSection({
                     active ? "border-[var(--ec-primary)] bg-[var(--ec-primary-soft)]" : "border-[#e6e8f5] bg-white"
                   }`}
                 >
-                  {/* eslint-disable-next-line @next/next/no-img-element -- 预置静态图 */}
-                  <img src={img} alt={c.label_zh} className="h-16 w-16 rounded-lg object-cover" />
+                  {broken || !img ? (
+                    <span className="flex h-16 w-16 items-center justify-center rounded-lg bg-[#eef0f8] text-2xl" data-testid="avatar-image-placeholder">
+                      🙂
+                    </span>
+                  ) : (
+                    // eslint-disable-next-line @next/next/no-img-element -- 预置静态图
+                    <img
+                      src={img}
+                      alt={c.label_zh}
+                      className="h-16 w-16 rounded-lg object-cover"
+                      onError={() => setBrokenImages((prev) => ({ ...prev, [c.id]: true }))}
+                    />
+                  )}
                   <span className={isChild ? "text-sm font-semibold" : "text-xs font-semibold"}>{c.label_zh}</span>
                 </button>
               );

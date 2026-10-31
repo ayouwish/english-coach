@@ -57,19 +57,31 @@ def _photo_bytes() -> bytes:
 # A. 定义完整性
 # --------------------------------------------------------------------------------------
 def test_preset_definitions_complete_and_unique():
-    assert len(PRESET_CHARACTERS) == 8
+    assert len(PRESET_CHARACTERS) == 12, "8 儿童 + 4 成人"
+    audiences = [character.get("audience") for character in PRESET_CHARACTERS]
+    assert audiences.count("child") == 8
+    assert audiences.count("adult") == 4
+    assert set(audiences) == {"child", "adult"}
     assert preset_style_ids() == ["watercolor", "cartoon", "pixel", "papercut", "clay"]
     assert len(PRESET_STYLES) == 5
     character_ids = [character["id"] for character in PRESET_CHARACTERS]
-    assert len(set(character_ids)) == 8, "角色 id 必须唯一"
+    assert len(set(character_ids)) == 12, "角色 id 必须唯一"
+    assert character_ids == [f"c{i}" for i in range(1, 13)]
     filenames = {preset_filename(c["id"], s) for c in PRESET_CHARACTERS for s in preset_style_ids()}
-    assert len(filenames) == 40, "40 个文件名必须唯一"
+    assert len(filenames) == 60, "60 个文件名必须唯一"
+    # 成人角色描述以 adult 开头，儿童以 child 开头
+    for character in PRESET_CHARACTERS:
+        desc = character["desc_en"].lower()
+        if character["audience"] == "adult":
+            assert desc.startswith("an adult "), desc
+        else:
+            assert desc.startswith("a child with "), desc
 
 
 def test_preset_descriptions_are_child_safe():
     for character in PRESET_CHARACTERS:
         desc = character["desc_en"]
-        assert desc.startswith("a child with "), desc
+        assert desc.startswith(("a child with ", "an adult ")), desc
         lowered = desc.lower()
         for word in BANNED_DESC_WORDS:
             assert not re.search(rf"\b{re.escape(word)}\b", lowered), (
@@ -81,14 +93,21 @@ def test_preset_descriptions_are_child_safe():
         assert "no text in image" in prompt
         assert "safe for young children" in prompt
         assert parts["character"] == desc
+        if character["audience"] == "adult":
+            assert prompt.startswith("cute illustrated family character portrait"), prompt
+        else:
+            assert prompt.startswith("children's picture book character portrait"), prompt
     assert PRESET_SAFETY.startswith("cute cartoon character")
 
 
 def test_metadata_structure():
     meta = build_presets_metadata(provider="mock", placeholder=True)
     assert meta["provider"] == "mock" and meta["placeholder"] is True
-    assert len(meta["styles"]) == 5 and len(meta["characters"]) == 8
-    assert len(meta["presets"]) == 40
+    assert meta["version"] == 2, "manifest 版本应递增到 2"
+    assert len(meta["styles"]) == 5 and len(meta["characters"]) == 12
+    assert len(meta["presets"]) == 60
+    assert all("audience" in character for character in meta["characters"])
+    assert all("audience" in item for item in meta["presets"])
     for character in meta["characters"]:
         assert set(character["images"]) == set(preset_style_ids())
         for style, filename in character["images"].items():
@@ -105,9 +124,12 @@ def test_presets_endpoint_structure(client, monkeypatch):
     body = response.json()
     assert body["provider"] == "mock"
     assert body["placeholder"] is True
+    assert body["version"] == 2
     assert len(body["styles"]) == 5
-    assert len(body["characters"]) == 8
+    assert len(body["characters"]) == 12
+    assert sum(1 for character in body["characters"] if character["audience"] == "adult") == 4
     for character in body["characters"]:
+        assert character["audience"] in ("child", "adult")
         assert set(character["images"]) == set(preset_style_ids())
         for filename in character["images"].values():
             assert filename.endswith(".png")
@@ -188,16 +210,16 @@ def test_capabilities_avatar_presets_and_photo_flag(client, monkeypatch):
 # --------------------------------------------------------------------------------------
 # D. 生成脚本：mock 40 张占位图 / 幂等 / force
 # --------------------------------------------------------------------------------------
-def test_script_generates_40_placeholder_pngs(capsys, tmp_path, monkeypatch):
+def test_script_generates_60_placeholder_pngs(capsys, tmp_path, monkeypatch):
     module = _load_script()
     out = tmp_path / "presets"
     code = module.main(["--provider", "mock", "--out-dir", str(out)])
     assert code == 0
     stdout, _stderr = capsys.readouterr()
-    assert "generated=40" in stdout
+    assert "generated=60" in stdout
 
     files = sorted(out.glob("*.png"))
-    assert len(files) == 40
+    assert len(files) == 60
     for path in files:
         with Image.open(path) as image:
             assert image.size == (1280, 1280), path.name
@@ -206,11 +228,12 @@ def test_script_generates_40_placeholder_pngs(capsys, tmp_path, monkeypatch):
     assert metadata is not None
     assert metadata["provider"] == "mock"
     assert metadata["placeholder"] is True
-    assert len(metadata["presets"]) == 40
+    assert metadata["version"] == 2
+    assert len(metadata["presets"]) == 60
     assert all(item["placeholder"] for item in metadata["presets"])
 
     total = sum(path.stat().st_size for path in files) + (out / "avatars-presets.json").stat().st_size
-    assert total < 40 * 200 * 1024, "40 张产物应 < 8MB（占位图远小于此）"
+    assert total < 60 * 200 * 1024, "60 张产物应 < 12MB（占位图远小于此）"
 
 
 def test_script_is_idempotent_and_force(capsys, tmp_path):
@@ -221,12 +244,12 @@ def test_script_is_idempotent_and_force(capsys, tmp_path):
     first_bytes = (out / "c1-watercolor.png").read_bytes()
     assert module.main(["--provider", "mock", "--out-dir", str(out)]) == 0
     stdout, _ = capsys.readouterr()
-    assert "generated=0" in stdout and "skipped=40" in stdout, stdout
+    assert "generated=0" in stdout and "skipped=60" in stdout, stdout
     assert (out / "c1-watercolor.png").read_bytes() == first_bytes
 
     assert module.main(["--provider", "mock", "--out-dir", str(out), "--force"]) == 0
     stdout, _ = capsys.readouterr()
-    assert "generated=40" in stdout
+    assert "generated=60" in stdout
 
 
 def test_script_falls_back_to_mock_without_zhipu_key(capsys, tmp_path, monkeypatch):

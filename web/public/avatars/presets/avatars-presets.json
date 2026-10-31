@@ -1,5 +1,5 @@
 {
-  "version": 1,
+  "version": 2,
   "provider": "mock",
   "placeholder": true,
   "image_size": "1280x1280",
@@ -28,6 +28,7 @@
   "characters": [
     {
       "id": "c1",
+      "audience": "child",
       "label_zh": "短发小圆脸",
       "desc_en": "a child with short black bob hair, round face, red hoodie",
       "images": {
@@ -47,6 +48,7 @@
     },
     {
       "id": "c2",
+      "audience": "child",
       "label_zh": "马尾圆眼镜",
       "desc_en": "a child with black ponytail hair, oval face, round glasses, yellow t-shirt",
       "images": {
@@ -66,6 +68,7 @@
     },
     {
       "id": "c3",
+      "audience": "child",
       "label_zh": "棕色卷发",
       "desc_en": "a child with curly brown hair, light freckles, blue sweater",
       "images": {
@@ -85,6 +88,7 @@
     },
     {
       "id": "c4",
+      "audience": "child",
       "label_zh": "双马尾",
       "desc_en": "a child with dark brown twin tails, pink dress",
       "images": {
@@ -104,6 +108,7 @@
     },
     {
       "id": "c5",
+      "audience": "child",
       "label_zh": "平头绿外套",
       "desc_en": "a child with short flat black hair, green jacket",
       "images": {
@@ -123,6 +128,7 @@
     },
     {
       "id": "c6",
+      "audience": "child",
       "label_zh": "长发蝴蝶结",
       "desc_en": "a child with long black hair and a hair bow, purple top",
       "images": {
@@ -142,6 +148,7 @@
     },
     {
       "id": "c7",
+      "audience": "child",
       "label_zh": "栗色短发眼镜",
       "desc_en": "a child with short chestnut hair, square glasses, white shirt",
       "images": {
@@ -161,6 +168,7 @@
     },
     {
       "id": "c8",
+      "audience": "child",
       "label_zh": "丸子头橙围巾",
       "desc_en": "a child with a top bun, orange scarf, cream sweater",
       "images": {
@@ -169,6 +177,86 @@
         "pixel": "c8-pixel.png",
         "papercut": "c8-papercut.png",
         "clay": "c8-clay.png"
+      },
+      "placeholder": {
+        "watercolor": true,
+        "cartoon": true,
+        "pixel": true,
+        "papercut": true,
+        "clay": true
+      }
+    },
+    {
+      "id": "c9",
+      "audience": "adult",
+      "label_zh": "短发爸爸",
+      "desc_en": "an adult man with short black hair, light stubble, blue polo shirt",
+      "images": {
+        "watercolor": "c9-watercolor.png",
+        "cartoon": "c9-cartoon.png",
+        "pixel": "c9-pixel.png",
+        "papercut": "c9-papercut.png",
+        "clay": "c9-clay.png"
+      },
+      "placeholder": {
+        "watercolor": true,
+        "cartoon": true,
+        "pixel": true,
+        "papercut": true,
+        "clay": true
+      }
+    },
+    {
+      "id": "c10",
+      "audience": "adult",
+      "label_zh": "长发妈妈",
+      "desc_en": "an adult woman with shoulder-length brown hair, green blouse",
+      "images": {
+        "watercolor": "c10-watercolor.png",
+        "cartoon": "c10-cartoon.png",
+        "pixel": "c10-pixel.png",
+        "papercut": "c10-papercut.png",
+        "clay": "c10-clay.png"
+      },
+      "placeholder": {
+        "watercolor": true,
+        "cartoon": true,
+        "pixel": true,
+        "papercut": true,
+        "clay": true
+      }
+    },
+    {
+      "id": "c11",
+      "audience": "adult",
+      "label_zh": "卷发爸爸",
+      "desc_en": "an adult man with short curly black hair, glasses, grey sweater",
+      "images": {
+        "watercolor": "c11-watercolor.png",
+        "cartoon": "c11-cartoon.png",
+        "pixel": "c11-pixel.png",
+        "papercut": "c11-papercut.png",
+        "clay": "c11-clay.png"
+      },
+      "placeholder": {
+        "watercolor": true,
+        "cartoon": true,
+        "pixel": true,
+        "papercut": true,
+        "clay": true
+      }
+    },
+    {
+      "id": "c12",
+      "audience": "adult",
+      "label_zh": "马尾妈妈",
+      "desc_en": "an adult woman with black hair in a ponytail, red cardigan",
+      "images": {
+        "watercolor": "c12-watercolor.png",
+        "cartoon": "c12-cartoon.png",
+        "pixel": "c12-pixel.png",
+        "papercut": "c12-papercut.png",
+        "clay": "c12-clay.png"
       },
       "placeholder": {
         "watercolor": true,
@@ -459,7 +547,147 @@
       "style": "clay",
       "file": "c8-clay.png",
       "placeholder": true
+    },
+    {
+      "id": "c9-watercolor",
+      "character_id": "c9",
+      "style": "watercolor",
+      "file": "c9-watercolor.png",
+      "placeholder": true
+    },
+    {
+      "id": "c9-cartoon",
+      "character_id": "c9",
+      "style": "cartoon",
+      "file": "c9-cartoon.png",
+      "placeholder": true
+    },
+    {
+      "id": "c9-pixel",
+      "character_id": "c9",
+      "style": "pixel",
+      "file": "c9-pixel.png",
+      "placeholder": true
+    },
+    {
+      "id": "c9-papercut",
+      "character_id": "c9",
+      "style": "papercut",
+      "file": "c9-papercut.png",
+      "placeholder": true
+    },
+    {
+      "id": "c9-clay",
+      "character_id": "c9",
+      "style": "clay",
+      "file": "c9-clay.png",
+      "placeholder": true
+    },
+    {
+      "id": "c10-watercolor",
+      "character_id": "c10",
+      "style": "watercolor",
+      "file": "c10-watercolor.png",
+      "placeholder": true
+    },
+    {
+      "id": "c10-cartoon",
+      "character_id": "c10",
+      "style": "cartoon",
+      "file": "c10-cartoon.png",
+      "placeholder": true
+    },
+    {
+      "id": "c10-pixel",
+      "character_id": "c10",
+      "style": "pixel",
+      "file": "c10-pixel.png",
+      "placeholder": true
+    },
+    {
+      "id": "c10-papercut",
+      "character_id": "c10",
+      "style": "papercut",
+      "file": "c10-papercut.png",
+      "placeholder": true
+    },
+    {
+      "id": "c10-clay",
+      "character_id": "c10",
+      "style": "clay",
+      "file": "c10-clay.png",
+      "placeholder": true
+    },
+    {
+      "id": "c11-watercolor",
+      "character_id": "c11",
+      "style": "watercolor",
+      "file": "c11-watercolor.png",
+      "placeholder": true
+    },
+    {
+      "id": "c11-cartoon",
+      "character_id": "c11",
+      "style": "cartoon",
+      "file": "c11-cartoon.png",
+      "placeholder": true
+    },
+    {
+      "id": "c11-pixel",
+      "character_id": "c11",
+      "style": "pixel",
+      "file": "c11-pixel.png",
+      "placeholder": true
+    },
+    {
+      "id": "c11-papercut",
+      "character_id": "c11",
+      "style": "papercut",
+      "file": "c11-papercut.png",
+      "placeholder": true
+    },
+    {
+      "id": "c11-clay",
+      "character_id": "c11",
+      "style": "clay",
+      "file": "c11-clay.png",
+      "placeholder": true
+    },
+    {
+      "id": "c12-watercolor",
+      "character_id": "c12",
+      "style": "watercolor",
+      "file": "c12-watercolor.png",
+      "placeholder": true
+    },
+    {
+      "id": "c12-cartoon",
+      "character_id": "c12",
+      "style": "cartoon",
+      "file": "c12-cartoon.png",
+      "placeholder": true
+    },
+    {
+      "id": "c12-pixel",
+      "character_id": "c12",
+      "style": "pixel",
+      "file": "c12-pixel.png",
+      "placeholder": true
+    },
+    {
+      "id": "c12-papercut",
+      "character_id": "c12",
+      "style": "papercut",
+      "file": "c12-papercut.png",
+      "placeholder": true
+    },
+    {
+      "id": "c12-clay",
+      "character_id": "c12",
+      "style": "clay",
+      "file": "c12-clay.png",
+      "placeholder": true
     }
   ],
-  "generated_at": "2026-10-31T02:29:56.395666+00:00"
+  "generated_at": "2026-10-31T03:14:53.006658+00:00"
 }

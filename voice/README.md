@@ -1047,16 +1047,27 @@ no realistic human faces, no text in image, safe for young children`，调用方
 
 用户决定「**不接受照片上云**」→ 不拍照、不上传，改为**预置形象库 + 选择题**：
 
-- 定义：`app/avatar_presets.py`，**8 个角色 × 5 种风格 = 40 张**，描述统一为 `a child with ...`
-  （不含性别敏感词/真实姓名；安全后缀 `no realistic human faces / no text in image` 写死）。
+- 定义：`app/avatar_presets.py`，**12 个角色（8 儿童 + 4 成人）× 5 种风格 = 60 张**。
+  每个角色含 `audience: "child" | "adult"`（供前端分组）、`label_zh`、`desc_en`：
+  - 儿童 c1–c8：`a child with ...`（不含性别敏感词/真实姓名）
+  - 成人 c9–c12：`an adult man/woman with ...`（短发爸爸 / 长发妈妈 / 卷发爸爸 / 马尾妈妈；同样只留可画特征，无职业刻板印象/真名）
+  - 安全后缀 `no realistic human faces / no text in image / safe for young children` 写死；
+    儿童提示词前缀 `children's picture book character portrait`，**成人前缀 `cute illustrated family character portrait`**（插画风、非写实）。
 - 静态产物（已生成，提交在仓库）：`web/public/avatars/presets/<character>-<style>.png`（1280×1280）
-  + `avatars-presets.json`（元数据：styles / characters[].images / placeholder 标记）。
-  当前为 **mock 占位图**（`placeholder=true`，合计约 **0.65MB / 40 张**）。
+  + `avatars-presets.json`（**manifest version: 2**；styles / characters[].audience / characters[].images / presets[60] / placeholder 标记）。
+  当前为 **mock 占位图**（`placeholder=true`，合计约 **0.97MB / 60 张**）。
 - 生成脚本（**没有 Zhipu key 时生成 mock 占位图**，幂等，`--force` 重生成）：
   ```bash
   python scripts/gen_avatar_presets.py --provider mock          # 占位图（不联网、不花钱）
   IMAGE_PROVIDER=zhipu IMAGE_API_KEY=<key> \
-    python scripts/gen_avatar_presets.py --provider zhipu --force   # 真实生成（40 × ¥0.1 ≈ ¥4，一次性）
+    python scripts/gen_avatar_presets.py --provider zhipu --force   # 真实生成（60 × ¥0.1 ≈ ¥6，一次性）
+  ```
+  **在 NAS 容器内写回宿主机静态目录**（在 `deploy/` 下执行；compose 里 voice 的 WORKDIR=/app、已 COPY scripts/）：
+  ```bash
+  cd /vol1/1000/project/english-coach/deploy
+  docker compose run --rm \
+    -v "$PWD/../web/public/avatars/presets:/out" \
+    voice python scripts/gen_avatar_presets.py --provider zhipu --out-dir /out --force
   ```
   参数：`--out-dir`（默认 `../web/public/avatars/presets`）、`--force`。
 - `GET /v1/image/avatar/presets` → `{provider, placeholder, image_size, styles[], characters[]}`

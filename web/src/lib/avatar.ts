@@ -95,6 +95,8 @@ export interface AvatarPresets {
     id: string;
     label_zh: string;
     desc_en: string;
+    /** 分组：儿童 / 成人（task-66：12 角色 = 8 儿童 + 4 成人） */
+    audience: "child" | "adult";
     images: Record<string, string>;
   }[];
   placeholder: boolean;

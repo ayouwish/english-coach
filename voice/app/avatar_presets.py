@@ -19,6 +19,10 @@ from .image_gen import ALLOWED_STYLES, STYLE_PRESETS, style_phrase
 # 儿童绘本插画风写死的安全后缀（禁止写实人脸/图内文字）
 PRESET_SAFETY = "cute cartoon character, no realistic human faces, no text in image, safe for young children"
 PRESET_SCENE = "friendly smile, upper body, plain soft background"
+# task-65：成人形象也用插画风（"family character portrait"，同样禁止写实人脸/图中文字）
+PRESET_CHILD_TEMPLATE = "children's picture book character portrait"
+PRESET_ADULT_TEMPLATE = "cute illustrated family character portrait"
+PRESET_AUDIENCES = ("child", "adult")
 
 PRESET_STYLES: list[dict] = [
     {"id": "watercolor", "label_zh": "水彩"},
@@ -30,14 +34,20 @@ PRESET_STYLES: list[dict] = [
 
 # 8 个预置角色：只用 "a child"，不含性别敏感词/真实姓名/其他敏感属性
 PRESET_CHARACTERS: list[dict] = [
-    {"id": "c1", "label_zh": "短发小圆脸", "desc_en": "a child with short black bob hair, round face, red hoodie"},
-    {"id": "c2", "label_zh": "马尾圆眼镜", "desc_en": "a child with black ponytail hair, oval face, round glasses, yellow t-shirt"},
-    {"id": "c3", "label_zh": "棕色卷发", "desc_en": "a child with curly brown hair, light freckles, blue sweater"},
-    {"id": "c4", "label_zh": "双马尾", "desc_en": "a child with dark brown twin tails, pink dress"},
-    {"id": "c5", "label_zh": "平头绿外套", "desc_en": "a child with short flat black hair, green jacket"},
-    {"id": "c6", "label_zh": "长发蝴蝶结", "desc_en": "a child with long black hair and a hair bow, purple top"},
-    {"id": "c7", "label_zh": "栗色短发眼镜", "desc_en": "a child with short chestnut hair, square glasses, white shirt"},
-    {"id": "c8", "label_zh": "丸子头橙围巾", "desc_en": "a child with a top bun, orange scarf, cream sweater"},
+    # 儿童（8）——"a child with ..."，只用可画的卡通特征
+    {"id": "c1", "audience": "child", "label_zh": "短发小圆脸", "desc_en": "a child with short black bob hair, round face, red hoodie"},
+    {"id": "c2", "audience": "child", "label_zh": "马尾圆眼镜", "desc_en": "a child with black ponytail hair, oval face, round glasses, yellow t-shirt"},
+    {"id": "c3", "audience": "child", "label_zh": "棕色卷发", "desc_en": "a child with curly brown hair, light freckles, blue sweater"},
+    {"id": "c4", "audience": "child", "label_zh": "双马尾", "desc_en": "a child with dark brown twin tails, pink dress"},
+    {"id": "c5", "audience": "child", "label_zh": "平头绿外套", "desc_en": "a child with short flat black hair, green jacket"},
+    {"id": "c6", "audience": "child", "label_zh": "长发蝴蝶结", "desc_en": "a child with long black hair and a hair bow, purple top"},
+    {"id": "c7", "audience": "child", "label_zh": "栗色短发眼镜", "desc_en": "a child with short chestnut hair, square glasses, white shirt"},
+    {"id": "c8", "audience": "child", "label_zh": "丸子头橙围巾", "desc_en": "a child with a top bun, orange scarf, cream sweater"},
+    # 成人（4）——"an adult ..."，同样只留可画特征、无真名/职业刻板印象、禁止写实
+    {"id": "c9", "audience": "adult", "label_zh": "短发爸爸", "desc_en": "an adult man with short black hair, light stubble, blue polo shirt"},
+    {"id": "c10", "audience": "adult", "label_zh": "长发妈妈", "desc_en": "an adult woman with shoulder-length brown hair, green blouse"},
+    {"id": "c11", "audience": "adult", "label_zh": "卷发爸爸", "desc_en": "an adult man with short curly black hair, glasses, grey sweater"},
+    {"id": "c12", "audience": "adult", "label_zh": "马尾妈妈", "desc_en": "an adult woman with black hair in a ponytail, red cardigan"},
 ]
 
 PRESETS_DIR_ENV = "AVATAR_PRESETS_DIR"
@@ -55,10 +65,9 @@ def preset_filename(character_id: str, style: str) -> str:
 def preset_prompt(character: dict, style: str) -> tuple[str, dict]:
     """预置头像的最终提示词 + prompt_parts（安全后缀写死，调用方不能覆盖）。"""
     phrase = style_phrase(style)
-    prompt = (
-        f"children's picture book character portrait, {phrase}, {character['desc_en']}, "
-        f"{PRESET_SCENE}, {PRESET_SAFETY}"
-    )
+    audience = character.get("audience", "child")
+    template = PRESET_ADULT_TEMPLATE if audience == "adult" else PRESET_CHILD_TEMPLATE
+    prompt = f"{template}, {phrase}, {character['desc_en']}, {PRESET_SCENE}, {PRESET_SAFETY}"
     return prompt, {
         "style": phrase,
         "character": character["desc_en"],
@@ -92,6 +101,7 @@ def build_presets_metadata(*, provider: str = "mock", placeholder: bool = True, 
                 {
                     "id": f"{character['id']}-{style}",
                     "character_id": character["id"],
+                    "audience": character.get("audience", "child"),
                     "style": style,
                     "file": filename,
                     "placeholder": placeholder,
@@ -99,7 +109,7 @@ def build_presets_metadata(*, provider: str = "mock", placeholder: bool = True, 
             )
         characters.append({**character, "images": images})
     return {
-        "version": 1,
+        "version": 2,
         "provider": provider,
         "placeholder": placeholder,
         "image_size": image_size,
@@ -128,6 +138,7 @@ def presets_for_api(out_dir: Path | None = None) -> dict:
     if generated and generated.get("characters"):
         placeholder = bool(generated.get("placeholder", True))
         return {
+            "version": generated.get("version", 2),
             "provider": generated.get("provider", "mock"),
             "placeholder": placeholder,
             "image_size": generated.get("image_size", "1280x1280"),
@@ -136,5 +147,4 @@ def presets_for_api(out_dir: Path | None = None) -> dict:
         }
     data = build_presets_metadata(provider="mock", placeholder=True)
     data.pop("presets", None)
-    data.pop("version", None)
     return data

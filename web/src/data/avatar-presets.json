@@ -43,7 +43,8 @@
         "pixel": true,
         "papercut": true,
         "clay": true
-      }
+      },
+      "audience": "child"
     },
     {
       "id": "c2",
@@ -62,7 +63,8 @@
         "pixel": true,
         "papercut": true,
         "clay": true
-      }
+      },
+      "audience": "child"
     },
     {
       "id": "c3",
@@ -81,7 +83,8 @@
         "pixel": true,
         "papercut": true,
         "clay": true
-      }
+      },
+      "audience": "child"
     },
     {
       "id": "c4",
@@ -100,7 +103,8 @@
         "pixel": true,
         "papercut": true,
         "clay": true
-      }
+      },
+      "audience": "child"
     },
     {
       "id": "c5",
@@ -119,7 +123,8 @@
         "pixel": true,
         "papercut": true,
         "clay": true
-      }
+      },
+      "audience": "child"
     },
     {
       "id": "c6",
@@ -138,7 +143,8 @@
         "pixel": true,
         "papercut": true,
         "clay": true
-      }
+      },
+      "audience": "child"
     },
     {
       "id": "c7",
@@ -157,7 +163,8 @@
         "pixel": true,
         "papercut": true,
         "clay": true
-      }
+      },
+      "audience": "child"
     },
     {
       "id": "c8",
@@ -176,7 +183,64 @@
         "pixel": true,
         "papercut": true,
         "clay": true
-      }
+      },
+      "audience": "child"
+    },
+    {
+      "id": "c9",
+      "label_zh": "短发爸爸",
+      "desc_en": "an adult man with short black hair, friendly smile, casual shirt",
+      "audience": "adult",
+      "images": {
+        "watercolor": "c9-watercolor.png",
+        "cartoon": "c9-cartoon.png",
+        "pixel": "c9-pixel.png",
+        "papercut": "c9-papercut.png",
+        "clay": "c9-clay.png"
+      },
+      "placeholder": true
+    },
+    {
+      "id": "c10",
+      "label_zh": "长发妈妈",
+      "desc_en": "an adult woman with long dark hair, warm smile, light cardigan",
+      "audience": "adult",
+      "images": {
+        "watercolor": "c10-watercolor.png",
+        "cartoon": "c10-cartoon.png",
+        "pixel": "c10-pixel.png",
+        "papercut": "c10-papercut.png",
+        "clay": "c10-clay.png"
+      },
+      "placeholder": true
+    },
+    {
+      "id": "c11",
+      "label_zh": "戴眼镜的爷爷",
+      "desc_en": "an elderly man with glasses and grey hair, kind expression",
+      "audience": "adult",
+      "images": {
+        "watercolor": "c11-watercolor.png",
+        "cartoon": "c11-cartoon.png",
+        "pixel": "c11-pixel.png",
+        "papercut": "c11-papercut.png",
+        "clay": "c11-clay.png"
+      },
+      "placeholder": true
+    },
+    {
+      "id": "c12",
+      "label_zh": "卷发奶奶",
+      "desc_en": "an elderly woman with curly grey hair, gentle smile, scarf",
+      "audience": "adult",
+      "images": {
+        "watercolor": "c12-watercolor.png",
+        "cartoon": "c12-cartoon.png",
+        "pixel": "c12-pixel.png",
+        "papercut": "c12-papercut.png",
+        "clay": "c12-clay.png"
+      },
+      "placeholder": true
     }
   ],
   "presets": [
@@ -461,5 +525,6 @@
       "placeholder": true
     }
   ],
-  "generated_at": "2026-10-31T02:29:56.395666+00:00"
+  "generated_at": "2026-10-31T02:29:56.395666+00:00",
+  "note": "（web 兜底：已补 c9–c12 成人角色元数据；图片由 voice 生成脚本产出，缺失时 UI 占位）"
 }

@@ -1,9 +1,12 @@
 /**
- * 预置形象库（task-64）：优先读仓库内的 `src/data/avatar-presets.json`
- * （由 voice 侧脚本生成并提交），文件不存在时回退 voice `/v1/image/avatar/presets`。
+ * 预置形象库（task-64/66）：**运行时 voice 优先**（`/v1/image/avatar/presets`），
+ * 不可用时回退**构建期 import** 的 `src/data/avatar-presets.json`（离线兜底）。
  *
- * 图片静态托管于 `web/public/avatars/presets/`，**不经 voice 代理**。
- * 占位图（`placeholder: true`）时 UI 标注「预览图（未生成真实插画）」。
+ * 为什么 voice 优先：用户在 NAS 上重新生成真实预置图/更新 manifest 后，
+ * **不需要重建 web 镜像**就能生效。
+ *
+ * 图片静态托管于 `web/public/avatars/presets/`，**不经 voice 代理**；
+ * 占位/缺图由 UI `onError` 占位显示，不崩。
  */
 // 必须用**构建期 import**：Next standalone 产物里没有 `src/` 目录，
 // 运行时 fs.readFile(process.cwd()/src/data/...) 会在容器/独立构建里失败（本地 next start 是假象）。
@@ -28,6 +31,15 @@ function normalize(raw: unknown): AvatarPresets | null {
       id: String(c.id ?? ""),
       label_zh: String(c.label_zh ?? c.id ?? ""),
       desc_en: String(c.desc_en ?? ""),
+      // 分组：优先读 manifest 的 audience；缺省按编号推断（c1–c8 儿童、c9–c12 成人）
+      audience:
+        c.audience === "adult"
+          ? ("adult" as const)
+          : c.audience === "child"
+            ? ("child" as const)
+            : Number(String(c.id ?? "").replace(/[^0-9]/g, "") || "1") >= 9
+              ? ("adult" as const)
+              : ("child" as const),
       // voice 生成的 manifest 里 images 可能是裸文件名（c1-watercolor.png）→ 统一成 public URL
       images: Object.fromEntries(
         Object.entries((typeof c.images === "object" && c.images ? (c.images as Record<string, unknown>) : {}) as Record<string, unknown>)
@@ -44,19 +56,21 @@ function normalize(raw: unknown): AvatarPresets | null {
   return { styles, characters, placeholder: obj.placeholder === true };
 }
 
-/** 读取预置库：先仓库文件，再 voice 兜底；都不可用 → null（页面显示可读提示） */
+/**
+ * 读取预置库：**先 voice 运行时**（manifest 更新无需重建镜像），
+ * 不可用/内容非法时回退构建期 import 的 bundled manifest；都不可用 → null（页面显示可读提示）。
+ */
 export async function loadAvatarPresets(): Promise<AvatarPresets | null> {
   try {
-    const parsed = normalize(bundledPresets);
-    if (parsed) return parsed;
+    const fromVoice = normalize(await callAvatarPresets());
+    if (fromVoice) return fromVoice;
   } catch (err) {
-    console.warn("[avatar-presets] 读取仓库文件失败：", (err as Error).message);
+    if (!(err instanceof VoiceError)) console.warn("[avatar-presets] voice 读取失败：", (err as Error).message);
   }
   try {
-    const fromVoice = await callAvatarPresets();
-    return normalize(fromVoice);
+    return normalize(bundledPresets);
   } catch (err) {
-    if (!(err instanceof VoiceError)) console.warn("[avatar-presets] voice 兜底失败：", (err as Error).message);
+    console.warn("[avatar-presets] bundled manifest 不可用：", (err as Error).message);
     return null;
   }
 }
