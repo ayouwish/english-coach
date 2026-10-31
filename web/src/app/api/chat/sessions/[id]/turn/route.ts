@@ -15,6 +15,15 @@ import { callDialogue, getCapabilities } from "@/lib/voice";
 
 export const dynamic = "force-dynamic";
 
+/**
+ * 对话轮数上限（task-68）：默认 **0 = 不限制**（用户要求"轮数不要限制"）。
+ * 只有显式设置 CHAT_MAX_TURNS > 0 时才作为安全阀；自然结束仍靠助手返回的 `reply.done`。
+ */
+function chatMaxTurns(): number {
+  const n = Number(process.env.CHAT_MAX_TURNS);
+  return Number.isFinite(n) && n > 0 ? Math.floor(n) : 0;
+}
+
 const SAFE_REPLY = "Let's talk about something else. What do you like to do for fun?";
 const SAFE_REPLY_ZH = "我们换个话题吧，你平时喜欢做什么呀？";
 
@@ -144,7 +153,8 @@ export const POST = route(async (req: NextRequest, ctx: { params: Promise<{ id: 
   });
 
   const nextTurn = turnIndex + 1;
-  const done = reply.done || nextTurn >= 6;
+  const maxTurns = chatMaxTurns();
+  const done = reply.done || (maxTurns > 0 && nextTurn >= maxTurns);
   await db
     .update(chatSessions)
     .set({

@@ -32,6 +32,8 @@ export const TIMEOUTS = {
   illustrate: 90_000,
   /** 虚拟形象生成（文生图/图生图）：给 90s */
   avatar: 90_000,
+  /** 对话整段音频拼接（task-68）：多段合成，给 120s */
+  concat: 120_000,
   pronounce: 60_000,
   tts: 20_000,
   feedback: 40_000,
@@ -308,6 +310,46 @@ export async function callAvatar(input: {
   form.append("style", input.style);
   if (input.characterDesc) form.append("character_desc", input.characterDesc);
   return callVoice<AvatarResult>("/v1/image/avatar", { method: "POST", body: form }, TIMEOUTS.avatar);
+}
+
+export interface ConcatPart {
+  data: Uint8Array;
+  mime: string;
+  filename: string;
+}
+
+/**
+ * 整段对话音频拼接（task-68）：voice `POST /v1/audio/concat`（multipart 多个 `parts`，`gap_ms`）。
+ * 返回拼接后的音频字节（WAV）。
+ */
+export async function callAudioConcat(parts: ConcatPart[], gapMs = 250): Promise<{ bytes: Uint8Array; contentType: string }> {
+  const form = new FormData();
+  for (const part of parts) {
+    form.append("parts", new Blob([new Uint8Array(part.data)], { type: part.mime }), part.filename);
+  }
+  form.append("gap_ms", String(gapMs));
+  let res: Response;
+  try {
+    res = await fetch(`${VOICE_SERVICE_URL}/v1/audio/concat`, {
+      method: "POST",
+      body: form,
+      signal: AbortSignal.timeout(TIMEOUTS.concat),
+    });
+  } catch (err) {
+    const e = err as Error;
+    const timeout = e.name === "TimeoutError" || e.name === "AbortError";
+    throw new VoiceError(
+      timeout ? "provider_timeout" : "voice_unreachable",
+      timeout ? `voice /v1/audio/concat 超时（${TIMEOUTS.concat}ms）` : `voice 不可达：${e.message}`,
+    );
+  }
+  if (!res.ok) {
+    const text = await res.text().catch(() => "");
+    const code: VoiceErrorCode =
+      res.status === 404 || res.status === 503 ? "provider_error" : "provider_error";
+    throw new VoiceError(code, `voice /v1/audio/concat ${res.status}：${text.slice(0, 120)}`, res.status);
+  }
+  return { bytes: new Uint8Array(await res.arrayBuffer()), contentType: res.headers.get("content-type") ?? "audio/wav" };
 }
 
 /** 预置形象库（task-64）：voice `/v1/image/avatar/presets` 兜底读取 */

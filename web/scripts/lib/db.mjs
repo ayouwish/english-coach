@@ -144,13 +144,15 @@ export function seed(db, { resetPasswords = false } = {}) {
         text: s.text,
         translation_zh: s.translation_zh,
         level: s.level,
-        tags: JSON.stringify(s.tags),
+        tags: JSON.stringify(tags),
         focus_phonemes: JSON.stringify(s.focus_phonemes),
         sort_order: i + 1,
       });
       summary.sentences += 1;
     });
     scenarios.forEach((s, i) => {
+      const tags = [...(s.tags ?? [])].filter((t) => !t.startsWith("audience:"));
+      tags.push(`audience:${s.audience === "adult" ? "adult" : "child"}`);
       insertScenario.run({
         id: s.id,
         title: s.title,
@@ -160,7 +162,7 @@ export function seed(db, { resetPasswords = false } = {}) {
         opening_line: s.opening_line,
         level: s.level,
         min_age: s.min_age,
-        tags: JSON.stringify(s.tags),
+        tags: JSON.stringify(tags),
         sort_order: s.sort_order ?? i + 1,
       });
       summary.scenarios += 1;

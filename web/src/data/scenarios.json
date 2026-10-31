@@ -9,8 +9,12 @@
       "opening_line": "Hi! I'm Sam. What's your name?",
       "level": "A1",
       "min_age": 6,
-      "tags": ["greeting", "self"],
-      "sort_order": 1
+      "tags": [
+        "greeting",
+        "self"
+      ],
+      "sort_order": 1,
+      "audience": "child"
     },
     {
       "id": "ordering_food",
@@ -21,8 +25,12 @@
       "opening_line": "Welcome! What would you like to eat today?",
       "level": "A1",
       "min_age": 6,
-      "tags": ["food", "shopping"],
-      "sort_order": 2
+      "tags": [
+        "food",
+        "shopping"
+      ],
+      "sort_order": 2,
+      "audience": "child"
     },
     {
       "id": "school_day",
@@ -33,8 +41,11 @@
       "opening_line": "Hi! What class do you have today?",
       "level": "A1",
       "min_age": 6,
-      "tags": ["school"],
-      "sort_order": 3
+      "tags": [
+        "school"
+      ],
+      "sort_order": 3,
+      "audience": "child"
     },
     {
       "id": "animals_zoo",
@@ -45,8 +56,11 @@
       "opening_line": "Look! Do you see the big elephant?",
       "level": "A1",
       "min_age": 6,
-      "tags": ["animals"],
-      "sort_order": 4
+      "tags": [
+        "animals"
+      ],
+      "sort_order": 4,
+      "audience": "child"
     },
     {
       "id": "birthday_party",
@@ -57,8 +71,11 @@
       "opening_line": "My birthday is on Saturday! Do you like cake?",
       "level": "A1",
       "min_age": 6,
-      "tags": ["party"],
-      "sort_order": 5
+      "tags": [
+        "party"
+      ],
+      "sort_order": 5,
+      "audience": "child"
     },
     {
       "id": "ordering_coffee",
@@ -69,8 +86,12 @@
       "opening_line": "Hi there! What can I get for you today?",
       "level": "A2",
       "min_age": 6,
-      "tags": ["food", "shopping"],
-      "sort_order": 6
+      "tags": [
+        "food",
+        "shopping"
+      ],
+      "sort_order": 6,
+      "audience": "child"
     },
     {
       "id": "shopping_clothes",
@@ -81,8 +102,11 @@
       "opening_line": "Hello! Can I help you find something?",
       "level": "A2",
       "min_age": 8,
-      "tags": ["shopping"],
-      "sort_order": 7
+      "tags": [
+        "shopping"
+      ],
+      "sort_order": 7,
+      "audience": "child"
     },
     {
       "id": "weather_smalltalk",
@@ -93,8 +117,12 @@
       "opening_line": "What a lovely day! Do you like sunny weather?",
       "level": "A2",
       "min_age": 8,
-      "tags": ["weather", "social"],
-      "sort_order": 8
+      "tags": [
+        "weather",
+        "social"
+      ],
+      "sort_order": 8,
+      "audience": "child"
     },
     {
       "id": "doctor_visit",
@@ -105,8 +133,11 @@
       "opening_line": "Hello! How are you feeling today?",
       "level": "A2",
       "min_age": 8,
-      "tags": ["health"],
-      "sort_order": 9
+      "tags": [
+        "health"
+      ],
+      "sort_order": 9,
+      "audience": "child"
     },
     {
       "id": "hobbies_chat",
@@ -117,8 +148,12 @@
       "opening_line": "I love drawing. What do you like to do for fun?",
       "level": "A2",
       "min_age": 9,
-      "tags": ["hobby", "social"],
-      "sort_order": 10
+      "tags": [
+        "hobby",
+        "social"
+      ],
+      "sort_order": 10,
+      "audience": "child"
     },
     {
       "id": "airport_travel",
@@ -129,8 +164,139 @@
       "opening_line": "Good morning! May I see your ticket, please?",
       "level": "B1",
       "min_age": 10,
-      "tags": ["travel"],
-      "sort_order": 11
+      "tags": [
+        "travel"
+      ],
+      "sort_order": 11,
+      "audience": "child"
+    },
+    {
+      "id": "adult_coffee_order",
+      "audience": "adult",
+      "title": "Ordering at a café",
+      "title_zh": "咖啡店点单",
+      "setting_zh": "你在常去的咖啡店点单，店员会问你的口味和大小。",
+      "role_prompt": "You are a friendly café barista. Speak naturally at a normal pace. Reply in 1–2 short sentences, ask one follow-up question (size, milk, takeaway). Use everyday adult English (A2–B1).",
+      "opening_line": "Good morning! What can I get for you today?",
+      "level": "B1",
+      "min_age": 18,
+      "tags": [
+        "daily",
+        "service"
+      ],
+      "sort_order": 101
+    },
+    {
+      "id": "adult_hotel_booking",
+      "audience": "adult",
+      "title": "Booking a hotel",
+      "title_zh": "出差订酒店",
+      "setting_zh": "你要出差，正在电话/前台订一间酒店房间。",
+      "role_prompt": "You are a hotel receptionist. Reply naturally in 1–2 sentences, confirm dates and ask about room type, breakfast or late check-out. Use polite adult English (B1).",
+      "opening_line": "Good afternoon, how can I help you with your reservation?",
+      "level": "B1",
+      "min_age": 18,
+      "tags": [
+        "travel",
+        "service"
+      ],
+      "sort_order": 102
+    },
+    {
+      "id": "adult_work_report",
+      "audience": "adult",
+      "title": "Giving a work update",
+      "title_zh": "工作汇报",
+      "setting_zh": "例会上你要用英文简单汇报这周的进展，经理会追问细节。",
+      "role_prompt": "You are the learner's manager. Ask about progress, blockers and next steps. Reply in 1–2 professional sentences and ask one concrete follow-up question. Use workplace English (B1–B2).",
+      "opening_line": "Thanks for joining. Could you give me a quick update on this week?",
+      "level": "B2",
+      "min_age": 18,
+      "tags": [
+        "work",
+        "meeting"
+      ],
+      "sort_order": 103
+    },
+    {
+      "id": "adult_weekend_chat",
+      "audience": "adult",
+      "title": "Chatting with a colleague",
+      "title_zh": "和同事聊周末",
+      "setting_zh": "午休时同事和你闲聊周末计划，语气轻松。",
+      "role_prompt": "You are a friendly colleague chatting during lunch. Reply naturally in 1–2 sentences, share a small detail and ask about their weekend. Casual adult English (B1).",
+      "opening_line": "Any plans for the weekend?",
+      "level": "B1",
+      "min_age": 18,
+      "tags": [
+        "smalltalk",
+        "work"
+      ],
+      "sort_order": 104
+    },
+    {
+      "id": "adult_asking_directions",
+      "audience": "adult",
+      "title": "Asking for directions",
+      "title_zh": "问路",
+      "setting_zh": "你在陌生城市找地铁站，向路人问路。",
+      "role_prompt": "You are a helpful local passer-by. Give short, natural directions (turn left, two blocks, next to the bank) and ask one clarifying question. Adult everyday English (A2–B1).",
+      "opening_line": "Hi, you look a bit lost — need a hand?",
+      "level": "B1",
+      "min_age": 18,
+      "tags": [
+        "travel",
+        "daily"
+      ],
+      "sort_order": 105
+    },
+    {
+      "id": "adult_doctor_visit",
+      "audience": "adult",
+      "title": "At the doctor's",
+      "title_zh": "看医生",
+      "setting_zh": "你有点不舒服去看医生，医生会问症状和持续时间。",
+      "role_prompt": "You are a calm GP. Ask about symptoms, duration and allergies in 1–2 short sentences. Use clear adult medical English (B1). Do not give real medical advice.",
+      "opening_line": "Hello, what seems to be the problem today?",
+      "level": "B1",
+      "min_age": 18,
+      "tags": [
+        "health",
+        "service"
+      ],
+      "sort_order": 106
+    },
+    {
+      "id": "adult_supermarket",
+      "audience": "adult",
+      "title": "At the supermarket",
+      "title_zh": "超市购物",
+      "setting_zh": "你在超市找不到某样东西，问店员并顺便问结账位置。",
+      "role_prompt": "You are a supermarket staff member. Reply in 1–2 natural sentences, give the aisle number and ask if they need anything else. Adult everyday English (A2).",
+      "opening_line": "Hi there, are you looking for something in particular?",
+      "level": "A2",
+      "min_age": 18,
+      "tags": [
+        "daily",
+        "shopping"
+      ],
+      "sort_order": 107
+    },
+    {
+      "id": "adult_cooking_class",
+      "audience": "adult",
+      "title": "A cooking class",
+      "title_zh": "学做一道菜",
+      "setting_zh": "你在烹饪课上跟老师学做一道菜，老师会让你重复步骤。",
+      "role_prompt": "You are a cooking instructor. Explain one step at a time in 1–2 sentences and ask the learner to say the step back. Use clear adult English (B1).",
+      "opening_line": "Welcome! Today we're making a simple pasta. Ready to start?",
+      "level": "B1",
+      "min_age": 18,
+      "tags": [
+        "hobby",
+        "learning"
+      ],
+      "sort_order": 108
     }
   ]
 }

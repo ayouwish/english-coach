@@ -5,7 +5,7 @@ import { chatMessages, chatScenarios, chatSessions } from "@/db/schema";
 import { HttpError, requireUser } from "@/lib/auth";
 import { jsonOk, route } from "@/lib/http";
 import { assertWithinDailyLimit } from "@/lib/limits";
-import { ageOf, isScenarioAllowedFor } from "@/lib/chat";
+import { ageOf, audienceForUser, isScenarioAllowedFor, scenarioAudience } from "@/lib/chat";
 import { openingZh } from "@/lib/opening-zh";
 
 export const dynamic = "force-dynamic";
@@ -32,6 +32,14 @@ export const POST = route(async (req: NextRequest) => {
       403,
       "forbidden",
       `这个场景适合 ${scenario.minAge} 岁以上，换一个试试吧`,
+    );
+  }
+  const scenarioTags = JSON.parse(scenario.tags) as string[];
+  if (scenarioAudience(scenarioTags) !== audienceForUser(user)) {
+    throw new HttpError(
+      403,
+      "forbidden",
+      user.isChild ? "这是给大人的场景，换一个小朋友的场景吧" : "这是给小朋友的场景，换一个成人场景吧",
     );
   }
 

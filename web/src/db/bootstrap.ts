@@ -110,6 +110,21 @@ export function seedSentences(
   });
 }
 
+interface ScenarioLike {
+  id: string;
+  title: string;
+  title_zh: string;
+  setting_zh: string;
+  role_prompt: string;
+  opening_line: string;
+  level: string;
+  min_age: number;
+  tags: string[];
+  sort_order: number;
+  /** child | adult（task-68）：通过 tags 存 `audience:<x>`，避免改契约表结构 */
+  audience?: string;
+}
+
 export function seedScenarios(
   sqlite: Database.Database,
   scenarios: Scenario[] = scenariosData.scenarios,
@@ -124,7 +139,10 @@ export function seedScenarios(
        role_prompt=excluded.role_prompt, opening_line=excluded.opening_line, level=excluded.level,
        min_age=excluded.min_age, tags=excluded.tags, sort_order=excluded.sort_order`,
   );
-  scenarios.forEach((s, i) => {
+  scenarios.forEach((s0, i) => {
+    const s = s0 as ScenarioLike;
+    const tags = [...(s.tags ?? [])].filter((t) => !t.startsWith("audience:"));
+    tags.push(`audience:${s.audience === "adult" ? "adult" : "child"}`);
     stmt.run({
       id: s.id,
       title: s.title,
@@ -134,7 +152,7 @@ export function seedScenarios(
       opening_line: s.opening_line,
       level: s.level,
       min_age: s.min_age,
-      tags: JSON.stringify(s.tags),
+      tags: JSON.stringify(tags),
       sort_order: s.sort_order ?? i + 1,
     });
   });

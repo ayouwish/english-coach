@@ -2,10 +2,12 @@ import { redirect } from "next/navigation";
 import { asc, desc, eq } from "drizzle-orm";
 import { ensureBootstrap, getDb } from "@/db";
 import { chatMessages, chatScenarios, chatSessions } from "@/db/schema";
+import { ChatSessionAudio } from "@/components/ChatSessionAudio";
 import { PronunciationNote } from "@/components/PronunciationNote";
 import { parsePron } from "@/lib/chat-pronunciation";
 import { ttsUrl } from "@/lib/tts-url";
 import { getCurrentUser } from "@/lib/auth";
+import { audienceForUser, scenarioAudience } from "@/lib/chat";
 import { getCapabilities } from "@/lib/voice";
 import { getPrefs } from "@/lib/prefs";
 import { effectiveTtsRate } from "@/lib/tts-rate";
@@ -31,7 +33,12 @@ export default async function ChatPage() {
     .orderBy(asc(chatScenarios.sortOrder));
 
   const age = ageOfUser(user.birthYear, user.ageBand);
-  const visible = user.isChild ? rows.filter((r) => r.minAge <= age) : rows;
+  // task-68：按 audience 过滤（儿童只看儿童场景；成人只看成人场景）
+  const wanted = audienceForUser(user);
+  const visible = rows.filter((r) => {
+    const tags = JSON.parse(r.tags) as string[];
+    return scenarioAudience(tags) === wanted && (!user.isChild || r.minAge <= age);
+  });
   const usage = await getDailyUsage(user.id, user.dailyLimitMinutes);
   const caps = await getCapabilities();
 
@@ -90,6 +97,7 @@ export default async function ChatPage() {
             最近一次对话（{lastScenario?.titleZh ?? lastSession?.scenarioId}）· {lastMessages.length} 条记录
             <span className="ml-2 font-normal text-[var(--ec-muted)]">点助手消息旁的「🔊 重播」可再听一遍</span>
           </summary>
+          {lastSession ? <ChatSessionAudio sessionId={lastSession.id} isChild={user.isChild} /> : null}
           <div className="mt-3 flex flex-col gap-2">
             {lastMessages.map((m) => (
               <div

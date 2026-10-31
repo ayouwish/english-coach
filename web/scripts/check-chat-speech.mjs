@@ -298,6 +298,10 @@ check("不再写死过时秒数（1–11s）", !girlChatHtml.includes("1–11s")
   const DB_PATH = process.env.DB_PATH ?? path.join(WEB_ROOT, "data/app.db");
   const captured = [];
   let pronounceMode = "ok";
+  /** task-68：助手是否主动结束；TTS / concat 调用计数（验证缓存命中） */
+  let dialogueDone = false;
+  let ttsCalls = 0;
+  let concatCalls = 0;
   const TINY_WAV = Buffer.from("RIFF$\\u0000\\u0000\\u0000WAVEfmt \\u0010\\u0000\\u0000\\u0000\\u0001\\u0000\\u0001\\u0000\\u0080>\\u0000\\u0000\\u0000}\\u0000\\u0000\\u0002\\u0000\\u0010\\u0000data\\u0000\\u0000\\u0000\\u0000", "binary");
   const stub = http.createServer((req, res) => {
     const chunks = [];
@@ -340,7 +344,7 @@ check("不再写死过时秒数（1–11s）", !girlChatHtml.includes("1–11s")
           correction: null,
           flag: "ok",
           provider: "stub",
-          done: false,
+          done: dialogueDone,
           suggested_replies: ["Yes, I love it!"],
         });
         return;
@@ -367,6 +371,14 @@ check("不再写死过时秒数（1–11s）", !girlChatHtml.includes("1–11s")
         return;
       }
       if (String(req.url).startsWith("/v1/tts")) {
+        ttsCalls += 1;
+        res.statusCode = 200;
+        res.setHeader("content-type", "audio/wav");
+        res.end(TINY_WAV);
+        return;
+      }
+      if (String(req.url).startsWith("/v1/audio/concat")) {
+        concatCalls += 1;
         res.statusCode = 200;
         res.setHeader("content-type", "audio/wav");
         res.end(TINY_WAV);
@@ -412,11 +424,15 @@ check("不再写死过时秒数（1–11s）", !girlChatHtml.includes("1–11s")
     const dadCookie = await stubLogin("dad@example.com", "Dad12345!");
     check("stub 实例可登录（儿童 + 家长）", Boolean(childCookie) && Boolean(dadCookie));
 
+    /** 起一个会话：按该账号能看到的场景里挑第一个（task-68 后儿童/成人场景已分组） */
     const startSession = async (cookie) => {
+      const sc = await fetch(`http://127.0.0.1:${PORT}/api/chat/scenarios`, { headers: { cookie } });
+      const list = ((await sc.json().catch(() => null))?.scenarios ?? []);
+      const scenarioId = list[0]?.id ?? "self_intro";
       const r = await fetch(`http://127.0.0.1:${PORT}/api/chat/sessions`, {
         method: "POST",
         headers: { "content-type": "application/json", cookie },
-        body: JSON.stringify({ scenario_id: "self_intro" }),
+        body: JSON.stringify({ scenario_id: scenarioId }),
       });
       return (await r.json().catch(() => null))?.session_id ?? null;
     };
@@ -496,6 +512,89 @@ check("不再写死过时秒数（1–11s）", !girlChatHtml.includes("1–11s")
     const failChatHtml = await (await fetch(`http://127.0.0.1:${PORT}/chat`, { headers: { cookie: dadCookie } })).text();
     check("★ 评分失败在页面上显示「—」（parent-failed）", failChatHtml.includes('data-kind="parent-failed"') && /发音\s*<strong>—<\/strong>|—/.test(failChatHtml));
     pronounceMode = "ok";
+
+    // ⑦ task-68：不限轮数（10 轮不结束）
+    const longSession = await startSession(childCookie);
+    let lastTurn = null;
+    for (let i = 1; i <= 10; i++) {
+      lastTurn = await voiceTurn(childCookie, longSession, `Round ${i}: I like football.`);
+    }
+    check(
+      "★ 10 轮后对话仍未结束（CHAT_MAX_TURNS=0 不限制）",
+      lastTurn?.status === 200 && lastTurn?.body?.done === false && lastTurn?.body?.turn_index === 10,
+      `turn_index=${lastTurn?.body?.turn_index} done=${lastTurn?.body?.done}`,
+    );
+    {
+      const dbCheck = new Database(DB_PATH, { readonly: true });
+      const row = dbCheck.prepare("SELECT turn_count, ended_at FROM chat_sessions WHERE id = ?").get(longSession);
+      dbCheck.close();
+      check("★ 库里会话仍开着（ended_at 为空、turn_count=10）", row?.turn_count === 10 && !row?.ended_at, JSON.stringify(row ?? {}));
+    }
+    check("页面有「结束对话」按钮（源码级，client 面板）", fs.readFileSync(path.join(WEB_ROOT, "src/app/chat/ChatClient.tsx"), "utf8").includes('data-testid="chat-end-session"'));
+    const endRes = await fetch(`http://127.0.0.1:${PORT}/api/chat/sessions/${longSession}/end`, {
+      method: "POST",
+      headers: { cookie: childCookie },
+    });
+    const endBody = await endRes.json().catch(() => null);
+    check("★ POST /end → 200 且会话结束", endRes.status === 200 && endBody?.ok === true && endBody?.ended === true, `status=${endRes.status}`);
+
+    // ⑧ reply.done=true 时自然结束（不回归）
+    dialogueDone = true;
+    const doneSession = await startSession(childCookie);
+    const doneTurn = await voiceTurn(childCookie, doneSession);
+    check("★ reply.done 仍生效（助手自然结束时 done=true）", doneTurn.status === 200 && doneTurn.body?.done === true, `done=${doneTurn.body?.done}`);
+    dialogueDone = false;
+
+    // ⑨ 整段对话音频：拼接 / 缓存 / force
+    {
+      const audioUrl = `http://127.0.0.1:${PORT}/api/chat/sessions/${longSession}/audio`;
+      const ttsBefore = ttsCalls;
+      const concatBefore = concatCalls;
+      const first = await fetch(audioUrl, { headers: { cookie: childCookie } });
+      const firstBytes = Buffer.from(await first.arrayBuffer());
+      console.log(`   ↳ 整段音频第一次：HTTP ${first.status} · ${first.headers.get("content-type")} · ${firstBytes.length}B · cache=${first.headers.get("x-chat-audio-cache")} · concatCalls=${concatCalls - concatBefore}`);
+      check("★ GET /api/chat/sessions/:id/audio → 200 audio/wav", first.status === 200 && (first.headers.get("content-type") ?? "").includes("audio/wav") && firstBytes.length > 0, `status=${first.status} ${firstBytes.length}B`);
+      check("Content-Length 正确 + Accept-Ranges: none", Number(first.headers.get("content-length")) === firstBytes.length && first.headers.get("accept-ranges") === "none", `len=${first.headers.get("content-length")} ranges=${first.headers.get("accept-ranges")}`);
+      check("第一次是 miss（真正拼接了）", first.headers.get("x-chat-audio-cache") === "miss" && concatCalls - concatBefore === 1);
+      const ttsAfterFirst = ttsCalls;
+      const second = await fetch(audioUrl, { headers: { cookie: childCookie } });
+      const secondBytes = Buffer.from(await second.arrayBuffer());
+      console.log(`   ↳ 整段音频第二次：HTTP ${second.status} · cache=${second.headers.get("x-chat-audio-cache")} · tts=${ttsCalls - ttsAfterFirst} concat=${concatCalls - concatBefore - 1}`);
+      check("★ 第二次命中缓存（不再调 TTS / concat）", second.status === 200 && second.headers.get("x-chat-audio-cache") === "hit" && ttsCalls === ttsAfterFirst && concatCalls - concatBefore === 1, `cache=${second.headers.get("x-chat-audio-cache")}`);
+      check("缓存两次字节一致", secondBytes.equals(firstBytes));
+      const forced = await fetch(`${audioUrl}?force=1`, { headers: { cookie: childCookie } });
+      check("★ ?force=1 强制重建（重新 concat）", forced.status === 200 && forced.headers.get("x-chat-audio-cache") === "miss" && concatCalls - concatBefore === 2, `cache=${forced.headers.get("x-chat-audio-cache")} concat=${concatCalls - concatBefore}`);
+      const anon = await fetch(audioUrl);
+      check("未登录拿整段音频 → 401", anon.status === 401, `status=${anon.status}`);
+    }
+
+    // ⑩ 场景按账号分（child / adult + include_child 权限）
+    {
+      const girlScenarios = await (await fetch(`http://127.0.0.1:${PORT}/api/chat/scenarios`, { headers: { cookie: childCookie } })).json();
+      const girlList = girlScenarios.scenarios ?? [];
+      check("★ 儿童账号只拿到 child 场景", girlList.length > 0 && girlList.every((x) => x.audience === "child"), `count=${girlList.length}`);
+      const girlInclude = await (await fetch(`http://127.0.0.1:${PORT}/api/chat/scenarios?include_child=1`, { headers: { cookie: childCookie } })).json();
+      const girlIncludeList = girlInclude.scenarios ?? [];
+      check(
+        "★ 儿童传 include_child=1 被忽略（仍无 adult 场景）",
+        girlIncludeList.length > 0 && girlIncludeList.every((x) => x.audience === "child"),
+        `count=${girlIncludeList.length} adults=${girlIncludeList.filter((x) => x.audience === "adult").length}`,
+      );
+      const dadScenarios = await (await fetch(`http://127.0.0.1:${PORT}/api/chat/scenarios`, { headers: { cookie: dadCookie } })).json();
+      const dadList = dadScenarios.scenarios ?? [];
+      check("★ 家长默认只拿到 adult 场景（8 个新场景）", dadList.length === 8 && dadList.every((x) => x.audience === "adult"), `count=${dadList.length}`);
+      const dadInclude = await (await fetch(`http://127.0.0.1:${PORT}/api/chat/scenarios?include_child=1`, { headers: { cookie: dadCookie } })).json();
+      const dadIncludeList = dadInclude.scenarios ?? [];
+      check(
+        "★ 家长 include_child=1 → adult + child（带 audience）",
+        dadIncludeList.filter((x) => x.audience === "adult").length === 8 && dadIncludeList.filter((x) => x.audience === "child").length > 0 && dadIncludeList.every((x) => x.audience === "adult" || x.audience === "child"),
+        `total=${dadIncludeList.length}`,
+      );
+      const dadChatHtml = await (await fetch(`http://127.0.0.1:${PORT}/chat`, { headers: { cookie: dadCookie } })).text();
+      check("★ 成人页面有「再看小朋友的场景」开关且默认未勾选", /data-testid="chat-include-child"/.test(dadChatHtml) && !/data-testid="chat-include-child"[^>]*checked/.test(dadChatHtml), "");
+      const girlChatHtml2 = await (await fetch(`http://127.0.0.1:${PORT}/chat`, { headers: { cookie: childCookie } })).text();
+      check("★ 儿童页面没有该开关", !girlChatHtml2.includes('data-testid="chat-include-child"'));
+    }
 
     // ⑥ 助手音频不再 0:00：preload=metadata（SSR HTML 断言）
     check("★ 助手音频 preload=metadata（不再 0:00 / 0:00）", /<audio[^>]*preload="metadata"[^>]*data-testid="tts-audio"/.test(dadChatHtml) || /data-testid="tts-audio"[^>]*preload="metadata"/.test(dadChatHtml), "tts-audio preload=metadata");

@@ -25,6 +25,7 @@ from .degrade import degraded_assessment, degraded_tts
 from .dialogue import complete_dialogue
 from .errors import BadRequest, PayloadTooLarge, PolicyDisabled, ProviderError, ProviderUnavailable
 from .voice_names import is_valid_voice_name
+from .audio_concat import MAX_TOTAL_INPUT_BYTES, concat_audio
 from .languages import SUPPORTED_ASR_LANGUAGES, normalize_language
 from .story import retell_story, rewrite_story
 from .image_gen import (
@@ -663,6 +664,36 @@ async def story_retell(payload: StoryRetellRequest) -> dict:
         level=payload.level,
         settings=settings,
     )
+
+
+# --------------------------------------------------------------------------------------
+# 12. audio/concat（task-67：多段音频按序拼成一段，返回 audio/wav + x-total-ms）
+# --------------------------------------------------------------------------------------
+@router.post("/audio/concat")
+async def audio_concat(
+    parts: list[UploadFile] = File(...),
+    gap_ms: int = Form(250),
+    normalize: bool = Form(False),
+) -> Response:
+    settings = get_settings()
+    if not parts:
+        raise BadRequest("parts is required (at least one audio segment)")
+    segments: list[bytes] = []
+    total_bytes = 0
+    for part in parts:
+        data = await _read_upload(part, settings.max_upload_bytes)
+        total_bytes += len(data)
+        if total_bytes > MAX_TOTAL_INPUT_BYTES:
+            raise PayloadTooLarge(f"total upload too large: {total_bytes} > {MAX_TOTAL_INPUT_BYTES} bytes")
+        segments.append(data)
+    wav, total_ms = await run_in_threadpool(concat_audio, segments, gap_ms)
+    headers = {
+        "X-Total-Ms": str(total_ms),
+        "Cache-Control": "no-store",
+        # normalize 目前不支持响度处理（task-67 先不做）；显式回 0 便于前端确认
+        "X-Normalize": "1" if normalize else "0",
+    }
+    return Response(content=wav, media_type="audio/wav", headers=headers)
 
 
 # --------------------------------------------------------------------------------------

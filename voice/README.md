@@ -50,7 +50,8 @@ curl -s -X POST localhost:8100/v1/pronounce \
 | 11 | `POST /v1/story/retell` | v1.9：复述覆盖度评估（鼓励优先、不评发音分，见 §18.5）|
 | 12 | `POST /v1/image/illustrate` | v2.0：故事 → 儿童绘本插画（智谱 GLM-Image，见 §19）|
 | 13 | `POST /v1/image/avatar` | v2.1：照片 → 风格化虚拟形象（**默认关闭**，见 §19.1）|
-| 14 | `GET /v1/image/avatar/presets` | v2.2：预置卡通形象库元数据（8 角色 × 5 风格，见 §19.2）|
+| 14 | `GET /v1/image/avatar/presets` | v2.2：预置卡通形象库元数据（12 角色 × 5 风格，见 §19.2）|
+| 15 | `POST /v1/audio/concat` | v2.3：多段音频按序拼成一段 WAV（见 §20）|
 
 统一错误格式：`{"error":{"code","message","detail"}}`，错误码为契约 §8 的固定集合。
 
@@ -1080,4 +1081,33 @@ no realistic human faces, no text in image, safe for young children`，调用方
 只有显式设置 `IMAGE_AVATAR_PHOTO=1` 才启用（仍需文生图 + 视觉 LLM）。
 `capabilities.image_avatar` 语义 = **照片生成是否启用**（默认 false）；`capabilities.avatar_presets: true`（静态库可用）。
 **风格白名单硬拒绝**：`realistic / photo / 写实 / photorealistic` 等 → **400 bad_request**（防止绕过 UI 直接调接口）。
+
+## 20. 对话音频拼接：`POST /v1/audio/concat`（task-67）
+
+对话训练结束后，web 把「每轮用户录音 + 每轮助手 TTS」按时间顺序上传，服务端拼成一段连续音频（便于回放对比）。
+
+`multipart/form-data`：
+- `parts`：**可重复**的文件字段，按提交顺序拼接（webm/opus、wav、mp3、m4a 等任意 PyAV 可解码格式）
+- `gap_ms`：段间静音，默认 **250**，范围 **0–2000**（**非法值 → 400**，不做静默钳制）
+- `normalize`：可选，默认 false；当前**不做响度处理**（仅回 `X-Normalize` 头，预留）
+
+行为/契约：
+- 逐段 `decode_audio`（统一 **16kHz 单声道**）；**任一段解码失败 → 400 `unsupported_audio`**，message 指出「第 N 段」，绝不静默跳过
+- 单段 >300s → **413 `audio_too_long`**（指明段号）；段数 >200 → **413 `payload_too_large`**；
+  拼接后总时长 >900s（15 分钟）→ **413 `audio_too_long`**；上传总量 >200MB → **413 `payload_too_large`**
+- 空 `parts` → **400 `bad_request`**
+- 响应：**`audio/wav`**（16kHz 单声道 PCM16，二进制，不是 JSON/base64），响应头 **`x-total-ms`** = 拼接后总时长；
+  `Cache-Control: no-store`；**不落盘、不缓存**
+- 备注：本端点的 `unsupported_audio` 按任务契约用 **400**（其它端点仍为 422）。
+
+实测（8110，真实用户 webm 录音 + mock TTS wav + 本地 mp3）：
+| 输入 | gap | x-total-ms | 实际解码时长 |
+|---|---|---|---|
+| 用户录音 6.18s + TTS 1.86s | 250ms | **8290** | 8290ms（16kHz/1ch/16bit）|
+| 三者 6.18 + 1.86 + 0.70 | 0 | 8740 | — |
+| 同上 | 250 | 9240 | — |
+| 同上 | 2000 | 12740 | — |
+
+错误实测：坏第 2 段 → `400 unsupported_audio`「第 2 段音频无法解码：…」；空 parts → `400 bad_request`；
+`gap_ms=5000` → `400 bad_request`；201 段 → `413 payload_too_large`。
 

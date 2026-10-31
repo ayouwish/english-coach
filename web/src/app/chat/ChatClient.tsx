@@ -3,12 +3,14 @@
 import { useEffect, useRef, useState } from "react";
 import { Recorder } from "@/components/Recorder";
 import type { ChatPron } from "@/lib/chat-pronunciation";
+import { ChatSessionAudio } from "@/components/ChatSessionAudio";
 import { PronunciationNote } from "@/components/PronunciationNote";
 import { ttsUrl } from "@/lib/tts-url";
 import type { DialogueCorrection } from "@/lib/types";
 
 interface ScenarioItem {
   id: string;
+  audience?: "child" | "adult";
   title: string;
   title_zh: string;
   setting_zh: string;
@@ -66,7 +68,6 @@ export function ChatClient({
   isChild,
   age,
   scenarios,
-  hiddenCount,
   usage: initialUsage,
   voiceReachable,
   ttsRate: initialTtsRate,
@@ -87,6 +88,10 @@ export function ChatClient({
   const [error, setError] = useState<string | null>(null);
   const [limitMessage, setLimitMessage] = useState<string | null>(null);
   const [suggestions, setSuggestions] = useState<string[]>([]);
+  /** 成人「再看小朋友的场景」开关（task-68 补充，默认关，记住状态） */
+  const [showChildScenarios, setShowChildScenarios] = useState(false);
+  const [extraChildScenarios, setExtraChildScenarios] = useState<ScenarioItem[]>([]);
+  const [childScenariosLoading, setChildScenariosLoading] = useState(false);
   /** 提示句（task-34）：点了只显示"照着说"+触发录音，**绝不直接发送文本** */
   const [promptLine, setPromptLine] = useState<string | null>(null);
   /** 递增这个数字即可让 Recorder 开录（Recorder 已有 startSignal 机制） */
@@ -218,6 +223,37 @@ export function ChatClient({
     listEndRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
   }, [messages]);
 
+  // 成人「再看小朋友的场景」：状态持久化（localStorage），打开时才向后端要 child 场景
+  useEffect(() => {
+    if (isChild) return;
+    try {
+      if (localStorage.getItem("ec.showChildScenarios") === "1") setShowChildScenarios(true);
+    } catch {
+      /* localStorage 不可用（隐私模式）→ 忽略 */
+    }
+  }, [isChild]);
+
+  useEffect(() => {
+    if (isChild || !showChildScenarios) return;
+    let cancelled = false;
+    setChildScenariosLoading(true);
+    (async () => {
+      try {
+        const res = await fetch("/api/chat/scenarios?include_child=1");
+        const data = (await res.json().catch(() => null)) as { scenarios?: ScenarioItem[] } | null;
+        if (cancelled || !res.ok) return;
+        setExtraChildScenarios((data?.scenarios ?? []).filter((x) => x.audience === "child"));
+      } catch {
+        /* 失败就只显示成人场景 */
+      } finally {
+        if (!cancelled) setChildScenariosLoading(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [isChild, showChildScenarios]);
+
   async function start(scenario: ScenarioItem) {
     // 切场景：停播 + 释放上一轮"我的录音" object URL（task-19 B）
     stopAllAudio();
@@ -291,6 +327,27 @@ export function ChatClient({
     }
     // 4 次都没拿到 → 标成 null（家长看到「—」，儿童看正向提示），不静默也不崩
     setMessages((prev) => prev.map((m, i) => (i === index && m.role === "user" ? { ...m, pron: null } : m)));
+  }
+
+  /** 用户主动结束对话（task-68）：调 /end 后进入汇总页（含整段回放）。 */
+  async function endSession() {
+    if (!sessionId) return;
+    setBusy(true);
+    setError(null);
+    try {
+      const res = await fetch(`/api/chat/sessions/${sessionId}/end`, { method: "POST" });
+      const data = (await res.json().catch(() => null)) as { ok?: boolean; error?: { message?: string } } | null;
+      if (!res.ok || !data?.ok) {
+        setError(data?.error?.message ?? `结束对话失败（HTTP ${res.status}）`);
+        return;
+      }
+      stopAllAudio();
+      setDone(true);
+    } catch (err) {
+      setError(`结束对话失败：${(err as Error).message}`);
+    } finally {
+      setBusy(false);
+    }
   }
 
   async function send(text: string, audioUrl?: string | null, audioBlob?: Blob | null) {
@@ -387,7 +444,7 @@ export function ChatClient({
         <p className="mt-1 text-sm text-[var(--ec-muted)]">
           {isChild
             ? `你 ${age} 岁，这里只显示适合你的场景。`
-            : `共 ${scenarios.length} 个场景（儿童可见场景另有 ${hiddenCount} 个被年龄过滤）。`}
+            : `成人场景 ${scenarios.length} 个。想练小朋友的场景？打开下面的「再看小朋友的场景」开关。`}
           {isChild ? " 不会的词可以点下面的句子直接说。" : ""}
         </p>
         <p className="mt-2 text-xs text-[var(--ec-muted)]">
@@ -469,7 +526,7 @@ export function ChatClient({
       </section>
 
       <section className="ec-card">
-        <h2 className="font-bold">{active ? "换个场景" : "选一个场景开始"}</h2>
+        <h2 className="font-bold">{active ? "换个场景" : isChild ? "选一个场景开始" : "成人场景"}</h2>
         <div className="mt-3 grid gap-2 sm:grid-cols-2">
           {scenarios.map((s) => (
             <button
@@ -494,6 +551,58 @@ export function ChatClient({
             </button>
           ))}
         </div>
+
+        {!isChild ? (
+          <div className="mt-3 border-t border-[#e6e8f5] pt-3">
+            <label className="flex items-center gap-2 text-sm" data-testid="chat-include-child-label">
+              <input
+                type="checkbox"
+                data-testid="chat-include-child"
+                checked={showChildScenarios}
+                onChange={(e) => {
+                  const next = e.target.checked;
+                  setShowChildScenarios(next);
+                  try {
+                    localStorage.setItem("ec.showChildScenarios", next ? "1" : "0");
+                  } catch {
+                    /* 忽略 */
+                  }
+                }}
+              />
+              <span>再看小朋友的场景（默认关）</span>
+            </label>
+            {showChildScenarios ? (
+              <div className="mt-2" data-testid="chat-child-scenarios">
+                <p className="text-xs font-semibold text-[var(--ec-muted)]">小朋友的场景</p>
+                {childScenariosLoading ? (
+                  <p className="mt-1 text-xs text-[var(--ec-muted)]">加载中…</p>
+                ) : null}
+                <div className="mt-1 grid gap-2 sm:grid-cols-2">
+                  {extraChildScenarios.map((s) => (
+                    <button
+                      key={s.id}
+                      type="button"
+                      disabled={busy}
+                      onClick={() => start(s)}
+                      className="rounded-xl border border-[#e6e8f5] bg-white p-3 text-left transition hover:border-[var(--ec-primary)]"
+                    >
+                      <span className="block font-semibold">
+                        🎈 {s.title}
+                        <span className="ml-2 text-xs text-[var(--ec-muted)]">{s.title_zh}</span>
+                      </span>
+                      <span className="mt-1 block text-xs text-[var(--ec-muted)]">
+                        {s.level} · {s.min_age}+ 岁 · {s.setting_zh}
+                      </span>
+                    </button>
+                  ))}
+                  {!childScenariosLoading && extraChildScenarios.length === 0 ? (
+                    <p className="text-xs text-[var(--ec-muted)]">暂时没有可用的儿童场景</p>
+                  ) : null}
+                </div>
+              </div>
+            ) : null}
+          </div>
+        ) : null}
       </section>
 
       {active && sessionId ? (
@@ -599,8 +708,9 @@ export function ChatClient({
           </div>
 
           {done ? (
-            <div className="ec-pop mt-3 rounded-xl bg-[var(--ec-primary-soft)] p-3 text-sm">
-              🌟 这个场景练完啦，辛苦了！换个场景继续，或者去「错音本」复习一下。
+            <div className="ec-pop mt-3 rounded-xl bg-[var(--ec-primary-soft)] p-3 text-sm" data-testid="chat-done-summary">
+              <p>🌟 这个场景练完啦，辛苦了！换个场景继续，或者去「错音本」复习一下。</p>
+              {sessionId ? <ChatSessionAudio sessionId={sessionId} isChild={isChild} /> : null}
             </div>
           ) : (
             <>
@@ -651,6 +761,20 @@ export function ChatClient({
                   </ol>
                 </div>
               ) : null}
+
+              {/* 随时可以结束对话（task-68：轮数不再限制，由用户决定何时结束） */}
+              <div className="mt-2 flex flex-wrap items-center gap-2">
+                <button
+                  type="button"
+                  data-testid="chat-end-session"
+                  className="ec-btn ec-btn-ghost text-xs"
+                  disabled={busy}
+                  onClick={() => void endSession()}
+                >
+                  🏁 结束对话
+                </button>
+                <span className="text-xs text-[var(--ec-muted)]">想聊多久都可以；想结束随时点这里</span>
+              </div>
 
               {/* 对话练习只练"说"：保留录音，不要文字输入框（task-32） */}
               <div className="mt-3 rounded-xl bg-[#f8f9ff] p-3" data-testid="speak-panel">

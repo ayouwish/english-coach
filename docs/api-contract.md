@@ -1,4 +1,4 @@
-# 接口契约 v1.12（FROZEN · 2026-10-31）
+# 接口契约 v1.13（FROZEN · 2026-10-31）
 
 > **本文件是唯一事实来源（single source of truth）。**
 
@@ -19,6 +19,7 @@
 | 2026-10-31 | v1.10 | **Web 层新增 Bearer Token 认证**（`/api/auth/token` `/refresh` `/revoke`），接口支持 `Authorization: Bearer` 与 Cookie **双模式**；新增 `auth_tokens` 表（迁移 0011）| 向后兼容：Cookie 登录不变；移动端可用 Token |
 | 2026-10-31 | v1.11 | 新增 §19 虚拟形象：`POST /v1/image/avatar`（照片→角色卡→5 种风格头像）、`/v1/image/illustrate` 支持 `character_desc`/`character_style` 与 `character_used`；`capabilities.image_avatar` | 向后兼容：illustrate 不带角色卡时提示词逐字节不变 |
 | 2026-10-31 | v1.12 | 虚拟形象改为**预置库 + 选择题**（照片不上云）：新增 `GET /v1/image/avatar/presets`、错误码 `policy_disabled`(403)、配置 `IMAGE_AVATAR_PHOTO=0`；风格白名单硬拒绝写实；`capabilities.avatar_presets`、`image_avatar` 语义调整为"照片生成是否启用" | 向后兼容（照片接口默认关闭）|
+| 2026-10-31 | v1.13 | 新增 §21 `POST /v1/audio/concat`（多段音频按序拼接成一段 WAV，供"整段对话回放"）| 向后兼容 |
 > `web/` 与 `voice/` 两个模块并行开发，任何一方需要改本契约，必须先通知 Lead 并同步改本文件。
 > 冻结范围：路径、请求字段名、响应字段名、枚举值、错误码。
 > 未冻结范围：各 provider 内部实现、日志格式、额外字段（允许追加 `provider_meta` 等可选字段，不得删除或改名已有字段）。
@@ -852,3 +853,30 @@ POST /api/auth/revoke
 ### 19.4 隐私
 - 照片 → **DeepSeek**（视觉描述）；**不发给智谱**
 - 生成的头像与角色卡存本地；故事插画只发送**文字**提示词（含角色卡）
+
+---
+
+## 21. v1.13 新增：`POST /v1/audio/concat`（多段音频按序拼接）
+
+用途：对话训练结束后，把「用户每轮录音 + 助手每轮 TTS」按时间顺序拼成**一段音频连续播放**，便于对比感受。
+
+`multipart/form-data`：
+- `parts`：**可重复**的文件字段，按提交顺序拼接（webm/opus、wav、mp3、m4a 等 PyAV 可解码格式，**允许混格式**）
+- `gap_ms`：段间静音，默认 **250**，范围 **0–2000**（越界 → 400，**不静默钳制**）
+- `normalize`：可选，默认 false；当前不做响度处理（仅回 `X-Normalize` 头，预留）
+
+响应：
+- **`audio/wav`**（16kHz / 单声道 / PCM16，**二进制**，不是 JSON/base64）
+- 响应头 **`x-total-ms`**（拼接后总时长）、`X-Normalize`、`Cache-Control: no-store`
+- **不落盘、不缓存**
+
+错误：
+| 情况 | 状态码 |
+|---|---|
+| 任一段无法解码（message 含「第 N 段」）| **400 `unsupported_audio`**（本端点特例用 400）|
+| 空 `parts` / 非法 `gap_ms` | 400 `bad_request` |
+| 段数 > 200 或上传总量 > 200MB | 413 `payload_too_large` |
+| 单段 > 300s 或拼接总时长 > 900s | 413 `audio_too_long` |
+
+实测（真实用户 webm + TTS wav + mp3）：6.18s + 1.86s + gap 250 → `x-total-ms=8290`；
+三段混格式 gap 0/250/2000 → 8740/9240/12740；输出恒为 16k/1ch/16bit。
