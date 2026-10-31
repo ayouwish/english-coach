@@ -1,0 +1,465 @@
+{
+  "version": 1,
+  "provider": "mock",
+  "placeholder": true,
+  "image_size": "1280x1280",
+  "styles": [
+    {
+      "id": "watercolor",
+      "label_zh": "水彩"
+    },
+    {
+      "id": "cartoon",
+      "label_zh": "卡通"
+    },
+    {
+      "id": "pixel",
+      "label_zh": "像素"
+    },
+    {
+      "id": "papercut",
+      "label_zh": "剪纸"
+    },
+    {
+      "id": "clay",
+      "label_zh": "黏土"
+    }
+  ],
+  "characters": [
+    {
+      "id": "c1",
+      "label_zh": "短发小圆脸",
+      "desc_en": "a child with short black bob hair, round face, red hoodie",
+      "images": {
+        "watercolor": "c1-watercolor.png",
+        "cartoon": "c1-cartoon.png",
+        "pixel": "c1-pixel.png",
+        "papercut": "c1-papercut.png",
+        "clay": "c1-clay.png"
+      },
+      "placeholder": {
+        "watercolor": true,
+        "cartoon": true,
+        "pixel": true,
+        "papercut": true,
+        "clay": true
+      }
+    },
+    {
+      "id": "c2",
+      "label_zh": "马尾圆眼镜",
+      "desc_en": "a child with black ponytail hair, oval face, round glasses, yellow t-shirt",
+      "images": {
+        "watercolor": "c2-watercolor.png",
+        "cartoon": "c2-cartoon.png",
+        "pixel": "c2-pixel.png",
+        "papercut": "c2-papercut.png",
+        "clay": "c2-clay.png"
+      },
+      "placeholder": {
+        "watercolor": true,
+        "cartoon": true,
+        "pixel": true,
+        "papercut": true,
+        "clay": true
+      }
+    },
+    {
+      "id": "c3",
+      "label_zh": "棕色卷发",
+      "desc_en": "a child with curly brown hair, light freckles, blue sweater",
+      "images": {
+        "watercolor": "c3-watercolor.png",
+        "cartoon": "c3-cartoon.png",
+        "pixel": "c3-pixel.png",
+        "papercut": "c3-papercut.png",
+        "clay": "c3-clay.png"
+      },
+      "placeholder": {
+        "watercolor": true,
+        "cartoon": true,
+        "pixel": true,
+        "papercut": true,
+        "clay": true
+      }
+    },
+    {
+      "id": "c4",
+      "label_zh": "双马尾",
+      "desc_en": "a child with dark brown twin tails, pink dress",
+      "images": {
+        "watercolor": "c4-watercolor.png",
+        "cartoon": "c4-cartoon.png",
+        "pixel": "c4-pixel.png",
+        "papercut": "c4-papercut.png",
+        "clay": "c4-clay.png"
+      },
+      "placeholder": {
+        "watercolor": true,
+        "cartoon": true,
+        "pixel": true,
+        "papercut": true,
+        "clay": true
+      }
+    },
+    {
+      "id": "c5",
+      "label_zh": "平头绿外套",
+      "desc_en": "a child with short flat black hair, green jacket",
+      "images": {
+        "watercolor": "c5-watercolor.png",
+        "cartoon": "c5-cartoon.png",
+        "pixel": "c5-pixel.png",
+        "papercut": "c5-papercut.png",
+        "clay": "c5-clay.png"
+      },
+      "placeholder": {
+        "watercolor": true,
+        "cartoon": true,
+        "pixel": true,
+        "papercut": true,
+        "clay": true
+      }
+    },
+    {
+      "id": "c6",
+      "label_zh": "长发蝴蝶结",
+      "desc_en": "a child with long black hair and a hair bow, purple top",
+      "images": {
+        "watercolor": "c6-watercolor.png",
+        "cartoon": "c6-cartoon.png",
+        "pixel": "c6-pixel.png",
+        "papercut": "c6-papercut.png",
+        "clay": "c6-clay.png"
+      },
+      "placeholder": {
+        "watercolor": true,
+        "cartoon": true,
+        "pixel": true,
+        "papercut": true,
+        "clay": true
+      }
+    },
+    {
+      "id": "c7",
+      "label_zh": "栗色短发眼镜",
+      "desc_en": "a child with short chestnut hair, square glasses, white shirt",
+      "images": {
+        "watercolor": "c7-watercolor.png",
+        "cartoon": "c7-cartoon.png",
+        "pixel": "c7-pixel.png",
+        "papercut": "c7-papercut.png",
+        "clay": "c7-clay.png"
+      },
+      "placeholder": {
+        "watercolor": true,
+        "cartoon": true,
+        "pixel": true,
+        "papercut": true,
+        "clay": true
+      }
+    },
+    {
+      "id": "c8",
+      "label_zh": "丸子头橙围巾",
+      "desc_en": "a child with a top bun, orange scarf, cream sweater",
+      "images": {
+        "watercolor": "c8-watercolor.png",
+        "cartoon": "c8-cartoon.png",
+        "pixel": "c8-pixel.png",
+        "papercut": "c8-papercut.png",
+        "clay": "c8-clay.png"
+      },
+      "placeholder": {
+        "watercolor": true,
+        "cartoon": true,
+        "pixel": true,
+        "papercut": true,
+        "clay": true
+      }
+    }
+  ],
+  "presets": [
+    {
+      "id": "c1-watercolor",
+      "character_id": "c1",
+      "style": "watercolor",
+      "file": "c1-watercolor.png",
+      "placeholder": true
+    },
+    {
+      "id": "c1-cartoon",
+      "character_id": "c1",
+      "style": "cartoon",
+      "file": "c1-cartoon.png",
+      "placeholder": true
+    },
+    {
+      "id": "c1-pixel",
+      "character_id": "c1",
+      "style": "pixel",
+      "file": "c1-pixel.png",
+      "placeholder": true
+    },
+    {
+      "id": "c1-papercut",
+      "character_id": "c1",
+      "style": "papercut",
+      "file": "c1-papercut.png",
+      "placeholder": true
+    },
+    {
+      "id": "c1-clay",
+      "character_id": "c1",
+      "style": "clay",
+      "file": "c1-clay.png",
+      "placeholder": true
+    },
+    {
+      "id": "c2-watercolor",
+      "character_id": "c2",
+      "style": "watercolor",
+      "file": "c2-watercolor.png",
+      "placeholder": true
+    },
+    {
+      "id": "c2-cartoon",
+      "character_id": "c2",
+      "style": "cartoon",
+      "file": "c2-cartoon.png",
+      "placeholder": true
+    },
+    {
+      "id": "c2-pixel",
+      "character_id": "c2",
+      "style": "pixel",
+      "file": "c2-pixel.png",
+      "placeholder": true
+    },
+    {
+      "id": "c2-papercut",
+      "character_id": "c2",
+      "style": "papercut",
+      "file": "c2-papercut.png",
+      "placeholder": true
+    },
+    {
+      "id": "c2-clay",
+      "character_id": "c2",
+      "style": "clay",
+      "file": "c2-clay.png",
+      "placeholder": true
+    },
+    {
+      "id": "c3-watercolor",
+      "character_id": "c3",
+      "style": "watercolor",
+      "file": "c3-watercolor.png",
+      "placeholder": true
+    },
+    {
+      "id": "c3-cartoon",
+      "character_id": "c3",
+      "style": "cartoon",
+      "file": "c3-cartoon.png",
+      "placeholder": true
+    },
+    {
+      "id": "c3-pixel",
+      "character_id": "c3",
+      "style": "pixel",
+      "file": "c3-pixel.png",
+      "placeholder": true
+    },
+    {
+      "id": "c3-papercut",
+      "character_id": "c3",
+      "style": "papercut",
+      "file": "c3-papercut.png",
+      "placeholder": true
+    },
+    {
+      "id": "c3-clay",
+      "character_id": "c3",
+      "style": "clay",
+      "file": "c3-clay.png",
+      "placeholder": true
+    },
+    {
+      "id": "c4-watercolor",
+      "character_id": "c4",
+      "style": "watercolor",
+      "file": "c4-watercolor.png",
+      "placeholder": true
+    },
+    {
+      "id": "c4-cartoon",
+      "character_id": "c4",
+      "style": "cartoon",
+      "file": "c4-cartoon.png",
+      "placeholder": true
+    },
+    {
+      "id": "c4-pixel",
+      "character_id": "c4",
+      "style": "pixel",
+      "file": "c4-pixel.png",
+      "placeholder": true
+    },
+    {
+      "id": "c4-papercut",
+      "character_id": "c4",
+      "style": "papercut",
+      "file": "c4-papercut.png",
+      "placeholder": true
+    },
+    {
+      "id": "c4-clay",
+      "character_id": "c4",
+      "style": "clay",
+      "file": "c4-clay.png",
+      "placeholder": true
+    },
+    {
+      "id": "c5-watercolor",
+      "character_id": "c5",
+      "style": "watercolor",
+      "file": "c5-watercolor.png",
+      "placeholder": true
+    },
+    {
+      "id": "c5-cartoon",
+      "character_id": "c5",
+      "style": "cartoon",
+      "file": "c5-cartoon.png",
+      "placeholder": true
+    },
+    {
+      "id": "c5-pixel",
+      "character_id": "c5",
+      "style": "pixel",
+      "file": "c5-pixel.png",
+      "placeholder": true
+    },
+    {
+      "id": "c5-papercut",
+      "character_id": "c5",
+      "style": "papercut",
+      "file": "c5-papercut.png",
+      "placeholder": true
+    },
+    {
+      "id": "c5-clay",
+      "character_id": "c5",
+      "style": "clay",
+      "file": "c5-clay.png",
+      "placeholder": true
+    },
+    {
+      "id": "c6-watercolor",
+      "character_id": "c6",
+      "style": "watercolor",
+      "file": "c6-watercolor.png",
+      "placeholder": true
+    },
+    {
+      "id": "c6-cartoon",
+      "character_id": "c6",
+      "style": "cartoon",
+      "file": "c6-cartoon.png",
+      "placeholder": true
+    },
+    {
+      "id": "c6-pixel",
+      "character_id": "c6",
+      "style": "pixel",
+      "file": "c6-pixel.png",
+      "placeholder": true
+    },
+    {
+      "id": "c6-papercut",
+      "character_id": "c6",
+      "style": "papercut",
+      "file": "c6-papercut.png",
+      "placeholder": true
+    },
+    {
+      "id": "c6-clay",
+      "character_id": "c6",
+      "style": "clay",
+      "file": "c6-clay.png",
+      "placeholder": true
+    },
+    {
+      "id": "c7-watercolor",
+      "character_id": "c7",
+      "style": "watercolor",
+      "file": "c7-watercolor.png",
+      "placeholder": true
+    },
+    {
+      "id": "c7-cartoon",
+      "character_id": "c7",
+      "style": "cartoon",
+      "file": "c7-cartoon.png",
+      "placeholder": true
+    },
+    {
+      "id": "c7-pixel",
+      "character_id": "c7",
+      "style": "pixel",
+      "file": "c7-pixel.png",
+      "placeholder": true
+    },
+    {
+      "id": "c7-papercut",
+      "character_id": "c7",
+      "style": "papercut",
+      "file": "c7-papercut.png",
+      "placeholder": true
+    },
+    {
+      "id": "c7-clay",
+      "character_id": "c7",
+      "style": "clay",
+      "file": "c7-clay.png",
+      "placeholder": true
+    },
+    {
+      "id": "c8-watercolor",
+      "character_id": "c8",
+      "style": "watercolor",
+      "file": "c8-watercolor.png",
+      "placeholder": true
+    },
+    {
+      "id": "c8-cartoon",
+      "character_id": "c8",
+      "style": "cartoon",
+      "file": "c8-cartoon.png",
+      "placeholder": true
+    },
+    {
+      "id": "c8-pixel",
+      "character_id": "c8",
+      "style": "pixel",
+      "file": "c8-pixel.png",
+      "placeholder": true
+    },
+    {
+      "id": "c8-papercut",
+      "character_id": "c8",
+      "style": "papercut",
+      "file": "c8-papercut.png",
+      "placeholder": true
+    },
+    {
+      "id": "c8-clay",
+      "character_id": "c8",
+      "style": "clay",
+      "file": "c8-clay.png",
+      "placeholder": true
+    }
+  ],
+  "generated_at": "2026-10-31T02:29:56.395666+00:00"
+}

@@ -49,7 +49,8 @@ curl -s -X POST localhost:8100/v1/pronounce \
 | 10 | `POST /v1/story/rewrite` | v1.8：中文讲述 → 分级英文故事（见 §18）|
 | 11 | `POST /v1/story/retell` | v1.9：复述覆盖度评估（鼓励优先、不评发音分，见 §18.5）|
 | 12 | `POST /v1/image/illustrate` | v2.0：故事 → 儿童绘本插画（智谱 GLM-Image，见 §19）|
-| 13 | `POST /v1/image/avatar` | v2.1：照片 → 风格化虚拟形象 + 角色卡（见 §19.1）|
+| 13 | `POST /v1/image/avatar` | v2.1：照片 → 风格化虚拟形象（**默认关闭**，见 §19.1）|
+| 14 | `GET /v1/image/avatar/presets` | v2.2：预置卡通形象库元数据（8 角色 × 5 风格，见 §19.2）|
 
 统一错误格式：`{"error":{"code","message","detail"}}`，错误码为契约 §8 的固定集合。
 
@@ -1041,3 +1042,31 @@ no realistic human faces, no text in image, safe for young children`，调用方
 
 **prompt 可见性**：两个接口都返回最终实际提示词 `prompt_used`（+ 四段 `prompt_parts`），供前端展示与用户反馈；
 不会回显 API key 或内部路径。`capabilities.image_avatar: true|false`（文生图 + 视觉 LLM 都可用才为 true）。
+
+### 19.2 预置卡通形象库（task-63，推荐路径）
+
+用户决定「**不接受照片上云**」→ 不拍照、不上传，改为**预置形象库 + 选择题**：
+
+- 定义：`app/avatar_presets.py`，**8 个角色 × 5 种风格 = 40 张**，描述统一为 `a child with ...`
+  （不含性别敏感词/真实姓名；安全后缀 `no realistic human faces / no text in image` 写死）。
+- 静态产物（已生成，提交在仓库）：`web/public/avatars/presets/<character>-<style>.png`（1280×1280）
+  + `avatars-presets.json`（元数据：styles / characters[].images / placeholder 标记）。
+  当前为 **mock 占位图**（`placeholder=true`，合计约 **0.65MB / 40 张**）。
+- 生成脚本（**没有 Zhipu key 时生成 mock 占位图**，幂等，`--force` 重生成）：
+  ```bash
+  python scripts/gen_avatar_presets.py --provider mock          # 占位图（不联网、不花钱）
+  IMAGE_PROVIDER=zhipu IMAGE_API_KEY=<key> \
+    python scripts/gen_avatar_presets.py --provider zhipu --force   # 真实生成（40 × ¥0.1 ≈ ¥4，一次性）
+  ```
+  参数：`--out-dir`（默认 `../web/public/avatars/presets`）、`--force`。
+- `GET /v1/image/avatar/presets` → `{provider, placeholder, image_size, styles[], characters[]}`
+  （voice 只返回**文件名**，URL 前缀由 web 决定）。
+- 故事插画仍用角色卡机制：把所选预置的 `desc_en` 作为 `character_desc`、风格作为 `character_style`
+  传给 `/v1/image/illustrate` 即可保持同一形象/风格（无需改动）。
+
+**照片生成路径默认关闭**（隐私策略）：`IMAGE_AVATAR_PHOTO=0`（默认）时 `POST /v1/image/avatar`
+返回 **403 `policy_disabled`**（message：「按隐私策略，照片生成形象已关闭；请从预置形象中选择。」）；
+只有显式设置 `IMAGE_AVATAR_PHOTO=1` 才启用（仍需文生图 + 视觉 LLM）。
+`capabilities.image_avatar` 语义 = **照片生成是否启用**（默认 false）；`capabilities.avatar_presets: true`（静态库可用）。
+**风格白名单硬拒绝**：`realistic / photo / 写实 / photorealistic` 等 → **400 bad_request**（防止绕过 UI 直接调接口）。
+

@@ -6,18 +6,15 @@ import {
   avatarView,
   clearAvatar,
   getAvatar,
-  isAvatarStyle,
+  isForbiddenStyle,
   sanitizeCharacterDesc,
   updateAvatarColumns,
-  writeAvatarImage,
-  MAX_PHOTO_BYTES,
 } from "@/lib/avatar";
-import { base64ToBytes, detectImageMime } from "@/lib/illustration";
+import { loadAvatarPresets, resolvePresetChoice } from "@/lib/avatar-presets";
 import { jsonOk } from "@/lib/http";
-import { callAvatar, VoiceError } from "@/lib/voice";
 
 export const dynamic = "force-dynamic";
-const UNAVAILABLE_HINT = "虚拟形象生成暂未就绪（voice 侧 /v1/image/avatar 未上线或未配置）。可以先继续用文字头像，稍后再试。";
+const POLICY_HINT = "按隐私策略，照片生成形象已关闭；请从预置形象中选择。";
 
 function errorJson(status: number, code: string, message: string) {
   return NextResponse.json({ error: { code, message, detail: {} } }, { status });
@@ -37,63 +34,43 @@ export async function GET() {
   }
 }
 
-/** POST /api/avatar —— multipart `photo` + `style`，转发 voice 生成形象（儿童也能用）。 */
+/**
+ * POST /api/avatar —— **JSON 选择题**（task-64）：`{preset_id, style}`。
+ * - 不生成图片、零等待：直接从预置库取静态图 + 角色描述写进 users；
+ * - 非法 preset/style → 400；`realistic/photo/写实` → **400**（服务端硬拒绝写实）；
+ * - 旧的 multipart 照片上传 → **403 `policy_disabled`**（隐私策略：照片不上云）。
+ */
 export async function POST(req: NextRequest) {
   try {
     await ensureBootstrap();
     const user = await requireUser();
-    const form = await req.formData();
-    const photo = form.get("photo");
-    if (!(photo instanceof File)) return errorJson(400, "bad_request", "请先拍照或选择一张照片（字段名 photo）");
-    if (photo.size > MAX_PHOTO_BYTES) return errorJson(413, "payload_too_large", "照片太大（上限 10MB），换一张小一点的吧");
-    const mime = photo.type || "";
-    if (!mime.startsWith("image/")) return errorJson(400, "bad_request", `只支持图片（当前是 ${mime || "未知类型"}）`);
-    const styleRaw = form.get("style");
-    if (!isAvatarStyle(styleRaw)) return errorJson(400, "bad_request", "请选择一个风格（水彩/卡通/像素/剪纸/黏土）");
-    const current = await getAvatar(user.id);
-    const descInput = sanitizeCharacterDesc(form.get("character_desc")) ?? current.character_desc;
 
-    const bytes = new Uint8Array(await photo.arrayBuffer());
-    // 服务端二次校验：不能只信 Content-Type（文本改名 .jpg 也要拦）
-    if (!detectImageMime(bytes)) {
-      return errorJson(400, "bad_request", "这不是有效的图片文件（内容不是图片），请重新拍照或选择照片。");
+    const contentType = req.headers.get("content-type") ?? "";
+    if (contentType.includes("multipart/form-data")) {
+      return errorJson(403, "policy_disabled", POLICY_HINT);
     }
-    const result = await callAvatar({
-      data: bytes,
-      mime,
-      filename: photo.name || "photo.jpg",
-      style: styleRaw,
-      characterDesc: descInput,
-    });
-    const img = base64ToBytes(result.image_b64 ?? "");
-    if (!img) return errorJson(502, "provider_error", "形象生成返回的数据无法解析，请稍后再试");
-    const written = writeAvatarImage(user.id, img);
-    if (!written.ok) return errorJson(502, "provider_error", written.reason);
+    const body = (await req.json().catch(() => null)) as { preset_id?: unknown; style?: unknown } | null;
+    if (!body) return errorJson(400, "bad_request", "请求体必须是 JSON：{preset_id, style}");
+    if (isForbiddenStyle(body.style)) {
+      return errorJson(400, "bad_request", "写实/照片风格已关闭（隐私策略），请选择卡通类风格");
+    }
+    const presets = await loadAvatarPresets();
+    if (!presets) return errorJson(503, "presets_unavailable", "预置形象库暂时不可用，请稍后再试");
+    const choice = resolvePresetChoice(presets, body.preset_id, body.style);
+    if (!choice) return errorJson(400, "bad_request", "预置形象或风格不合法，请从列表里选");
 
-    const desc = sanitizeCharacterDesc(result.character_desc) ?? descInput;
     const state = await updateAvatarColumns(user.id, {
-      imagePath: written.relativePath,
-      style: styleRaw,
-      characterDesc: desc,
-      prompt: typeof result.prompt_used === "string" ? result.prompt_used.slice(0, 2000) : current.prompt_used,
+      imagePath: choice.imagePath,
+      presetId: String(body.preset_id),
+      style: choice.style,
+      characterDesc: choice.descEn,
+      prompt: null, // 预置形象没有生成提示词
     });
-    return jsonOk({ ok: true, ...avatarView(state, user.id) }, 200);
+    return jsonOk({ ok: true, ...avatarView(state, user.id) });
   } catch (err) {
     if (err instanceof HttpError) return errorJson(err.status, err.code, err.message);
-    if (err instanceof VoiceError) {
-      const unavailable =
-        err.code === "voice_unreachable" || err.status === 404 || err.status === 405 || err.status === 502 || err.status === 503 || err.status === 504;
-      if (unavailable) {
-        console.warn(`[avatar] voice 侧不可用（${err.code}/${err.status ?? "-"}）：${err.message}`);
-        return errorJson(503, "avatar_unavailable", UNAVAILABLE_HINT);
-      }
-      if (err.status === 400) {
-        return errorJson(400, "content_unsafe", "这张照片可能不适合生成形象，换一张清楚的正脸照片试试");
-      }
-      return errorJson(502, "provider_error", `形象生成失败：${err.message}。可以点「换一张」重试。`);
-    }
     console.error("[avatar.post]", err);
-    return errorJson(500, "internal_error", "形象生成出错了，可以重试");
+    return errorJson(500, "internal_error", "保存虚拟形象失败，请重试");
   }
 }
 

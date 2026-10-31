@@ -15,6 +15,7 @@ STATUS_BY_CODE: dict[str, int] = {
     "no_provider": 503,
     "provider_unavailable": 503,  # task-25：/v1/ocr 依赖未安装（如未装 rapidocr）
     "content_unsafe": 400,  # task-52：文生图内容被安全过滤
+    "policy_disabled": 403,  # task-63：隐私策略关闭照片生成形象
     "internal_error": 500,
 }
 
@@ -75,6 +76,12 @@ class ProviderError(VoiceError):
 
 class ProviderTimeout(ProviderError):
     code = "provider_timeout"
+
+
+class PolicyDisabled(VoiceError):
+    """功能按策略关闭（task-63：照片生成形象默认关闭）。"""
+
+    code = "policy_disabled"
 
 
 class ContentUnsafe(VoiceError):

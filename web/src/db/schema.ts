@@ -17,6 +17,8 @@ export const users = sqliteTable("users", {
   avatar: text("avatar"),
   /** 虚拟形象（task-62）：图片相对路径 / 风格 / 角色卡 / 生成提示词 / 更新时间 */
   avatarImagePath: text("avatar_image_path"),
+  /** 预置形象 id（task-64：选择题，不上传照片） */
+  avatarPresetId: text("avatar_preset_id"),
   avatarStyle: text("avatar_style"),
   avatarDesc: text("avatar_desc"),
   avatarPrompt: text("avatar_prompt"),

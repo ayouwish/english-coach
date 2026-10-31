@@ -42,6 +42,7 @@ def avatar_env(monkeypatch):
         monkeypatch,
         IMAGE_PROVIDER="mock",
         IMAGE_SIZE="1280x1280",
+        IMAGE_AVATAR_PHOTO="1",
         LLM_BASE_URL="https://api.deepseek.com/v1",
         LLM_API_KEY="test-key",
         LLM_MODEL="deepseek-flash",
@@ -172,14 +173,14 @@ def test_avatar_rejects_non_image(client, avatar_env, monkeypatch):
 
 
 def test_avatar_requires_provider(client, monkeypatch):
-    _with_env(monkeypatch, IMAGE_PROVIDER="none")
+    _with_env(monkeypatch, IMAGE_PROVIDER="none", IMAGE_AVATAR_PHOTO="1")
     response = _post_avatar(client)
     assert response.status_code == 503
     assert response.json()["error"]["code"] == "provider_unavailable"
 
 
 def test_avatar_requires_vision_llm(client, monkeypatch):
-    _with_env(monkeypatch, IMAGE_PROVIDER="mock", LLM_BASE_URL=None, LLM_API_KEY=None)
+    _with_env(monkeypatch, IMAGE_PROVIDER="mock", LLM_BASE_URL=None, LLM_API_KEY=None, IMAGE_AVATAR_PHOTO="1")
     _fake_vision(monkeypatch)  # 即使 read_image 可用，也要先看配置（available=False）
     response = _post_avatar(client)
     assert response.status_code == 503

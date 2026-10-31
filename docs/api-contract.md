@@ -1,4 +1,4 @@
-# 接口契约 v1.11（FROZEN · 2026-10-31）
+# 接口契约 v1.12（FROZEN · 2026-10-31）
 
 > **本文件是唯一事实来源（single source of truth）。**
 
@@ -18,6 +18,7 @@
 | 2026-10-30 | v1.9 | 新增 §17 `POST /v1/image/illustrate`（故事→儿童绘本插画，智谱 GLM-Image）；`capabilities.image`/`image_provider`；错误码新增 `content_unsafe`(400)；`warnings` 新增 `prompt_template` | 向后兼容 |
 | 2026-10-31 | v1.10 | **Web 层新增 Bearer Token 认证**（`/api/auth/token` `/refresh` `/revoke`），接口支持 `Authorization: Bearer` 与 Cookie **双模式**；新增 `auth_tokens` 表（迁移 0011）| 向后兼容：Cookie 登录不变；移动端可用 Token |
 | 2026-10-31 | v1.11 | 新增 §19 虚拟形象：`POST /v1/image/avatar`（照片→角色卡→5 种风格头像）、`/v1/image/illustrate` 支持 `character_desc`/`character_style` 与 `character_used`；`capabilities.image_avatar` | 向后兼容：illustrate 不带角色卡时提示词逐字节不变 |
+| 2026-10-31 | v1.12 | 虚拟形象改为**预置库 + 选择题**（照片不上云）：新增 `GET /v1/image/avatar/presets`、错误码 `policy_disabled`(403)、配置 `IMAGE_AVATAR_PHOTO=0`；风格白名单硬拒绝写实；`capabilities.avatar_presets`、`image_avatar` 语义调整为"照片生成是否启用" | 向后兼容（照片接口默认关闭）|
 > `web/` 与 `voice/` 两个模块并行开发，任何一方需要改本契约，必须先通知 Lead 并同步改本文件。
 > 冻结范围：路径、请求字段名、响应字段名、枚举值、错误码。
 > 未冻结范围：各 provider 内部实现、日志格式、额外字段（允许追加 `provider_meta` 等可选字段，不得删除或改名已有字段）。
@@ -775,7 +776,41 @@ POST /api/auth/revoke
 > 因此"形象一致性"靠 **角色卡（英文外观描述）+ 固定风格词** 实现，**不是**身份级还原；
 > 照片**只发给视觉 LLM**（产出文字描述），**不会**发给智谱。
 
-### 19.1 `POST /v1/image/avatar`
+### 19.0 产品决策变更（v1.12）：照片不上云，改为**预置形象选择题**
+
+**用户决定：不接受"照片上传到云厂商"**。虚拟形象改为：
+- 服务端提供**预置卡通形象库**（8 角色 × 5 风格 = 40 张静态图，提交在仓库里）
+- 用户在客户端**做选择题**（先选风格、再选形象）→ 立即生效，**不生成、不上传照片**
+- 故事插画仍用该角色的 `desc_en` 作为 `character_desc` 保持形象一致
+
+**照片生成路径保留但默认关闭**（`IMAGE_AVATAR_PHOTO=0`）。
+
+#### `GET /v1/image/avatar/presets`
+```json
+200 {"provider":"mock|zhipu", "placeholder": true|false, "image_size":"1280x1280",
+     "styles":[{"id":"watercolor","label_zh":"水彩"}, ...5],
+     "characters":[{"id":"c1","label_zh":"短发小圆脸",
+                    "desc_en":"a child with short black bob hair, round face, red hoodie",
+                    "images":{"watercolor":"c1-watercolor.png","cartoon":"c1-cartoon.png", "...":"..."}}, ...8]}
+```
+- voice 只返回**文件名**；URL 前缀由 web 决定（web 静态托管 `web/public/avatars/presets/`）
+- `placeholder=true` 表示当前是占位图（未配置智谱 key），客户端应提示「预览图」
+
+#### 新错误码 `policy_disabled`（403）
+```json
+{"error":{"code":"policy_disabled","message":"按隐私策略，照片生成形象已关闭；请从预置形象中选择。"}}
+```
+默认（`IMAGE_AVATAR_PHOTO=0`）时 `/v1/image/avatar` 一律返回此错误；设为 `1` 才允许照片生成。
+
+#### 风格白名单（硬拒绝写实）
+`avatar` 与 `illustrate` 的 `style` / `character_style` 入口都拦截：
+`realistic | photo | 写实 | photorealistic | photograph | real life` → **400 bad_request**。
+
+#### 能力字段
+- `capabilities.avatar_presets: true|false`（静态库是否可用）
+- `capabilities.image_avatar`：**语义改为"照片生成是否启用"**（= `IMAGE_AVATAR_PHOTO` 且文生图与视觉 LLM 都可用），默认 **false**
+
+### 19.1 `POST /v1/image/avatar`（照片路径，默认关闭）
 `multipart/form-data`：`photo`(file, ≤10MB) + `style`（默认 `watercolor`）；查询 `?force=1` 绕过缓存。
 
 ```json

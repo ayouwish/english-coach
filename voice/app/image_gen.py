@@ -82,8 +82,19 @@ DEFAULT_SCENE = "a child and a friend playing together happily in a warm, cheerf
 # --------------------------------------------------------------------------------------
 # 风格 / 角色卡（task-61）
 # --------------------------------------------------------------------------------------
+# task-63：写实/照片风格一律硬拒绝（防止绕过 UI 直接调接口）
+BLOCKED_STYLE_MARKERS = ("realistic", "photoreal", "photo", "photograph", "写实", "真实照片", "real life")
+
+
+def assert_style_allowed(style: str | None) -> None:
+    value = (style or "").strip().lower()
+    if any(marker in value for marker in BLOCKED_STYLE_MARKERS):
+        raise BadRequest("不支持写实/照片风格：本项目只做儿童绘本插画风（禁止写实人脸）")
+
+
 def validate_style(style: str | None) -> str:
-    """头像/角色卡用：必须是五种预设之一，否则 400。"""
+    """头像/角色卡用：必须是五种预设之一，否则 400；写实/照片风格硬拒绝。"""
+    assert_style_allowed(style)
     value = (style or DEFAULT_STYLE).strip().lower()
     if value not in STYLE_PRESETS:
         raise BadRequest(f"style must be one of {list(ALLOWED_STYLES)}, got {style!r}")
@@ -92,6 +103,7 @@ def validate_style(style: str | None) -> str:
 
 def style_phrase(style: str | None) -> str:
     """风格词：预设直接映射；插画接口的历史自由文本保持 "soft {style}" 的行为。"""
+    assert_style_allowed(style)
     value = (style or DEFAULT_STYLE).strip().lower()
     if value in STYLE_PRESETS:
         return STYLE_PRESETS[value]

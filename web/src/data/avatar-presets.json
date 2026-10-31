@@ -1,0 +1,125 @@
+{
+  "schema": "avatar-presets-v1",
+  "placeholder": true,
+  "note": "占位元数据与占位图（voice 脚本 task-63 产出真实预置后会替换）；图片静态托管于 web/public/avatars/presets/",
+  "styles": [
+    {
+      "id": "watercolor",
+      "label_zh": "水彩"
+    },
+    {
+      "id": "cartoon",
+      "label_zh": "卡通"
+    },
+    {
+      "id": "pixel",
+      "label_zh": "像素"
+    },
+    {
+      "id": "papercut",
+      "label_zh": "剪纸"
+    },
+    {
+      "id": "clay",
+      "label_zh": "黏土"
+    }
+  ],
+  "characters": [
+    {
+      "id": "c1",
+      "label_zh": "短发小圆脸",
+      "desc_en": "a cheerful child with short hair and a round face",
+      "images": {
+        "watercolor": "/avatars/presets/c1-watercolor.png",
+        "cartoon": "/avatars/presets/c1-cartoon.png",
+        "pixel": "/avatars/presets/c1-pixel.png",
+        "papercut": "/avatars/presets/c1-papercut.png",
+        "clay": "/avatars/presets/c1-clay.png"
+      }
+    },
+    {
+      "id": "c2",
+      "label_zh": "长头发扎马尾",
+      "desc_en": "a child with long hair tied in a ponytail",
+      "images": {
+        "watercolor": "/avatars/presets/c2-watercolor.png",
+        "cartoon": "/avatars/presets/c2-cartoon.png",
+        "pixel": "/avatars/presets/c2-pixel.png",
+        "papercut": "/avatars/presets/c2-papercut.png",
+        "clay": "/avatars/presets/c2-clay.png"
+      }
+    },
+    {
+      "id": "c3",
+      "label_zh": "戴眼镜的男孩",
+      "desc_en": "a boy wearing round glasses",
+      "images": {
+        "watercolor": "/avatars/presets/c3-watercolor.png",
+        "cartoon": "/avatars/presets/c3-cartoon.png",
+        "pixel": "/avatars/presets/c3-pixel.png",
+        "papercut": "/avatars/presets/c3-papercut.png",
+        "clay": "/avatars/presets/c3-clay.png"
+      }
+    },
+    {
+      "id": "c4",
+      "label_zh": "笑起来有酒窝",
+      "desc_en": "a smiling child with dimples",
+      "images": {
+        "watercolor": "/avatars/presets/c4-watercolor.png",
+        "cartoon": "/avatars/presets/c4-cartoon.png",
+        "pixel": "/avatars/presets/c4-pixel.png",
+        "papercut": "/avatars/presets/c4-papercut.png",
+        "clay": "/avatars/presets/c4-clay.png"
+      }
+    },
+    {
+      "id": "c5",
+      "label_zh": "卷发小可爱",
+      "desc_en": "a cute child with curly hair",
+      "images": {
+        "watercolor": "/avatars/presets/c5-watercolor.png",
+        "cartoon": "/avatars/presets/c5-cartoon.png",
+        "pixel": "/avatars/presets/c5-pixel.png",
+        "papercut": "/avatars/presets/c5-papercut.png",
+        "clay": "/avatars/presets/c5-clay.png"
+      }
+    },
+    {
+      "id": "c6",
+      "label_zh": "爱运动的小子",
+      "desc_en": "an athletic kid with a sporty headband",
+      "images": {
+        "watercolor": "/avatars/presets/c6-watercolor.png",
+        "cartoon": "/avatars/presets/c6-cartoon.png",
+        "pixel": "/avatars/presets/c6-pixel.png",
+        "papercut": "/avatars/presets/c6-papercut.png",
+        "clay": "/avatars/presets/c6-clay.png"
+      }
+    },
+    {
+      "id": "c7",
+      "label_zh": "戴帽子的小朋友",
+      "desc_en": "a child wearing a bucket hat",
+      "images": {
+        "watercolor": "/avatars/presets/c7-watercolor.png",
+        "cartoon": "/avatars/presets/c7-cartoon.png",
+        "pixel": "/avatars/presets/c7-pixel.png",
+        "papercut": "/avatars/presets/c7-papercut.png",
+        "clay": "/avatars/presets/c7-clay.png"
+      }
+    },
+    {
+      "id": "c8",
+      "label_zh": "扎小辫子",
+      "desc_en": "a child with two small braids",
+      "images": {
+        "watercolor": "/avatars/presets/c8-watercolor.png",
+        "cartoon": "/avatars/presets/c8-cartoon.png",
+        "pixel": "/avatars/presets/c8-pixel.png",
+        "papercut": "/avatars/presets/c8-papercut.png",
+        "clay": "/avatars/presets/c8-clay.png"
+      }
+    }
+  ]
+}

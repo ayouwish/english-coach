@@ -23,7 +23,7 @@ from .cache import (
 from .config import get_settings
 from .degrade import degraded_assessment, degraded_tts
 from .dialogue import complete_dialogue
-from .errors import BadRequest, PayloadTooLarge, ProviderError, ProviderUnavailable
+from .errors import BadRequest, PayloadTooLarge, PolicyDisabled, ProviderError, ProviderUnavailable
 from .voice_names import is_valid_voice_name
 from .languages import SUPPORTED_ASR_LANGUAGES, normalize_language
 from .story import retell_story, rewrite_story
@@ -33,7 +33,9 @@ from .image_gen import (
     generate_avatar,
     generate_illustration,
     image_available,
+    validate_style,
 )
+from .avatar_presets import presets_for_api
 from .feedback_templates import (
     CHILD_EXTRA_RULE,
     FEEDBACK_SYSTEM_PROMPT,
@@ -174,7 +176,9 @@ async def health() -> dict:
     capabilities["heic"] = heif_available()  # task-38：是否支持从相册选 iPhone HEIC/HEIF 照片
     capabilities["image"] = image_available()  # task-52：文生图是否可用（mock 也算可用）
     capabilities["image_provider"] = image_provider_name()  # "zhipu" | "mock" | null
-    capabilities["image_avatar"] = avatar_available()  # task-61：照片→虚拟形象（需文生图 + 视觉 LLM）
+    # task-63：image_avatar 语义 = "照片生成是否启用"（隐私策略默认关闭）；预置形象库静态可用
+    capabilities["image_avatar"] = bool(settings.image_avatar_photo) and avatar_available()
+    capabilities["avatar_presets"] = True
     # task-44：如实上报"配置的 provider 是否真的可用"（线上曾谎报 azure、实际回落到 mock）
     degraded, effective = _provider_status(providers, settings)
     return {
@@ -613,13 +617,23 @@ async def image_illustrate(payload: ImageIllustrateRequest, force: bool = False)
     )
 
 
+@router.get("/image/avatar/presets")
+async def avatar_presets() -> dict:
+    """预置卡通形象库元数据（8 角色 × 5 风格；voice 只返回文件名，URL 前缀由 web 决定）。"""
+    return await run_in_threadpool(presets_for_api)
+
+
 @router.post("/image/avatar")
 async def image_avatar(photo: UploadFile = File(...), style: str = Form("watercolor"), force: bool = False) -> dict:
     settings = get_settings()
+    # 先做风格白名单（写实/照片 → 400），再按隐私策略判断照片路径是否启用
+    style_value = validate_style(style)
+    if not settings.image_avatar_photo:
+        raise PolicyDisabled("按隐私策略，照片生成形象已关闭；请从预置形象中选择。")
     data = await _read_upload(photo, settings.max_ocr_bytes)
     if not data:
         raise BadRequest("empty photo")
-    return await run_in_threadpool(generate_avatar, data, style=style, force=force, settings=settings)
+    return await run_in_threadpool(generate_avatar, data, style=style_value, force=force, settings=settings)
 
 
 # --------------------------------------------------------------------------------------

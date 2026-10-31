@@ -5,6 +5,8 @@ import { listVisibleSentences } from "@/lib/corpus";
 import { getPrefs } from "@/lib/prefs";
 import { getDailyUsage } from "@/lib/usage";
 import { AvatarSection } from "@/components/AvatarSection";
+import { getAvatar, avatarView } from "@/lib/avatar";
+import { loadAvatarPresets } from "@/lib/avatar-presets";
 import { CorpusManager } from "./CorpusManager";
 import { SettingsForm } from "./SettingsForm";
 
@@ -19,6 +21,9 @@ export default async function SettingsPage() {
   const mySentences = user.role === "parent"
     ? (await listVisibleSentences(user)).filter((s) => s.mine)
     : [];
+  // task-64：预置形象库与当前形象在服务端取好 → 首屏直接渲染选择题（无 loading 闪烁）
+  const avatarPresets = await loadAvatarPresets();
+  const avatarInitial = avatarView(await getAvatar(user.id), user.id);
 
   return (
     <>
@@ -36,7 +41,7 @@ export default async function SettingsPage() {
       prefs={prefs}
       usage={usage}
     />
-    <AvatarSection isChild={user.isChild} />
+    <AvatarSection isChild={user.isChild} initialPresets={avatarPresets} initialAvatar={avatarInitial} />
     {user.role === "parent" ? <CorpusManager initial={mySentences} /> : null}
     </>
   );

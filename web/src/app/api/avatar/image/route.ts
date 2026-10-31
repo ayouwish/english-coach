@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import fs from "node:fs";
+import path from "node:path";
 import { Readable } from "node:stream";
 import { ensureBootstrap } from "@/db";
 import { HttpError, requireUser } from "@/lib/auth";
@@ -19,7 +20,10 @@ export async function GET(req: NextRequest) {
     const target = new URL(req.url).searchParams.get("user") ?? user.id;
     const state = await getAvatar(target);
     if (!state.image_path) throw new HttpError(404, "not_found", "还没有设置虚拟形象");
-    const abs = resolveAvatarPath(state.image_path);
+    // 预置形象是 public 下的静态图（task-64），直接从这里读
+    const abs = state.image_path.startsWith("avatars/presets/")
+      ? path.join(process.cwd(), "public", state.image_path)
+      : resolveAvatarPath(state.image_path);
     if (!abs || !fs.existsSync(abs)) throw new HttpError(404, "not_found", "形象图片不存在");
     const stat = fs.statSync(abs);
     const stream = Readable.toWeb(fs.createReadStream(abs)) as unknown as ReadableStream;

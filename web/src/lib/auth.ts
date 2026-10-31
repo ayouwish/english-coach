@@ -33,6 +33,8 @@ export interface SessionUser {
   avatar: string | null;
   /** 虚拟形象图片相对路径（task-62）；NULL = 没设 */
   avatarImagePath: string | null;
+  /** 虚拟形象图片可直接用的 URL（预置图 = 静态路径；上传图 = /api/avatar/image） */
+  avatarImageUrl: string | null;
   avatarStyle: string | null;
   dailyLimitMinutes: number;
   allowFreeChat: boolean;
@@ -51,6 +53,11 @@ function toSessionUser(row: typeof users.$inferSelect): SessionUser {
     birthYear: row.birthYear,
     avatar: row.avatar,
     avatarImagePath: row.avatarImagePath ?? null,
+    avatarImageUrl: row.avatarImagePath
+      ? row.avatarImagePath.startsWith("avatars/presets/")
+        ? `/${row.avatarImagePath}`
+        : "/api/avatar/image"
+      : null,
     avatarStyle: row.avatarStyle ?? null,
     dailyLimitMinutes: row.dailyLimitMinutes,
     allowFreeChat: row.allowFreeChat === 1,

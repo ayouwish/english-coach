@@ -259,6 +259,7 @@ class Settings:
     image_watermark: bool = True
     image_timeout_s: float = 120.0
     image_quality: str = "hd"
+    image_avatar_photo: bool = False  # task-63：照片生成形象默认关闭（隐私策略）
     # TTS WAV 首尾静音裁剪（task-39：Azure 短词尾部 ~1.3s 低电平噪声）
     tts_trim_silence: bool = True
     tts_trim_threshold_db: float = -50.0
@@ -385,6 +386,7 @@ def get_settings() -> Settings:
         image_watermark=_env_bool("IMAGE_WATERMARK", True),
         image_timeout_s=_env_float("IMAGE_TIMEOUT_S", 120.0),
         image_quality=_env("IMAGE_QUALITY", "hd") or "hd",
+        image_avatar_photo=_env_bool("IMAGE_AVATAR_PHOTO", False),
         tts_trim_silence=_env_bool("TTS_TRIM_SILENCE", True),
         tts_trim_threshold_db=_env_float("TTS_TRIM_THRESHOLD_DB", -50.0),
         tts_trim_keep_ms=_env_int("TTS_TRIM_KEEP_MS", 50),

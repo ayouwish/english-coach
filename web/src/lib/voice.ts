@@ -310,6 +310,11 @@ export async function callAvatar(input: {
   return callVoice<AvatarResult>("/v1/image/avatar", { method: "POST", body: form }, TIMEOUTS.avatar);
 }
 
+/** 预置形象库（task-64）：voice `/v1/image/avatar/presets` 兜底读取 */
+export async function callAvatarPresets(): Promise<unknown> {
+  return callVoice<unknown>("/v1/image/avatar/presets", { method: "GET" }, 15_000);
+}
+
 /** 契约 §5：40s 超时，1 次重试后由调用方降级到本地模板。 */
 export async function callFeedback(payload: unknown): Promise<FeedbackResult> {
   return withRetry(() =>

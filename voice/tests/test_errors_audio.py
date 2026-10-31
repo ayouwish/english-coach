@@ -38,6 +38,7 @@ def test_error_codes_are_frozen_set():
         "internal_error",
         "provider_unavailable",  # 契约 v1.5（task-25）：/v1/ocr 依赖未安装
         "content_unsafe",  # 契约 v2.0（task-52）：文生图内容被安全过滤
+        "policy_disabled",  # 契约 v2.2（task-63）：照片生成形象按隐私策略关闭
     }
 
 

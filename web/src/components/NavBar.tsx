@@ -43,10 +43,10 @@ export function NavBar({ user }: { user: SessionUser | null }) {
             <>
               <SuggestButton isChild={user.isChild} />
               <span className="font-semibold">
-                {user.avatarImagePath ? (
+                {user.avatarImageUrl ? (
                   // eslint-disable-next-line @next/next/no-img-element -- 本地 API 图片
                   <img
-                    src="/api/avatar/image"
+                    src={user.avatarImageUrl}
                     alt={`${user.displayName} 的虚拟形象`}
                     data-testid="nav-avatar"
                     className="mr-1 inline-block h-7 w-7 rounded-full border border-[#e6e8f5] align-middle object-cover"

@@ -88,8 +88,37 @@ export function sanitizeCharacterDesc(raw: unknown): string | null {
   return cleaned || null;
 }
 
+/** 预置形象库（来自 src/data/avatar-presets.json 或 voice） */
+export interface AvatarPresets {
+  styles: { id: string; label_zh: string }[];
+  characters: {
+    id: string;
+    label_zh: string;
+    desc_en: string;
+    images: Record<string, string>;
+  }[];
+  placeholder: boolean;
+}
+
+/** 明确不允许的风格（写实/照片：隐私策略，服务端硬拒绝） */
+const FORBIDDEN_STYLES = new Set(["realistic", "photo", "photorealistic", "写实", "照片", "真人"]);
+
+export function isForbiddenStyle(v: unknown): boolean {
+  return typeof v === "string" && FORBIDDEN_STYLES.has(v.trim().toLowerCase());
+}
+
+/** 预置形象静态图路径前缀（存 DB 的相对路径） */
+export const PRESET_PATH_PREFIX = "avatars/presets/";
+
+/** 预置图在 web/public 下的相对路径 → 前端可用的静态 URL */
+export function presetPublicUrl(imagePath: string | null | undefined): string | null {
+  if (!imagePath || !imagePath.startsWith(PRESET_PATH_PREFIX)) return null;
+  return `/${imagePath}`;
+}
+
 export interface AvatarState {
   image_path: string | null;
+  preset_id: string | null;
   style: string | null;
   character_desc: string | null;
   prompt_used: string | null;
@@ -101,6 +130,7 @@ export async function getAvatar(userId: string): Promise<AvatarState> {
   const [row] = await db.select().from(users).where(eq(users.id, userId)).limit(1);
   return {
     image_path: row?.avatarImagePath ?? null,
+    preset_id: row?.avatarPresetId ?? null,
     style: row?.avatarStyle ?? null,
     character_desc: row?.avatarDesc ?? null,
     prompt_used: row?.avatarPrompt ?? null,
@@ -112,6 +142,7 @@ export async function updateAvatarColumns(
   userId: string,
   patch: {
     imagePath?: string | null;
+    presetId?: string | null;
     style?: string | null;
     characterDesc?: string | null;
     prompt?: string | null;
@@ -120,6 +151,7 @@ export async function updateAvatarColumns(
   const db = getDb();
   const next: Record<string, unknown> = { avatarUpdatedAt: new Date().toISOString() };
   if (patch.imagePath !== undefined) next.avatarImagePath = patch.imagePath;
+  if (patch.presetId !== undefined) next.avatarPresetId = patch.presetId;
   if (patch.style !== undefined) next.avatarStyle = patch.style;
   if (patch.characterDesc !== undefined) next.avatarDesc = patch.characterDesc;
   if (patch.prompt !== undefined) next.avatarPrompt = patch.prompt;
@@ -130,11 +162,15 @@ export async function updateAvatarColumns(
 /** 清空虚拟形象（删文件 + 置 NULL） */
 export async function clearAvatar(userId: string): Promise<void> {
   const current = await getAvatar(userId);
-  deleteAvatarFile(current.image_path);
+  // 预置静态图是所有用户共享的公共资源，**不删**
+  if (current.image_path && !current.image_path.startsWith(PRESET_PATH_PREFIX)) {
+    deleteAvatarFile(current.image_path);
+  }
   await getDb()
     .update(users)
     .set({
       avatarImagePath: null,
+      avatarPresetId: null,
       avatarStyle: null,
       avatarDesc: null,
       avatarPrompt: null,
@@ -146,13 +182,16 @@ export async function clearAvatar(userId: string): Promise<void> {
 /** 返回给前端的形状（不含任何 voice key） */
 export function avatarView(state: AvatarState, userId: string): {
   avatar_url: string | null;
+  preset_id: string | null;
   style: string | null;
   character_desc: string | null;
   prompt_used: string | null;
   updated_at: string | null;
 } {
+  const preset = presetPublicUrl(state.image_path);
   return {
-    avatar_url: state.image_path ? `/api/avatar/image?user=${encodeURIComponent(userId)}&v=${encodeURIComponent(state.updated_at ?? "")}` : null,
+    avatar_url: preset ?? (state.image_path ? `/api/avatar/image?user=${encodeURIComponent(userId)}&v=${encodeURIComponent(state.updated_at ?? "")}` : null),
+    preset_id: state.preset_id,
     style: state.style,
     character_desc: state.character_desc,
     prompt_used: state.prompt_used,

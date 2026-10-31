@@ -111,7 +111,12 @@ function toSummary(
     id: r.id,
     title: r.title,
     created_by_name: authorName,
-    created_by_avatar_url: r.createdBy && authorAvatarPath ? `/api/avatar/image?user=${encodeURIComponent(r.createdBy)}` : null,
+    created_by_avatar_url:
+    r.createdBy && authorAvatarPath
+      ? authorAvatarPath.startsWith("avatars/presets/")
+        ? `/${authorAvatarPath}`
+        : `/api/avatar/image?user=${encodeURIComponent(r.createdBy)}`
+      : null,
     sentence_count: r.sentenceCount,
     has_image: Boolean(r.imagePath),
     source: r.source,
