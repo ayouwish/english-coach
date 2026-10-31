@@ -12,7 +12,7 @@ import {
   writeAvatarImage,
   MAX_PHOTO_BYTES,
 } from "@/lib/avatar";
-import { base64ToBytes } from "@/lib/illustration";
+import { base64ToBytes, detectImageMime } from "@/lib/illustration";
 import { jsonOk } from "@/lib/http";
 import { callAvatar, VoiceError } from "@/lib/voice";
 
@@ -54,6 +54,10 @@ export async function POST(req: NextRequest) {
     const descInput = sanitizeCharacterDesc(form.get("character_desc")) ?? current.character_desc;
 
     const bytes = new Uint8Array(await photo.arrayBuffer());
+    // 服务端二次校验：不能只信 Content-Type（文本改名 .jpg 也要拦）
+    if (!detectImageMime(bytes)) {
+      return errorJson(400, "bad_request", "这不是有效的图片文件（内容不是图片），请重新拍照或选择照片。");
+    }
     const result = await callAvatar({
       data: bytes,
       mime,

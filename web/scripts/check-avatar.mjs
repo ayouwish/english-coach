@@ -245,7 +245,7 @@ const stub = http.createServer((req, res) => {
       res.end(JSON.stringify(obj));
     };
     if (String(req.url).startsWith("/v1/health")) {
-      send(200, { status: "ok", version: "stub", mode: "mock", providers: {}, capabilities: { phoneme_level: true, intonation_curve: true, ocr: false } });
+      send(200, { status: "ok", version: "stub", mode: "mock", providers: {}, capabilities: { phoneme_level: true, intonation_curve: true, ocr: false, image: true, image_avatar: true } });
       return;
     }
     if (String(req.url).startsWith("/v1/image/avatar")) {
