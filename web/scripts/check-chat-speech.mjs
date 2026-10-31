@@ -349,7 +349,30 @@ check("不再写死过时秒数（1–11s）", !girlChatHtml.includes("1–11s")
   let dialogueDone = false;
   let ttsCalls = 0;
   let concatCalls = 0;
-  const TINY_WAV = Buffer.from("RIFF$\\u0000\\u0000\\u0000WAVEfmt \\u0010\\u0000\\u0000\\u0000\\u0001\\u0000\\u0001\\u0000\\u0080>\\u0000\\u0000\\u0000}\\u0000\\u0000\\u0002\\u0000\\u0010\\u0000data\\u0000\\u0000\\u0000\\u0000", "binary");
+  /** task-72：concat 失败/延迟开关（验证 failed→force 重建、building→202、并发去重） */
+  let concatMode = "ok";
+  let concatDelayMs = 0;
+  /** 合法的 24kHz/mono/16bit PCM WAV（10ms），保证 status.duration_ms 可解析 */
+  const TINY_WAV = (() => {
+    const sampleRate = 24000;
+    const samples = 240;
+    const dataSize = samples * 2;
+    const buf = Buffer.alloc(44 + dataSize);
+    buf.write("RIFF", 0);
+    buf.writeUInt32LE(36 + dataSize, 4);
+    buf.write("WAVE", 8);
+    buf.write("fmt ", 12);
+    buf.writeUInt32LE(16, 16);
+    buf.writeUInt16LE(1, 20);
+    buf.writeUInt16LE(1, 22);
+    buf.writeUInt32LE(sampleRate, 24);
+    buf.writeUInt32LE(sampleRate * 2, 28);
+    buf.writeUInt16LE(2, 32);
+    buf.writeUInt16LE(16, 34);
+    buf.write("data", 36);
+    buf.writeUInt32LE(dataSize, 40);
+    return buf;
+  })();
   const stub = http.createServer((req, res) => {
     const chunks = [];
     req.on("data", (c) => chunks.push(c));
@@ -426,9 +449,21 @@ check("不再写死过时秒数（1–11s）", !girlChatHtml.includes("1–11s")
       }
       if (String(req.url).startsWith("/v1/audio/concat")) {
         concatCalls += 1;
-        res.statusCode = 200;
-        res.setHeader("content-type", "audio/wav");
-        res.end(TINY_WAV);
+        const mode = concatMode;
+        const delay = concatDelayMs;
+        const finish = () => {
+          if (mode === "fail") {
+            res.statusCode = 502;
+            res.setHeader("content-type", "application/json");
+            res.end(JSON.stringify({ error: { code: "provider_error", message: "stub concat 失败" } }));
+            return;
+          }
+          res.statusCode = 200;
+          res.setHeader("content-type", "audio/wav");
+          res.end(TINY_WAV);
+        };
+        if (delay > 0) setTimeout(finish, delay);
+        else finish();
         return;
       }
       send(404, { error: { code: "not_found", message: "stub: no route" } });
@@ -512,6 +547,29 @@ check("不再写死过时秒数（1–11s）", !girlChatHtml.includes("1–11s")
       return null;
     };
 
+    // ── task-72：整段回放异步预生成的状态/轮询工具 ──────────────────────────
+    const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+    const audioUrlFor = (sessionId) => `http://127.0.0.1:${PORT}/api/chat/sessions/${sessionId}/audio`;
+    const audioStatusUrlFor = (sessionId) => `${audioUrlFor(sessionId)}/status`;
+    const fetchAudioStatus = async (cookie, sessionId) => {
+      const r = await fetch(audioStatusUrlFor(sessionId), { headers: { cookie } });
+      return { http: r.status, body: await r.json().catch(() => null) };
+    };
+    /** 轮询 status 直到 ready / failed（或超时），返回最后状态 + 采样序列 */
+    const pollAudioStatus = async (cookie, sessionId, timeoutMs = 30000) => {
+      const t0 = Date.now();
+      const samples = [];
+      let last = { http: 0, body: null };
+      while (Date.now() - t0 < timeoutMs) {
+        last = await fetchAudioStatus(cookie, sessionId);
+        samples.push(last.body?.status ?? `http-${last.http}`);
+        if (last.body?.status === "ready" || last.body?.status === "failed") break;
+        await sleep(250);
+      }
+      return { ...last, elapsed_ms: Date.now() - t0, samples };
+    };
+    const chatAudioDir = path.join(process.env.DATA_DIR ?? path.join(WEB_ROOT, "data"), "chat-audio");
+
     // ① 家长自己讲一轮（家长视图应看到分数）
     const dadSession = await startSession(dadCookie);
     const dadTurn = await voiceTurn(dadCookie, dadSession);
@@ -579,43 +637,192 @@ check("不再写死过时秒数（1–11s）", !girlChatHtml.includes("1–11s")
       check("★ 库里会话仍开着（ended_at 为空、turn_count=10）", row?.turn_count === 10 && !row?.ended_at, JSON.stringify(row ?? {}));
     }
     check("页面有「结束对话」按钮（源码级，client 面板）", fs.readFileSync(path.join(WEB_ROOT, "src/app/chat/ChatClient.tsx"), "utf8").includes('data-testid="chat-end-session"'));
+    const endAt = Date.now();
     const endRes = await fetch(`http://127.0.0.1:${PORT}/api/chat/sessions/${longSession}/end`, {
       method: "POST",
       headers: { cookie: childCookie },
     });
     const endBody = await endRes.json().catch(() => null);
     check("★ POST /end → 200 且会话结束", endRes.status === 200 && endBody?.ok === true && endBody?.ended === true, `status=${endRes.status}`);
+    check("★ /end 响应不等待整段拼接（<3s）", Date.now() - endAt < 3000, `${Date.now() - endAt}ms`);
+    // task-72：/end 之后**无需点击**，轮询 status 就应该变 ready（after() 预生成）
+    const endedStatus = await pollAudioStatus(childCookie, longSession, 30000);
+    console.log(`   ↳ /end → status=${endedStatus.body?.status} · ${endedStatus.elapsed_ms}ms · 采样=${endedStatus.samples.slice(0, 8).join("→")}`);
+    check(
+      "★ /end 后无需点击：轮询 status 变 ready",
+      endedStatus.body?.status === "ready",
+      `status=${endedStatus.body?.status} ${endedStatus.elapsed_ms}ms samples=${endedStatus.samples.join(",")}`,
+    );
+    check("status.turn_count = 10（与库里一致）", endedStatus.body?.turn_count === 10, `turn_count=${endedStatus.body?.turn_count}`);
+    check("status 带 duration_ms（WAV 时长）", Number(endedStatus.body?.duration_ms) > 0, `${endedStatus.body?.duration_ms}ms`);
+    {
+      const wavPath = path.join(chatAudioDir, `${longSession}.wav`);
+      const metaPath = path.join(chatAudioDir, `${longSession}.json`);
+      const meta = fs.existsSync(metaPath) ? JSON.parse(fs.readFileSync(metaPath, "utf8")) : null;
+      check("★ 预生成已缓存 wav（DATA_DIR/chat-audio/<id>.wav）", fs.existsSync(wavPath) && fs.statSync(wavPath).size > 0, wavPath);
+      check(
+        "★ sidecar 状态文件字段齐全（status/turn_count/started_at/ready_at）",
+        meta?.status === "ready" && meta?.turn_count === 10 && Boolean(meta?.started_at) && Boolean(meta?.ready_at),
+        JSON.stringify(meta ?? {}).slice(0, 180),
+      );
+    }
+    // ready → 200 读缓存；status 只读不触发构建
+    {
+      const concatBefore = concatCalls;
+      const ttsBefore = ttsCalls;
+      const cached = await fetch(audioUrlFor(longSession), { headers: { cookie: childCookie } });
+      const cachedBytes = Buffer.from(await cached.arrayBuffer());
+      check(
+        "★ ready → GET audio 200 audio/wav（读缓存）",
+        cached.status === 200 && (cached.headers.get("content-type") ?? "").includes("audio/wav") && cachedBytes.length > 0,
+        `status=${cached.status} ${cachedBytes.length}B`,
+      );
+      check("Content-Length 正确 + Accept-Ranges: none", Number(cached.headers.get("content-length")) === cachedBytes.length && cached.headers.get("accept-ranges") === "none", `len=${cached.headers.get("content-length")} ranges=${cached.headers.get("accept-ranges")}`);
+      check(
+        "★ ready 命中缓存：不再调 concat / TTS",
+        cached.headers.get("x-chat-audio-cache") === "hit" && concatCalls === concatBefore && ttsCalls === ttsBefore,
+        `cache=${cached.headers.get("x-chat-audio-cache")} concat=${concatCalls - concatBefore} tts=${ttsCalls - ttsBefore}`,
+      );
+      const statusBefore = concatCalls;
+      const s1 = await fetchAudioStatus(childCookie, longSession);
+      const s2 = await fetchAudioStatus(childCookie, longSession);
+      await sleep(400);
+      check(
+        "★ status 接口只读：调用前后 concat 调用次数不变",
+        s1.http === 200 && s2.http === 200 && s1.body?.status === "ready" && concatCalls === statusBefore,
+        `status=${s1.body?.status} concatDelta=${concatCalls - statusBefore}`,
+      );
+    }
 
-    // ⑧ reply.done=true 时自然结束（不回归）
+    // ⑧ reply.done=true 时自然结束（不回归）+ task-72：done=true 也触发异步预生成
     dialogueDone = true;
     const doneSession = await startSession(childCookie);
+    const concatBeforeDone = concatCalls;
     const doneTurn = await voiceTurn(childCookie, doneSession);
     check("★ reply.done 仍生效（助手自然结束时 done=true）", doneTurn.status === 200 && doneTurn.body?.done === true, `done=${doneTurn.body?.done}`);
     dialogueDone = false;
+    const doneStatus = await pollAudioStatus(childCookie, doneSession, 30000);
+    console.log(`   ↳ done=true turn → status=${doneStatus.body?.status} · ${doneStatus.elapsed_ms}ms · concatDelta=${concatCalls - concatBeforeDone}`);
+    check(
+      "★ turn done=true 也触发后台构建（无需再点回放）",
+      doneStatus.body?.status === "ready" && concatCalls - concatBeforeDone === 1,
+      `status=${doneStatus.body?.status} concatDelta=${concatCalls - concatBeforeDone}`,
+    );
 
-    // ⑨ 整段对话音频：拼接 / 缓存 / force
+    // ⑨ task-72：异步预生成后的 audio 语义（building→202 / ready→200 / force / failed）
     {
-      const audioUrl = `http://127.0.0.1:${PORT}/api/chat/sessions/${longSession}/audio`;
-      const concatBefore = concatCalls;
-      const first = await fetch(audioUrl, { headers: { cookie: childCookie } });
-      const firstBytes = Buffer.from(await first.arrayBuffer());
-      console.log(`   ↳ 整段音频第一次：HTTP ${first.status} · ${first.headers.get("content-type")} · ${firstBytes.length}B · cache=${first.headers.get("x-chat-audio-cache")} · concatCalls=${concatCalls - concatBefore}`);
-      check("★ GET /api/chat/sessions/:id/audio → 200 audio/wav", first.status === 200 && (first.headers.get("content-type") ?? "").includes("audio/wav") && firstBytes.length > 0, `status=${first.status} ${firstBytes.length}B`);
-      check("Content-Length 正确 + Accept-Ranges: none", Number(first.headers.get("content-length")) === firstBytes.length && first.headers.get("accept-ranges") === "none", `len=${first.headers.get("content-length")} ranges=${first.headers.get("accept-ranges")}`);
-      check("第一次是 miss（真正拼接了）", first.headers.get("x-chat-audio-cache") === "miss" && concatCalls - concatBefore === 1);
-      const ttsAfterFirst = ttsCalls;
-      const second = await fetch(audioUrl, { headers: { cookie: childCookie } });
-      const secondBytes = Buffer.from(await second.arrayBuffer());
-      console.log(`   ↳ 整段音频第二次：HTTP ${second.status} · cache=${second.headers.get("x-chat-audio-cache")} · tts=${ttsCalls - ttsAfterFirst} concat=${concatCalls - concatBefore - 1}`);
-      check("★ 第二次命中缓存（不再调 TTS / concat）", second.status === 200 && second.headers.get("x-chat-audio-cache") === "hit" && ttsCalls === ttsAfterFirst && concatCalls - concatBefore === 1, `cache=${second.headers.get("x-chat-audio-cache")}`);
-      check("缓存两次字节一致", secondBytes.equals(firstBytes));
-      const forced = await fetch(`${audioUrl}?force=1`, { headers: { cookie: childCookie } });
-      check("★ ?force=1 强制重建（重新 concat）", forced.status === 200 && forced.headers.get("x-chat-audio-cache") === "miss" && concatCalls - concatBefore === 2, `cache=${forced.headers.get("x-chat-audio-cache")} concat=${concatCalls - concatBefore}`);
-      const anon = await fetch(audioUrl);
-      check("未登录拿整段音频 → 401", anon.status === 401, `status=${anon.status}`);
+      // ① 无缓存首次 GET → 202，并真的在后台构建（concat 放慢，确保能观察到 building）
+      concatDelayMs = 1200;
+      const buildSession = await startSession(childCookie);
+      const buildTurn = await voiceTurn(childCookie, buildSession, "Building state test.");
+      check("building 场景：语音轮次成功", buildTurn.status === 200, `status=${buildTurn.status}`);
+      const concatBeforeBuild = concatCalls;
+      const firstGet = await fetch(audioUrlFor(buildSession), { headers: { cookie: childCookie } });
+      const firstGetBody = await firstGet.json().catch(() => null);
+      console.log(`   ↳ 无缓存首次 GET：HTTP ${firstGet.status} · ${JSON.stringify(firstGetBody)}`);
+      check(
+        "★ 无缓存且未构建：GET audio → 202 {status:'building'}（不现拼）",
+        firstGet.status === 202 && firstGetBody?.status === "building",
+        `status=${firstGet.status} body=${JSON.stringify(firstGetBody)}`,
+      );
+      // 等 status 进入 building，再 GET 一次，命中 building 分支
+      let sawBuilding = null;
+      for (let i = 0; i < 30; i++) {
+        const s = await fetchAudioStatus(childCookie, buildSession);
+        if (s.body?.status === "building") {
+          sawBuilding = s;
+          break;
+        }
+        if (s.body?.status === "ready" || s.body?.status === "failed") break;
+        await sleep(100);
+      }
+      check("status 在后台构建期间报 building", sawBuilding?.body?.status === "building", JSON.stringify(sawBuilding?.body ?? null));
+      const buildingGet = await fetch(audioUrlFor(buildSession), { headers: { cookie: childCookie } });
+      const buildingGetBody = await buildingGet.json().catch(() => null);
+      check(
+        "★ building 时 GET audio → 202（不重复构建）",
+        buildingGet.status === 202 && buildingGetBody?.status === "building",
+        `status=${buildingGet.status} body=${JSON.stringify(buildingGetBody)}`,
+      );
+      const builtStatus = await pollAudioStatus(childCookie, buildSession, 30000);
+      check("构建完成 → status ready", builtStatus.body?.status === "ready", JSON.stringify(builtStatus.body ?? null));
+      check("building→ready 期间只 concat 一次", concatCalls - concatBeforeBuild === 1, `concatDelta=${concatCalls - concatBeforeBuild}`);
+      const readyGet = await fetch(audioUrlFor(buildSession), { headers: { cookie: childCookie } });
+      const readyBytes = Buffer.from(await readyGet.arrayBuffer());
+      check(
+        "★ ready 后 GET audio → 200 audio/wav",
+        readyGet.status === 200 && (readyGet.headers.get("content-type") ?? "").includes("audio/wav") && readyBytes.length > 0,
+        `status=${readyGet.status} ${readyBytes.length}B`,
+      );
+      concatDelayMs = 0;
     }
 
-    // ⑩ 场景按账号分（child / adult + include_child 权限）
+    // ⑩ 并发两次触发只构建一次（concat 调用次数 = 1）
+    {
+      concatDelayMs = 1200;
+      const raceSession = await startSession(childCookie);
+      await voiceTurn(childCookie, raceSession, "Concurrency test.");
+      const concatBeforeRace = concatCalls;
+      const [r1, r2] = await Promise.all([
+        fetch(audioUrlFor(raceSession), { headers: { cookie: childCookie } }),
+        fetch(audioUrlFor(raceSession), { headers: { cookie: childCookie } }),
+      ]);
+      const b1 = await r1.json().catch(() => null);
+      const b2 = await r2.json().catch(() => null);
+      check("并发两次触发都返回 202 building", r1.status === 202 && r2.status === 202 && b1?.status === "building" && b2?.status === "building", `${r1.status}/${r2.status}`);
+      const raceStatus = await pollAudioStatus(childCookie, raceSession, 30000);
+      check("并发构建最终 ready", raceStatus.body?.status === "ready", JSON.stringify(raceStatus.body ?? null));
+      check(
+        "★ 并发两次触发只构建一次（concat 调用次数 = 1）",
+        concatCalls - concatBeforeRace === 1,
+        `concatDelta=${concatCalls - concatBeforeRace}`,
+      );
+      concatDelayMs = 0;
+    }
+
+    // ⑪ failed → 可读错误；?force=1 → 后台重建
+    {
+      const failSession = await startSession(childCookie);
+      await voiceTurn(childCookie, failSession, "Failure test.");
+      concatMode = "fail";
+      const failGet = await fetch(audioUrlFor(failSession), { headers: { cookie: childCookie } });
+      check("失败场景：首次 GET → 202（后台开始构建）", failGet.status === 202, `status=${failGet.status}`);
+      const failStatus = await pollAudioStatus(childCookie, failSession, 30000);
+      console.log(`   ↳ concat 失败后 status=${failStatus.body?.status} · error=${String(failStatus.body?.error ?? "").slice(0, 60)}`);
+      check(
+        "★ concat 失败 → status failed + 可读错误",
+        failStatus.body?.status === "failed" && typeof failStatus.body?.error === "string" && failStatus.body.error.length > 0,
+        JSON.stringify(failStatus.body ?? null),
+      );
+      const concatBeforeFailGet = concatCalls;
+      const failedGet = await fetch(audioUrlFor(failSession), { headers: { cookie: childCookie } });
+      const failedGetBody = await failedGet.json().catch(() => null);
+      check(
+        "★ failed 时 GET audio → 500 + 可读错误（不自动重试）",
+        failedGet.status === 500 && Boolean(failedGetBody?.error?.message) && concatCalls === concatBeforeFailGet,
+        `status=${failedGet.status} concatDelta=${concatCalls - concatBeforeFailGet}`,
+      );
+      concatMode = "ok";
+      const concatBeforeForce = concatCalls;
+      const forceGet = await fetch(`${audioUrlFor(failSession)}?force=1`, { headers: { cookie: childCookie } });
+      const forceBody = await forceGet.json().catch(() => null);
+      check("★ failed 时 ?force=1 → 202 后台重建", forceGet.status === 202 && forceBody?.status === "building" && forceBody?.forced === true, `status=${forceGet.status} body=${JSON.stringify(forceBody)}`);
+      const forcedStatus = await pollAudioStatus(childCookie, failSession, 30000);
+      check("force 重建后 status ready", forcedStatus.body?.status === "ready", JSON.stringify(forcedStatus.body ?? null));
+      const forcedAudio = await fetch(audioUrlFor(failSession), { headers: { cookie: childCookie } });
+      check("force 重建后 GET audio → 200", forcedAudio.status === 200 && (forcedAudio.headers.get("content-type") ?? "").includes("audio/wav"), `status=${forcedAudio.status}`);
+      check("force 重建只 concat 一次", concatCalls - concatBeforeForce === 1, `concatDelta=${concatCalls - concatBeforeForce}`);
+    }
+
+    // ⑫ 鉴权：未登录拿 status / audio 都是 401
+    {
+      const anonStatus = await fetch(audioStatusUrlFor(longSession));
+      const anonAudio = await fetch(audioUrlFor(longSession));
+      check("未登录拿 status → 401", anonStatus.status === 401, `status=${anonStatus.status}`);
+      check("未登录拿整段音频 → 401", anonAudio.status === 401, `status=${anonAudio.status}`);
+    }
+
+    // ⑬ 场景按账号分（child / adult + include_child 权限）
     {
       const girlScenarios = await (await fetch(`http://127.0.0.1:${PORT}/api/chat/scenarios`, { headers: { cookie: childCookie } })).json();
       const girlList = girlScenarios.scenarios ?? [];
@@ -643,7 +850,7 @@ check("不再写死过时秒数（1–11s）", !girlChatHtml.includes("1–11s")
       check("★ 儿童页面没有该开关", !girlChatHtml2.includes('data-testid="chat-include-child"'));
     }
 
-    // ⑪ task-70：文案不再写「最多 6 轮」+ 历史对话用户录音可回放 + health features
+    // ⑭ task-70：文案不再写「最多 6 轮」+ 历史对话用户录音可回放 + health features
     {
       const chatSrc = fs.readFileSync(path.join(WEB_ROOT, "src/app/chat/ChatClient.tsx"), "utf8");
       check("★ 源码不含「最多 6 轮」误导文案", !/最多\s*6\s*轮/.test(chatSrc));
@@ -660,17 +867,25 @@ check("不再写死过时秒数（1–11s）", !girlChatHtml.includes("1–11s")
         JSON.stringify(health?.features ?? {}),
       );
 
-      // 新会话：一轮带录音 + 一轮纯文本 → 历史页只给带录音的用户消息渲染播放器
+      // 新会话：一轮带录音 + 一轮纯文本 → 历史页只给带录音的用户消息渲染播放器。
+      // 注：/chat 只渲染"最近一次对话"，若期间有并发会话创建，重试几轮以保证断言针对我们自己的会话。
+      let audioMsgId = null;
+      let textMsgId = null;
+      let historyHtml = "";
       const audioSession = await startSession(childCookie);
-      const withAudio = await voiceTurn(childCookie, audioSession, "I have a recording.");
-      const audioMsgId = withAudio?.body?.user_message_id ?? null;
-      const textOnly = await fetch(`http://127.0.0.1:${PORT}/api/chat/sessions/${audioSession}/turn`, {
-        method: "POST",
-        headers: { "content-type": "application/json", cookie: childCookie },
-        body: JSON.stringify({ text: "This turn has no recording." }),
-      }).then((r) => r.json());
-      const textMsgId = textOnly?.user_message_id ?? null;
-      const historyHtml = await (await fetch(`http://127.0.0.1:${PORT}/chat`, { headers: { cookie: childCookie } })).text();
+      for (let attempt = 0; attempt < 3; attempt++) {
+        const withAudio = await voiceTurn(childCookie, audioSession, `I have a recording ${attempt}.`);
+        audioMsgId = withAudio?.body?.user_message_id ?? null;
+        const textOnly = await fetch(`http://127.0.0.1:${PORT}/api/chat/sessions/${audioSession}/turn`, {
+          method: "POST",
+          headers: { "content-type": "application/json", cookie: childCookie },
+          body: JSON.stringify({ text: "This turn has no recording." }),
+        }).then((r) => r.json());
+        textMsgId = textOnly?.user_message_id ?? null;
+        historyHtml = await (await fetch(`http://127.0.0.1:${PORT}/chat`, { headers: { cookie: childCookie } })).text();
+        if (audioMsgId && historyHtml.includes(`src="/api/audio/${audioMsgId}"`)) break;
+        await new Promise((r) => setTimeout(r, 400));
+      }
       check("★ 历史对话含用户录音播放器（user-audio）", historyHtml.includes('data-testid="user-audio"'));
       check(
         "★ 录音播放器 src 指向 /api/audio/<消息 id>",
@@ -690,6 +905,33 @@ check("不再写死过时秒数（1–11s）", !girlChatHtml.includes("1–11s")
           `status=${audioRes.status} type=${audioRes.headers.get("content-type")}`,
         );
       }
+
+      // task-72：ChatSessionAudio 状态轮询 UI —— 未 ready 不出现坏播放器
+      const audioComp = fs.readFileSync(path.join(WEB_ROOT, "src/components/ChatSessionAudio.tsx"), "utf8");
+      check("★ UI 挂载即查 status（/audio/status）", audioComp.includes("/audio/status"));
+      check("★ 未 ready 每 2s 轮询（POLL_MS=2000）", /POLL_MS\s*=\s*2000/.test(audioComp) && audioComp.includes("setTimeout"));
+      check(
+        "★ 只有 ready 才渲染 <audio>（未 ready 无坏播放器）",
+        /phase === "ready" && url \?/.test(audioComp) &&
+          audioComp.indexOf('phase === "ready" && url') < audioComp.indexOf('data-testid="chat-session-audio-player"'),
+      );
+      check(
+        "★ failed 有可读错误 + 「重新生成」（force=1）",
+        audioComp.includes("重新生成") && audioComp.includes("force=1") && audioComp.includes("chat-session-audio-retry"),
+      );
+      check("★ 儿童文案「听一听我们的对话（正在准备…）」", audioComp.includes("听一听我们的对话（正在准备…）"));
+      check("bundle 含「正在生成整段回放…（可以先看文字）」", bundle.includes("正在生成整段回放…（可以先看文字）"));
+      check("源码文案带 🎧（bundle 会转义 emoji）", audioComp.includes("🎧 正在生成整段回放…（可以先看文字）"));
+      check("bundle 含「重新生成」", bundle.includes("重新生成"));
+      // 最新会话（audioSession）还没结束/没触发构建 → 页面 SSR 应显示“准备中”，且没有播放器
+      const notReadyHtml = await (await fetch(`http://127.0.0.1:${PORT}/chat`, { headers: { cookie: childCookie } })).text();
+      check("★ 最新会话未 ready：页面不出现整段回放播放器", !notReadyHtml.includes('data-testid="chat-session-audio-player"'));
+      check(
+        "★ 最新会话未 ready：页面显示「正在生成整段回放…（可以先看文字）」",
+        notReadyHtml.includes("🎧 正在生成整段回放…（可以先看文字）"),
+      );
+      const notReadyStatus = await fetchAudioStatus(childCookie, audioSession);
+      check("最新会话 status 仍非 ready（页面/status 都没触发构建）", notReadyStatus.body?.status !== "ready", JSON.stringify(notReadyStatus.body ?? null));
     }
 
     // ⑥ 助手音频不再 0:00：preload=metadata（SSR HTML 断言）

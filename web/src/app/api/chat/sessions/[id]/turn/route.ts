@@ -1,6 +1,7 @@
 import { NextRequest, after } from "next/server";
 import { asc, eq } from "drizzle-orm";
 import { saveAudio } from "@/lib/audio";
+import { buildSessionAudio } from "@/lib/chat-audio";
 import { scoreChatTurn } from "@/lib/chat-pronunciation";
 import { ensureBootstrap, getDb } from "@/db";
 import { chatMessages, chatScenarios, chatSessions } from "@/db/schema";
@@ -179,6 +180,20 @@ export const POST = route(async (req: NextRequest, ctx: { params: Promise<{ id: 
   if (audio && savedAudio && caps.reachable) {
     after(async () => {
       await scoreChatTurn({ user, messageId: userMsgId, audio: audio as { data: Uint8Array; mime: string; ext: string } });
+    });
+  }
+
+  // task-72：助手自然结束（done=true）时，对话一结束就异步预生成整段回放，
+  // 用户之后点「回放」直接读缓存，而不是等 56s 现拼。同样不阻塞本轮响应。
+  if (done) {
+    after(async () => {
+      try {
+        await buildSessionAudio(id, user.id);
+      } catch (err) {
+        console.warn(
+          `[chat-audio] done=true 后预生成失败（${id}）：${err instanceof Error ? err.message : err}`,
+        );
+      }
     });
   }
 
