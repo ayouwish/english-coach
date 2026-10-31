@@ -5,13 +5,13 @@
  * 图片静态托管于 `web/public/avatars/presets/`，**不经 voice 代理**。
  * 占位图（`placeholder: true`）时 UI 标注「预览图（未生成真实插画）」。
  */
-import fs from "node:fs";
-import path from "node:path";
+// 必须用**构建期 import**：Next standalone 产物里没有 `src/` 目录，
+// 运行时 fs.readFile(process.cwd()/src/data/...) 会在容器/独立构建里失败（本地 next start 是假象）。
+import bundledPresets from "@/data/avatar-presets.json";
 import type { AvatarPresets } from "./avatar";
 import { isForbiddenStyle } from "./avatar";
 import { callAvatarPresets, VoiceError } from "./voice";
 
-const DATA_FILE = path.join(process.cwd(), "src", "data", "avatar-presets.json");
 
 function normalize(raw: unknown): AvatarPresets | null {
   if (!raw || typeof raw !== "object") return null;
@@ -28,7 +28,16 @@ function normalize(raw: unknown): AvatarPresets | null {
       id: String(c.id ?? ""),
       label_zh: String(c.label_zh ?? c.id ?? ""),
       desc_en: String(c.desc_en ?? ""),
-      images: (typeof c.images === "object" && c.images ? c.images : {}) as Record<string, string>,
+      // voice 生成的 manifest 里 images 可能是裸文件名（c1-watercolor.png）→ 统一成 public URL
+      images: Object.fromEntries(
+        Object.entries((typeof c.images === "object" && c.images ? (c.images as Record<string, unknown>) : {}) as Record<string, unknown>)
+          .filter(([, v]) => typeof v === "string" && v.trim())
+          .map(([k, v]) => {
+            const raw = String(v).trim();
+            const url = raw.startsWith("/") ? raw : `/avatars/presets/${raw.replace(/^avatars\/presets\//, "")}`;
+            return [k, url];
+          }),
+      ) as Record<string, string>,
     }))
     .filter((c) => c.id && c.desc_en);
   if (styles.length === 0 || characters.length === 0) return null;
@@ -38,10 +47,8 @@ function normalize(raw: unknown): AvatarPresets | null {
 /** 读取预置库：先仓库文件，再 voice 兜底；都不可用 → null（页面显示可读提示） */
 export async function loadAvatarPresets(): Promise<AvatarPresets | null> {
   try {
-    if (fs.existsSync(DATA_FILE)) {
-      const parsed = normalize(JSON.parse(fs.readFileSync(DATA_FILE, "utf8")));
-      if (parsed) return parsed;
-    }
+    const parsed = normalize(bundledPresets);
+    if (parsed) return parsed;
   } catch (err) {
     console.warn("[avatar-presets] 读取仓库文件失败：", (err as Error).message);
   }

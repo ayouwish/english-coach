@@ -45,7 +45,7 @@ export function AvatarSection({
     (initialAvatar?.style as AvatarStyle) ?? "watercolor",
   );
   const [presetId, setPresetId] = useState<string | null>(initialAvatar?.preset_id ?? null);
-  const [choosing, setChoosing] = useState(!initialAvatar?.avatar_url);
+
   const [editingDesc, setEditingDesc] = useState(false);
   const [desc, setDesc] = useState(initialAvatar?.character_desc ?? "");
 
@@ -76,9 +76,6 @@ export function AvatarSection({
         if (aData.style) setStyle(aData.style as AvatarStyle);
         if (aData.preset_id) setPresetId(aData.preset_id);
         setDesc(aData.character_desc ?? "");
-        setChoosing(!aData.avatar_url);
-      } else {
-        setChoosing(true);
       }
     } catch (err) {
       setError(`加载失败：${(err as Error).message}`);
@@ -97,8 +94,7 @@ export function AvatarSection({
       if (data.style) setStyle(data.style as AvatarStyle);
       if (data.preset_id) setPresetId(data.preset_id);
       setDesc(data.character_desc ?? "");
-      setChoosing(!data.avatar_url);
-    } catch {
+      } catch {
       /* 静默：首屏数据已够用 */
     }
   }
@@ -124,7 +120,6 @@ export function AvatarSection({
       }
       setState(data);
       setDesc(data?.character_desc ?? "");
-      setChoosing(false);
       setNotice(isChild ? "选好啦！这个就是我啦 🎉" : "已保存，下次画故事会用它");
     } catch (err) {
       setError(`保存失败：${(err as Error).message}`);
@@ -173,7 +168,6 @@ export function AvatarSection({
       setState(null);
       setPresetId(null);
       setDesc("");
-      setChoosing(true);
       setNotice("已清空虚拟形象");
     } catch (err) {
       setError(`清空失败：${(err as Error).message}`);
@@ -200,7 +194,7 @@ export function AvatarSection({
 
       {loading ? <p className="mt-3 text-sm text-[var(--ec-muted)]">加载中…</p> : null}
 
-      {hasAvatar && !choosing ? (
+      {hasAvatar ? (
         <div className="mt-3 flex flex-wrap items-start gap-4" data-testid="avatar-current">
           {/* eslint-disable-next-line @next/next/no-img-element -- 预置静态图 */}
           <img
@@ -219,14 +213,9 @@ export function AvatarSection({
               </p>
             ) : null}
             <div className="mt-2 flex flex-wrap gap-2">
-              <button
-                type="button"
-                className="ec-btn ec-btn-primary !px-2 !py-0.5 text-xs"
-                data-testid="avatar-change"
-                onClick={() => setChoosing(true)}
-              >
+              <a href="#avatar-chooser" className="ec-btn ec-btn-primary !px-2 !py-0.5 text-xs" data-testid="avatar-change">
                 {isChild ? "换一个" : "换一个形象"}
-              </button>
+              </a>
               <button
                 type="button"
                 className="ec-btn ec-btn-ghost !px-2 !py-0.5 text-xs"
@@ -249,8 +238,7 @@ export function AvatarSection({
         </div>
       ) : null}
 
-      {choosing ? (
-        <div className="mt-3" data-testid="avatar-chooser">
+      <div className="mt-3" data-testid="avatar-chooser">
           {presets?.placeholder ? (
             <p className="mb-2 rounded-lg bg-[#fff3d6] p-2 text-xs text-[#7a4d00]" data-testid="avatar-placeholder-note">
               预览图（未生成真实插画）：当前用的是占位图，真实预置图上线后会自动替换。
@@ -304,15 +292,9 @@ export function AvatarSection({
             <button type="button" className="ec-btn ec-btn-primary" data-testid="avatar-choose" disabled={busy} onClick={() => void choose()}>
               {busy ? "保存中…" : isChild ? "就用这个！" : "就用这个"}
             </button>
-            {hasAvatar ? (
-              <button type="button" className="ec-btn ec-btn-ghost" onClick={() => setChoosing(false)}>
-                取消
-              </button>
-            ) : null}
             <span className="text-xs text-[var(--ec-muted)]">点一下立即生效，不需要等待生成</span>
           </div>
         </div>
-      ) : null}
 
       {editingDesc && hasAvatar ? (
         <div className="mt-3 rounded-xl bg-[#f8f9ff] p-3" data-testid="avatar-desc-editor">

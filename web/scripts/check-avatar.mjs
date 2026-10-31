@@ -155,7 +155,10 @@ async function main() {
     const html = await settingsRes.text();
     check("/settings 200", settingsRes.status === 200, `status=${settingsRes.status}`);
     check("★ 顶部写「不用上传照片，选一个就好」", html.includes("不用上传照片，选一个就好") && html.includes('data-testid="avatar-no-photo-note"'));
-    check("★ 页面不含照片上传入口（无 file input / 无「上传照片」按钮）", !/type="file"/.test(html) && !/上传照片/.test(html));
+    check(
+      "★ 页面不含照片上传入口（无 file input / 无上传按钮；只保留「不用上传照片」说明）",
+      !/type="file"/.test(html) && !/avatar-pick|重新选照片|选择照片/.test(html) && /不用上传照片/.test(html),
+    );
     check("★ 含 5 个风格卡片", ["watercolor", "cartoon", "pixel", "papercut", "clay"].every((s) => html.includes(`data-testid="avatar-style-${s}"`)));
     check("★ 含 8 个角色网格（avatar-preset-c1..c8）", ["c1", "c2", "c3", "c4", "c5", "c6", "c7", "c8"].every((c) => html.includes(`data-testid="avatar-preset-${c}"`)));
     check("儿童页面零 IPA、无字面 **", leaks(html).length === 0 && !html.includes("**"), `leaked=${leaks(html).join("")}`);
@@ -230,7 +233,7 @@ const stub = http.createServer((req, res) => {
       res.end(JSON.stringify(obj));
     };
     if (String(req.url).startsWith("/v1/health")) {
-      send(200, { status: "ok", version: "stub", mode: "mock", providers: {}, capabilities: { phoneme_level: true, intonation_curve: true } });
+      send(200, { status: "ok", version: "stub", mode: "mock", providers: {}, capabilities: { phoneme_level: true, intonation_curve: true, image: true, image_avatar: false, avatar_presets: true } });
       return;
     }
     if (String(req.url).startsWith("/v1/image/illustrate")) {
