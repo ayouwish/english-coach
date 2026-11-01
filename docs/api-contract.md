@@ -1,4 +1,4 @@
-# 接口契约 v1.15（FROZEN · 2026-11-02）
+# 接口契约 v1.16（FROZEN · 2026-11-02）
 
 > **本文件是唯一事实来源（single source of truth）。**
 
@@ -22,6 +22,7 @@
 | 2026-10-31 | v1.13 | 新增 §21 `POST /v1/audio/concat`（多段音频按序拼接成一段 WAV，供"整段对话回放"）| 向后兼容 |
 | 2026-11-02 | v1.14 | `/v1/asr` 新增智谱 **GLM-ASR** provider（中文长音频更稳）与 `provider` 选择、`warnings`、`capabilities.asr_providers/asr_effective` | 向后兼容（默认自动选择，英文仍走 Azure）|
 | 2026-11-02 | v1.15 | `/v1/dialogue` 新增 `scenario.variation`（场景变体：人设/地点/细节/目标/开场白）与 `DIALOGUE_TEMPERATURE`（默认 0.9）；prompt 增加"禁止重复提问/换角度"约束 | 向后兼容（不传 variation 行为不变）|
+| 2026-11-02 | v1.16 | `/v1/story/rewrite` 的 `max_sentences` 范围 **1–6 → 3–12**（默认 6）；超句数不截断、`warnings` 增加 `too_many_sentences` | 向后兼容（旧值仍在范围内）|
 > `web/` 与 `voice/` 两个模块并行开发，任何一方需要改本契约，必须先通知 Lead 并同步改本文件。
 > 冻结范围：路径、请求字段名、响应字段名、枚举值、错误码。
 > 未冻结范围：各 provider 内部实现、日志格式、额外字段（允许追加 `provider_meta` 等可选字段，不得删除或改名已有字段）。
@@ -646,7 +647,7 @@ blind_tests
 ```json
 {"text_zh": "今天我和小明搭积木塔，被小华碰倒了，我很生气。",
  "level": "A1",                 // A1 | A2 | B1 | B2，默认 A1
- "max_sentences": 6,            // 1–6，默认 6
+ "max_sentences": 6,            // 3–12，默认 6（家长可写更长故事）
  "weak_phonemes": ["th", "r"],  // 可选：把发音弱的音塞进故事里
  "avoid_words": ["..."]}        // 可选
 ```
@@ -673,6 +674,11 @@ blind_tests
 
 **错误语义**：参数非法 → 400；LLM 未配置 → **503 `provider_unavailable`**；JSON 解析两次失败 → **502 `provider_error`**。
 **不落盘、不缓存**（内容每次不同）。实现上用 `disable_thinking`（推理模型会把 token 耗在思考上）。
+
+**v1.16 补充：句数与超限**（`max_sentences` 3–12，默认 6）
+- `≥8` 句时 prompt 会要求"每句更短、避免长句"
+- 超句数：先带 `too many sentences` 反馈重写一次；仍超 → **不截断、不丢内容**，
+  保留全部句子、`readability.ok=false`、`warnings` 同时含 `too_hard` + `too_many_sentences`（前端提示"故事偏长/偏难"）
 
 ### `/v1/asr` 的 `language`（v1.7 扩展）
 - 接受 `en` / `en-US` / `zh` / `zh-CN`（大小写不敏感，`zh_hans` 等变体规范化）

@@ -926,7 +926,7 @@ mock/local 兜底产出 → 理论上会把 mock 音频写进 `<azure-key>.wav`�
 ```json
 {"text_zh": "今天我和小明搭积木塔，被小华碰倒了，我很生气",
  "level": "A1",                    // A1 | A2 | B1 | B2
- "max_sentences": 6,               // 1..6
+ "max_sentences": 6,               // 3..12（默认 6；家长可写更长故事）
  "weak_phonemes": ["th", "s"],     // 可选
  "avoid_words": []}                // 可选
 ```
@@ -943,7 +943,9 @@ mock/local 兜底产出 → 理论上会把 mock 音频写进 `<azure-key>.wav`�
 ```
 
 **服务端硬约束**（不靠模型自觉）：
-- 句数 ≤ `max_sentences`；平均词数 ≤ **8 / 10 / 12 / 14 / 16**（A1/A2/B1/B2/**C1**）；最长句 ≤ 平均上限 + 4
+- 句数 ≤ `max_sentences`（**3–12，默认 6**，task-80）；平均词数 ≤ **8 / 10 / 12 / 14 / 16**（A1/A2/B1/B2/**C1**）；最长句 ≤ 平均上限 + 4
+  - 句数多（≥8）时 prompt 会额外要求"每句更短、避免长句"；
+  - 超句数处理：先重写一次；仍超→**不截断、不丢内容**，保留全部句子并在 `warnings` 里标注 `too_hard` + `too_many_sentences`（`readability.ok=false`），由前端提示"故事偏长/偏难"。
   （C1 允许复合句、抽象词与连接词，但仍要求"自然、可朗读"；task-55）
 - 单一叙事时态（过去/现在，混用会触发重写）；`avoid_words` 出现也会触发重写
 - `unknown_words` 判定策略：**A1/A2** 用 `sentences.json` 的 A1/A2 句库 + A1 常用词表判定
