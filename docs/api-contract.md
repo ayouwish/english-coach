@@ -1,4 +1,4 @@
-# 接口契约 v1.16（FROZEN · 2026-11-02）
+# 接口契约 v1.17（FROZEN · 2026-11-02）
 
 > **本文件是唯一事实来源（single source of truth）。**
 
@@ -23,6 +23,7 @@
 | 2026-11-02 | v1.14 | `/v1/asr` 新增智谱 **GLM-ASR** provider（中文长音频更稳）与 `provider` 选择、`warnings`、`capabilities.asr_providers/asr_effective` | 向后兼容（默认自动选择，英文仍走 Azure）|
 | 2026-11-02 | v1.15 | `/v1/dialogue` 新增 `scenario.variation`（场景变体：人设/地点/细节/目标/开场白）与 `DIALOGUE_TEMPERATURE`（默认 0.9）；prompt 增加"禁止重复提问/换角度"约束 | 向后兼容（不传 variation 行为不变）|
 | 2026-11-02 | v1.16 | `/v1/story/rewrite` 的 `max_sentences` 范围 **1–6 → 3–12**（默认 6）；超句数不截断、`warnings` 增加 `too_many_sentences` | 向后兼容（旧值仍在范围内）|
+| 2026-11-02 | v1.17 | 新增 §23 **web 层扩展 API 汇总**（虚拟形象/故事录音/整段音频回放/音色/诊断分层），供原生客户端对接 | 新增端点，向后兼容 |
 > `web/` 与 `voice/` 两个模块并行开发，任何一方需要改本契约，必须先通知 Lead 并同步改本文件。
 > 冻结范围：路径、请求字段名、响应字段名、枚举值、错误码。
 > 未冻结范围：各 provider 内部实现、日志格式、额外字段（允许追加 `provider_meta` 等可选字段，不得删除或改名已有字段）。
@@ -973,3 +974,74 @@ POST /api/auth/revoke
 - 120s 中文录音 → 切 **5 段**（均 ≤25.5s）顺序正确、`duration_ms=120000`、`warnings:["segmented"]`
 - 中文 auto（本机无智谱 key → Azure）200，但**Azure 对中文合成音频识别明显错乱** → 印证中文走 GLM-ASR 的必要性
 - 429 退避 1s/2s 重试 3 次；超时 → `provider_timeout`；4xx 不重试
+
+---
+
+## 23. v1.17 新增：web 层扩展 API 汇总（原生客户端对接用）
+
+> 这些是 **web 层（`/api/*`）** 端点（Cookie 或 Bearer 皆可，见 §18）。客户端（iOS/鸿蒙）可直接调用。
+
+### 23.1 虚拟形象（预置库 + 选择）
+```
+GET  /api/avatar/presets                → {styles:[{id,label_zh}], characters:[{id,label_zh,audience,gender,desc_en,images}], placeholder}
+GET  /api/avatar                        → {avatar_url, preset_id, style, character_desc, prompt_used}
+POST /api/avatar {preset_id, style}     → 200（立即生效，不生成图片）
+PATCH /api/avatar {character_desc}      → 200（只允许改角色卡）
+DELETE /api/avatar                      → 200
+GET  /api/avatar/image                  → image/*
+```
+- 风格枚举：`watercolor|cartoon|pixel|papercut|clay`；`realistic/photo/写实` → **400**
+- 旧的照片上传路径 → **403 `policy_disabled`**（隐私策略：照片不上云）
+
+### 23.2 故事录音（先落盘再转录）
+```
+POST /api/story/recordings (multipart audio)  → 201 {id, status: transcribed|failed, transcript_zh, provider, error?}
+POST /api/story/recordings/:id/transcribe     → 200 {status, transcript_zh, provider}（可 {provider:"azure"|"zhipu"}）
+GET  /api/story/recordings                    → 最近 20 条（本人）
+GET  /api/story/recordings/:id/audio          → audio/*（仅本人）
+```
+- **转录失败仍 201**（录音已保存，可重试）；≤25MB；非音频 400；他人记录 404
+
+### 23.3 整段音频回放（异步预生成）
+```
+GET /api/chat/sessions/:id/audio/status   → {status: building|ready|failed, turn_count, duration_ms?, error?}
+GET /api/chat/sessions/:id/audio[?force=1] → ready→200 audio/wav；building→202；failed→500 可读
+GET /api/story/:id/audio/status           → 同上（故事整段朗读）
+GET /api/story/:id/audio[?force=1]        → ready→200；无缓存→202（后台拼）；单条录音直接返回
+```
+- 对话结束时**异步预生成**（`/end` 或 `done=true` 触发），客户端轮询 status
+
+### 23.4 音色
+```
+GET /api/tts/voices              → {voices:[{id,label,lang,gender}]}（英文 5 + 中文 4）
+GET /api/tts?text=&voice=&rate=  → audio/*（不带 voice 时回落到账号偏好）
+```
+
+### 23.5 诊断分层
+```
+GET /api/diagnosis                       → 默认 scope=all（全量累计，兼容旧版）
+GET /api/diagnosis?scope=recent&days=7   → 最近
+GET /api/diagnosis?scope=attempt&attempt_id=… → 只这一次
+GET /api/diagnosis?scope=batch&attempt_ids=a,b → 连读这一批（≤20，仅本人）
+```
+- 越权 → 404；儿童响应零 IPA；`contrasts` 对子已去重（a→b 与 b→a 合并）
+
+### 23.6 对话场景
+```
+GET  /api/chat/scenarios[?include_child=1]  → 内置 + 自定义（is_custom）；成人默认只看 adult，儿童只 child
+POST /api/chat/scenarios                    → 创建自定义场景（owner=当前用户）
+PATCH/DELETE /api/chat/scenarios/:id        → 仅 owner；他人 404
+GET  /api/chat/sessions                     → 历史列表（含轮数/场景/平均发音）
+GET  /api/chat/sessions/:id                 → 会话详情
+GET  /api/chat/sessions/:id/messages        → 消息（含 correction（更自然提示）与 pron（家长可见分数））
+```
+- 每次开会话随机抽 `variation`（人设/地点/细节/目标/开场白），存入会话 `variation_json`
+- 儿童创建自定义场景时 audience 强制 `child`；role_prompt 有注入词 → 400
+
+### 23.7 账号偏好
+```
+GET/PATCH /api/settings → {auto_illustrate, gender, tts_voice, story_sentences, ...}
+```
+- `auto_illustrate` 默认 **0（关）**：保存故事不自动画图（省成本），可手动 `POST /api/story/:id/illustrate`
+- `gender` ∈ `girl|boy|woman|man|other|NULL` → 影响插画提示词与形象推荐
+- `story_sentences` ∈ 3–12 或 NULL（NULL = 角色默认：儿童 5、成人 8）
