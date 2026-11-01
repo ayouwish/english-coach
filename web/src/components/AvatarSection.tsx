@@ -3,6 +3,8 @@
 import { useEffect, useState } from "react";
 import { AVATAR_STYLE_LABELS, MAX_DESC_LENGTH, type AvatarStyle } from "@/lib/avatar-shared";
 
+type Gender = "girl" | "boy" | "woman" | "man" | "other";
+
 interface Presets {
   styles: { id: string; label_zh: string }[];
   characters: {
@@ -10,6 +12,7 @@ interface Presets {
     label_zh: string;
     desc_en: string;
     audience: "child" | "adult";
+    gender?: Gender;
     images: Record<string, string>;
   }[];
   placeholder: boolean;
@@ -34,12 +37,15 @@ export function AvatarSection({
   isChild,
   initialPresets = null,
   initialAvatar = null,
+  gender = null,
 }: {
   isChild: boolean;
   /** 服务端预取的预置库（SSR 首屏就能看到风格卡片/角色网格） */
   initialPresets?: Presets | null;
   /** 服务端预取的当前形象 */
   initialAvatar?: AvatarState | null;
+  /** 用户性别（task-76）：默认只显示同性别/中性形象，可展开全部 */
+  gender?: Gender | null;
 }) {
   const [presets, setPresets] = useState<Presets | null>(initialPresets);
   const [state, setState] = useState<AvatarState | null>(initialAvatar);
@@ -56,8 +62,11 @@ export function AvatarSection({
   const [desc, setDesc] = useState(initialAvatar?.character_desc ?? "");
   /** 形象分组（task-66：儿童/成人）——儿童默认「给小朋友的」，家长默认「给爸爸妈妈的」 */
   const [audience, setAudience] = useState<"child" | "adult">(isChild ? "child" : "adult");
+  /** 是否显示全部性别的形象（默认只看与自己性别一致 + 中性） */
+  const [showAllGenders, setShowAllGenders] = useState(false);
   /** 图片加载失败的卡片（缺图时显示占位，不崩） */
   const [brokenImages, setBrokenImages] = useState<Record<string, boolean>>({});
+  const genderProp = gender ?? null;
 
   /** 首屏已有服务端数据时，只在挂载后轻量刷新一次（不闪 loading） */
   useEffect(() => {
@@ -190,7 +199,11 @@ export function AvatarSection({
   }
 
   const allCharacters = presets?.characters ?? [];
-  const characters = allCharacters.filter((c) => (c.audience ?? "child") === audience);
+  // 性别过滤（task-76）：默认「同性别 + other」；未设性别或展开时显示全部
+  const sameGender = (g?: string) => !genderProp || !g || g === "other" || g === genderProp;
+  const filteredByGender = showAllGenders || !genderProp ? allCharacters : allCharacters.filter((c) => sameGender(c.gender));
+  const characters = filteredByGender.filter((c) => (c.audience ?? "child") === audience);
+  const hiddenByGender = allCharacters.filter((c) => (c.audience ?? "child") === audience).length - characters.length;
   const childCount = allCharacters.filter((c) => (c.audience ?? "child") === "child").length;
   const adultCount = allCharacters.filter((c) => c.audience === "adult").length;
   const hasAvatar = Boolean(state?.avatar_url);
@@ -277,6 +290,20 @@ export function AvatarSection({
             ))}
           </div>
 
+          {genderProp ? (
+            <label className="mt-2 flex items-center gap-2 text-xs text-[var(--ec-muted)]" data-testid="avatar-gender-filter">
+              <input
+                type="checkbox"
+                data-testid="avatar-show-all-genders"
+                checked={showAllGenders}
+                onChange={(e) => setShowAllGenders(e.target.checked)}
+              />
+              <span>
+                显示全部形象（默认按你的性别显示
+                {hiddenByGender > 0 ? `，还有 ${hiddenByGender} 个` : ""}）
+              </span>
+            </label>
+          ) : null}
           <p className="mt-3 text-sm font-semibold">
             第 2 步：选一个形象（{audience === "child" ? (isChild ? "选一个你喜欢的我" : "给小朋友的") : isChild ? "给爸爸妈妈的" : "选一个你的形象"}）
           </p>

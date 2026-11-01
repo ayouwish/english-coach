@@ -44,7 +44,8 @@
         "papercut": true,
         "clay": true
       },
-      "audience": "child"
+      "audience": "child",
+      "gender": "girl"
     },
     {
       "id": "c2",
@@ -64,7 +65,8 @@
         "papercut": true,
         "clay": true
       },
-      "audience": "child"
+      "audience": "child",
+      "gender": "girl"
     },
     {
       "id": "c3",
@@ -84,7 +86,8 @@
         "papercut": true,
         "clay": true
       },
-      "audience": "child"
+      "audience": "child",
+      "gender": "girl"
     },
     {
       "id": "c4",
@@ -104,7 +107,8 @@
         "papercut": true,
         "clay": true
       },
-      "audience": "child"
+      "audience": "child",
+      "gender": "girl"
     },
     {
       "id": "c5",
@@ -124,7 +128,8 @@
         "papercut": true,
         "clay": true
       },
-      "audience": "child"
+      "audience": "child",
+      "gender": "boy"
     },
     {
       "id": "c6",
@@ -144,7 +149,8 @@
         "papercut": true,
         "clay": true
       },
-      "audience": "child"
+      "audience": "child",
+      "gender": "girl"
     },
     {
       "id": "c7",
@@ -164,7 +170,8 @@
         "papercut": true,
         "clay": true
       },
-      "audience": "child"
+      "audience": "child",
+      "gender": "boy"
     },
     {
       "id": "c8",
@@ -184,7 +191,8 @@
         "papercut": true,
         "clay": true
       },
-      "audience": "child"
+      "audience": "child",
+      "gender": "girl"
     },
     {
       "id": "c9",
@@ -198,7 +206,8 @@
         "papercut": "c9-papercut.png",
         "clay": "c9-clay.png"
       },
-      "placeholder": true
+      "placeholder": true,
+      "gender": "man"
     },
     {
       "id": "c10",
@@ -212,7 +221,8 @@
         "papercut": "c10-papercut.png",
         "clay": "c10-clay.png"
       },
-      "placeholder": true
+      "placeholder": true,
+      "gender": "woman"
     },
     {
       "id": "c11",
@@ -226,7 +236,8 @@
         "papercut": "c11-papercut.png",
         "clay": "c11-clay.png"
       },
-      "placeholder": true
+      "placeholder": true,
+      "gender": "man"
     },
     {
       "id": "c12",
@@ -240,7 +251,8 @@
         "papercut": "c12-papercut.png",
         "clay": "c12-clay.png"
       },
-      "placeholder": true
+      "placeholder": true,
+      "gender": "woman"
     }
   ],
   "presets": [
@@ -526,5 +538,5 @@
     }
   ],
   "generated_at": "2026-10-31T02:29:56.395666+00:00",
-  "note": "（web 兜底：已补 c9–c12 成人角色元数据；图片由 voice 生成脚本产出，缺失时 UI 占位）"
+  "note": "（web 兜底：已补 c9–c12 成人角色元数据；图片由 voice 生成脚本产出，缺失时 UI 占位）（task-76：补 gender 字段，用于按性别过滤形象）"
 }

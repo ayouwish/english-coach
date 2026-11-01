@@ -51,7 +51,15 @@ from .intonation import compare_intonation, extract_f0, prosody_score_from_dista
 from .llm import LLMClient
 from .ocr import active_ocr_provider, heif_available, ocr_available, recognize_image
 from .phonemes import PHONEME_SPACE_ID, canonicalize_pa_result
-from .providers.registry import get_providers, provider_availability
+from .providers.registry import (
+    ASR_PREFERENCES,
+    ASR_PROVIDERS,
+    asr_chain_for,
+    asr_effective,
+    asr_timeout_for,
+    get_providers,
+    provider_availability,
+)
 from .schemas import (
     DialogueRequest,
     FeedbackRequest,
@@ -200,6 +208,9 @@ async def health() -> dict:
     capabilities["avatar_presets"] = True
     # task-73：部署自查用静态标记（端点存在即 true，不做远程/耗时探测）
     capabilities["audio_concat"] = True
+    # task-75：ASR provider 矩阵（静态实现 + 当前生效，auto 下中英文可能不同）
+    capabilities["asr_providers"] = list(ASR_PROVIDERS)
+    capabilities["asr_effective"] = asr_effective(providers, settings)
     capabilities["chat_done_turn_index"] = done_turn_index(settings)  # 0 = 不限轮数（默认）
     capabilities["features"] = list(CONTRACT_FEATURES)
     # task-44：如实上报"配置的 provider 是否真的可用"（线上曾谎报 azure、实际回落到 mock）
@@ -228,20 +239,28 @@ async def asr(
     audio: UploadFile = File(...),
     language: str = Form("en"),
     prompt: str | None = Form(None),
+    provider: str | None = Form(None),
 ) -> dict:
     settings = get_settings()
     # task-47：language 支持 en / en-US / zh / zh-CN（大小写不敏感），统一成完整 locale
     normalized_language = normalize_language(language)
     if normalized_language is None:
         raise BadRequest(f"language must be one of {SUPPORTED_ASR_LANGUAGES}, got {language!r}")
+    # task-75：provider 覆盖仅允许白名单，非法 → 400
+    preference: str | None = None
+    if provider is not None and provider.strip() != "":
+        preference = provider.strip().lower()
+        if preference not in ASR_PREFERENCES:
+            raise BadRequest(f"provider must be one of {list(ASR_PREFERENCES)}, got {provider!r}")
     data = await _read_upload(audio, settings.max_upload_bytes)
     clip = await run_in_threadpool(decode_audio, data, 16000, settings.max_audio_seconds)
     providers = get_providers()
+    chain = asr_chain_for(providers, normalized_language, preference, settings)
 
     result, provider_name, fallback, errors = execution.run_chain(
-        providers.asr_chain,
-        lambda provider: provider.recognize(clip, language=normalized_language, prompt=prompt),
-        execution.TIMEOUTS["asr"],
+        chain,
+        lambda candidate: candidate.recognize(clip, language=normalized_language, prompt=prompt),
+        asr_timeout_for(chain, settings),
         kind="asr",
     )
     if result is None:
@@ -263,9 +282,12 @@ async def asr(
         raise ProviderError("没有识别到语音（静音或说话太短），请再说一次", provider="asr")
     _ensure_real_provider("asr", actual_provider)
     payload = result.to_contract()
+    warnings = list(getattr(result, "warnings", []) or [])
     if fallback:
-        payload["warnings"] = ["provider_fallback"]
+        warnings.append("provider_fallback")
         payload["provider_meta"] = {"fallback_errors": errors[-3:]}
+    if warnings:
+        payload["warnings"] = warnings
     return payload
 
 

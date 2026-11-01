@@ -97,6 +97,8 @@ export interface AvatarPresets {
     desc_en: string;
     /** 分组：儿童 / 成人（task-66：12 角色 = 8 儿童 + 4 成人） */
     audience: "child" | "adult";
+    /** 性别（task-76）：girl|boy|woman|man|other，用于按用户性别过滤/排序 */
+    gender?: "girl" | "boy" | "woman" | "man" | "other";
     images: Record<string, string>;
   }[];
   placeholder: boolean;

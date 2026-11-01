@@ -1,6 +1,7 @@
 "use client";
 
-import { useState } from "react";
+import { useMemo, useState } from "react";
+import { VOICE_OPTIONS, voiceOption } from "@/lib/voices";
 
 interface SettingsUser {
   displayName: string;
@@ -11,16 +12,23 @@ interface SettingsUser {
   dailyLimitMinutes: number;
   allowFreeChat: boolean;
   isChild: boolean;
+  /** task-76：卡通插画自动生成（默认关） */
+  autoIllustrate: boolean;
+  /** task-76：性别（插画提示词用） */
+  gender: string | null;
 }
 
 export function SettingsForm({
   user,
   prefs,
   usage,
+  imageConfigured = false,
 }: {
   user: SettingsUser;
   prefs: { correctionLevel: string; ttsVoice: string | null; ttsRate: string };
   usage: { minutes: number; limitMinutes: number; remainingMinutes: number };
+  /** voice 侧是否配置了图像服务（task-76：开关旁边展示） */
+  imageConfigured?: boolean;
 }) {
   const [displayName, setDisplayName] = useState(user.displayName);
   const [limit, setLimit] = useState(user.dailyLimitMinutes);
@@ -28,9 +36,41 @@ export function SettingsForm({
   const [correctionLevel, setCorrectionLevel] = useState(prefs.correctionLevel);
   const [ttsVoice, setTtsVoice] = useState(prefs.ttsVoice ?? "");
   const [ttsRate, setTtsRate] = useState(prefs.ttsRate);
+  const [autoIllustrate, setAutoIllustrate] = useState(user.autoIllustrate);
+  const [gender, setGender] = useState(user.gender ?? "");
+  const [previewBusy, setPreviewBusy] = useState(false);
+  const [previewError, setPreviewError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+
+  /** 音色试听（task-76 ③）：GET /api/tts?text=…&voice=… 直接给 <audio> 播 */
+  async function previewVoice() {
+    const voice = ttsVoice || VOICE_OPTIONS[0].id;
+    const opt = voiceOption(voice);
+    const text = opt?.sample ?? "Hello! Let's practice English together.";
+    setPreviewError(null);
+    setPreviewBusy(true);
+    try {
+      const url = `/api/tts?${new URLSearchParams({ text, rate: "normal", format: "mp3", voice }).toString()}`;
+      const audio = new Audio(url);
+      await audio.play().catch((err) => {
+        throw new Error(`浏览器没让播放（${(err as Error).message}），点播放器再试`);
+      });
+    } catch (err) {
+      setPreviewError((err as Error).message);
+    } finally {
+      setPreviewBusy(false);
+    }
+  }
+
+  const voiceGroups = useMemo(
+    () => ({
+      en: VOICE_OPTIONS.filter((v) => v.lang === "en"),
+      zh: VOICE_OPTIONS.filter((v) => v.lang === "zh"),
+    }),
+    [],
+  );
 
   async function save() {
     setBusy(true);
@@ -42,6 +82,8 @@ export function SettingsForm({
         correction_level: correctionLevel,
         tts_voice: ttsVoice || null,
         tts_rate: ttsRate,
+        auto_illustrate: autoIllustrate,
+        gender: gender || null,
       };
       if (!user.isChild) {
         payload.daily_limit_minutes = limit;
@@ -113,6 +155,44 @@ export function SettingsForm({
           </>
         )}
 
+        {/* task-76 ①：卡通插画自动生成开关（默认关，避免自动花钱） */}
+        <div className="rounded-xl bg-[#f8f9ff] p-3" data-testid="auto-illustrate-section">
+          <label className="flex items-center gap-2 text-sm font-semibold">
+            <input
+              type="checkbox"
+              data-testid="auto-illustrate-toggle"
+              checked={autoIllustrate}
+              onChange={(e) => setAutoIllustrate(e.target.checked)}
+            />
+            🎨 {user.isChild ? "要不要自动画一张画？" : "卡通插画自动生成"}
+          </label>
+          <p className="mt-1 text-xs text-[var(--ec-muted)]">
+            每张约 ¥0.1；关闭后保存故事不会自动画，仍可在故事页手动点「生成插画」。
+            当前图像服务：<strong>{imageConfigured ? "已配置" : "未配置（生成会给出可读提示）"}</strong>
+          </p>
+        </div>
+
+        {/* task-76 ②：性别（影响插画里的形象，避免都画成男孩） */}
+        <label className="flex flex-col gap-1 text-sm font-medium">
+          {user.isChild ? "你是男孩还是女孩？" : "性别（影响插画里的形象）"}
+          <select
+            value={gender}
+            onChange={(e) => setGender(e.target.value)}
+            data-testid="gender-select"
+            className="rounded-xl border border-[#d9dcf0] px-3 py-2"
+          >
+            <option value="">不设置（插画里用中性形象）</option>
+            <option value="girl">女孩（girl）</option>
+            <option value="boy">男孩（boy）</option>
+            <option value="woman">成年女性（woman）</option>
+            <option value="man">成年男性（man）</option>
+            <option value="other">其它 / 不想说（other）</option>
+          </select>
+          <span className="text-xs font-normal text-[var(--ec-muted)]">
+            只用于插画提示词与形象筛选，不会展示给其他人。
+          </span>
+        </label>
+
         <label className="flex flex-col gap-1 text-sm font-medium">
           纠正强度（correction_level）
           <select
@@ -127,15 +207,50 @@ export function SettingsForm({
         </label>
 
         <div className="grid gap-3 sm:grid-cols-2">
-          <label className="flex flex-col gap-1 text-sm font-medium">
-            音色（tts_voice，可留空用 provider 默认）
-            <input
+          <div className="flex flex-col gap-1 text-sm font-medium" data-testid="tts-voice-options">
+            <span>🔊 音色（练习示范音、对话朗读、鼓励音都会用它）</span>
+            <select
               value={ttsVoice}
               onChange={(e) => setTtsVoice(e.target.value)}
-              placeholder="en-US-JennyNeural"
+              data-testid="tts-voice-select"
               className="rounded-xl border border-[#d9dcf0] px-3 py-2"
-            />
-          </label>
+            >
+              <option value="">默认音色（provider 决定）</option>
+              <optgroup label="英语">
+                {voiceGroups.en.map((v) => (
+                  <option key={v.id} value={v.id}>
+                    {v.label_zh}
+                  </option>
+                ))}
+              </optgroup>
+              <optgroup label="中文">
+                {voiceGroups.zh.map((v) => (
+                  <option key={v.id} value={v.id}>
+                    {v.label_zh}
+                  </option>
+                ))}
+              </optgroup>
+            </select>
+            <div className="mt-1 flex flex-wrap items-center gap-2">
+              <button
+                type="button"
+                className="ec-btn ec-btn-ghost !px-2 !py-0.5 text-xs"
+                data-testid="tts-voice-preview"
+                disabled={previewBusy}
+                onClick={() => void previewVoice()}
+              >
+                {previewBusy ? "试听中…" : "▶ 试听这个音色"}
+              </button>
+              <span className="text-xs font-normal text-[var(--ec-muted)]">
+                {voiceOption(ttsVoice)?.sample ?? "选中后点试听，会读一句示例。"}
+              </span>
+            </div>
+            {previewError ? (
+              <p className="text-xs text-red-700" role="alert" data-testid="tts-voice-preview-error">
+                {previewError}
+              </p>
+            ) : null}
+          </div>
           <div className="flex flex-col gap-1 text-sm font-medium" data-testid="tts-rate-options">
             <span>朗读语速（示范音 / 对话朗读 / 跟读回放都生效）</span>
             {/* 儿童用大按钮两选一（小下拉手指不好点），成人保留下拉 */}

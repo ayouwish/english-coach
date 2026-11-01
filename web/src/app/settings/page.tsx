@@ -4,6 +4,7 @@ import { getCurrentUser } from "@/lib/auth";
 import { listVisibleSentences } from "@/lib/corpus";
 import { getPrefs } from "@/lib/prefs";
 import { getDailyUsage } from "@/lib/usage";
+import { getCapabilities } from "@/lib/voice";
 import { AvatarSection } from "@/components/AvatarSection";
 import { getAvatar, avatarView } from "@/lib/avatar";
 import { loadAvatarPresets } from "@/lib/avatar-presets";
@@ -22,6 +23,7 @@ export default async function SettingsPage() {
     ? (await listVisibleSentences(user)).filter((s) => s.mine)
     : [];
   // task-64：预置形象库与当前形象在服务端取好 → 首屏直接渲染选择题（无 loading 闪烁）
+  const caps = await getCapabilities().then((c) => c.capabilities).catch(() => null);
   const avatarPresets = await loadAvatarPresets();
   const avatarInitial = avatarView(await getAvatar(user.id), user.id);
 
@@ -37,11 +39,19 @@ export default async function SettingsPage() {
         dailyLimitMinutes: user.dailyLimitMinutes,
         allowFreeChat: user.allowFreeChat,
         isChild: user.isChild,
+        autoIllustrate: user.autoIllustrate,
+        gender: user.gender,
       }}
       prefs={prefs}
       usage={usage}
+      imageConfigured={Boolean(caps?.image)}
     />
-    <AvatarSection isChild={user.isChild} initialPresets={avatarPresets} initialAvatar={avatarInitial} />
+    <AvatarSection
+      isChild={user.isChild}
+      initialPresets={avatarPresets}
+      initialAvatar={avatarInitial}
+      gender={(user.gender as "girl" | "boy" | "woman" | "man" | "other" | null) ?? null}
+    />
     {user.role === "parent" ? <CorpusManager initial={mySentences} /> : null}
     </>
   );

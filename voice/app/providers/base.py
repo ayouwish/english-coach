@@ -53,15 +53,20 @@ class ASRResult:
     words: list[WordTiming] = field(default_factory=list)
     provider: str = "mock"
     provider_meta: dict = field(default_factory=dict)
+    # task-75：可选 warnings（如中文长音频被切段识别 → ["segmented"]）；空列表不出现在响应里
+    warnings: list[str] = field(default_factory=list)
 
     def to_contract(self) -> dict:
-        return {
+        payload = {
             "text": self.text,
             "language": self.language,
             "duration_ms": int(self.duration_ms),
             "words": [w.to_contract() for w in self.words],
             "provider": self.provider,
         }
+        if self.warnings:
+            payload["warnings"] = list(self.warnings)
+        return payload
 
 
 @dataclass

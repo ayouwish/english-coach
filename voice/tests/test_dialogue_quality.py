@@ -10,6 +10,7 @@ import json
 import pytest
 
 from app import dialogue as dlg
+from app.config import reset_settings_cache
 from app.dialogue import (
     DIALOGUE_SYSTEM_PROMPT,
     done_turn_index,
@@ -447,3 +448,118 @@ def test_llm_outcome_provider_is_preserved():
 
     out = complete_dialogue(FakeLLM(), _payload("adult"))
     assert out["provider"] == "ollama" and out["degraded_llm"] is False
+
+
+# --------------------------------------------------------------------------------------
+# 5) task-78：场景变体（variation）+ 禁止重复提问 + 温度
+# --------------------------------------------------------------------------------------
+VARIATION = {
+    "persona": "a friendly barista named Mia",
+    "place": "a small café near the station",
+    "detail": "today's special is iced matcha latte",
+    "goal": "order a drink and a snack",
+    "opening_line": "Hi there! We've got a new iced matcha today — what can I get you?",
+}
+
+
+def _payload_with_variation(variation: dict | None = None) -> dict:
+    variation = variation if variation is not None else VARIATION
+    payload = _payload()
+    payload["scenario"] = {**SCENARIO, "variation": variation}
+    # web 会随机选一份变体，开场白随之变化（history 里的开场白也应是变体版）
+    payload["history"] = [
+        {"role": "assistant", "text": variation.get("opening_line", SCENARIO["opening_line"])},
+        {"role": "user", "text": "I want a coffee."},
+    ]
+    return payload
+
+
+def test_user_prompt_without_variation_has_no_variation_block():
+    prompt = build_dialogue_user_prompt(_payload())
+    assert "SCENARIO VARIATION" not in prompt
+    assert "OPENING_LINE: Hi there! What can I get for you today?" in prompt
+    assert "QUESTIONS_ASKED_SO_FAR: 1" in prompt
+
+
+def test_user_prompt_includes_variation_details():
+    prompt = build_dialogue_user_prompt(_payload_with_variation())
+    assert "SCENARIO VARIATION" in prompt
+    for expected in VARIATION["persona"], VARIATION["place"], VARIATION["detail"], VARIATION["goal"]:
+        assert expected in prompt, expected
+    for key in ("persona:", "place:", "detail:", "goal:"):
+        assert key in prompt
+
+
+def test_variation_opening_line_preferred_over_scenario():
+    prompt = build_dialogue_user_prompt(_payload_with_variation())
+    assert f"OPENING_LINE: {VARIATION['opening_line']}" in prompt
+    assert SCENARIO["opening_line"] not in prompt, "给了 variation.opening_line 时不应再用固定开场白"
+    assert VARIATION["opening_line"] in prompt.split("ALREADY_ASKED")[1], "开场白也应进入 ALREADY_ASKED"
+
+
+def test_system_prompt_forbids_repeating_questions():
+    assert "Never repeat a question you already asked" in DIALOGUE_SYSTEM_PROMPT
+    assert "exactly ONE question per turn" in DIALOGUE_SYSTEM_PROMPT
+    assert "3 or more questions" in DIALOGUE_SYSTEM_PROMPT
+    assert "CHANGE THE ANGLE" in DIALOGUE_SYSTEM_PROMPT
+    for hint in ("how / why / when", "feelings or preferences", "next step"):
+        assert hint in DIALOGUE_SYSTEM_PROMPT, hint
+
+
+def test_topic_fatigue_hint_after_three_questions():
+    payload = _payload(
+        history_extra=[
+            {"role": "assistant", "text": SCENARIO["opening_line"]},
+            {"role": "user", "text": "A coffee."},
+            {"role": "assistant", "text": "Would you like it hot or iced?"},
+            {"role": "user", "text": "Iced, please."},
+            {"role": "assistant", "text": "Would you like milk with that?"},
+            {"role": "user", "text": "Yes."},
+            {"role": "assistant", "text": "Anything to eat?"},
+            {"role": "user", "text": "No thanks."},
+        ]
+    )
+    prompt = build_dialogue_user_prompt(payload)
+    assert "QUESTIONS_ASKED_SO_FAR: 4" in prompt
+    assert "TOPIC_FATIGUE" in prompt
+    assert "change the angle" in prompt or "next step" in prompt
+
+    short_prompt = build_dialogue_user_prompt(_payload())
+    assert "TOPIC_FATIGUE" not in short_prompt
+
+
+def test_dialogue_temperature_default_and_override(client, monkeypatch, fake_llm, llm_configured):
+    calls, _queue = fake_llm
+    assert _run(client, _payload())["reply"]
+    assert calls[0]["body"]["temperature"] == 0.9, "dialogue 默认温度应为 0.9"
+
+    monkeypatch.setenv("DIALOGUE_TEMPERATURE", "1.2")
+    reset_settings_cache()
+    try:
+        calls.clear()
+        assert _run(client, _payload())["reply"]
+        assert calls[0]["body"]["temperature"] == 1.2
+    finally:
+        monkeypatch.delenv("DIALOGUE_TEMPERATURE", raising=False)
+        reset_settings_cache()
+
+    monkeypatch.setenv("DIALOGUE_TEMPERATURE", "9")
+    reset_settings_cache()
+    try:
+        calls.clear()
+        assert _run(client, _payload())["reply"]
+        assert calls[0]["body"]["temperature"] == 1.5, "温度应钳制到 0–1.5"
+    finally:
+        monkeypatch.delenv("DIALOGUE_TEMPERATURE", raising=False)
+        reset_settings_cache()
+
+
+def test_variation_is_used_by_llm_request(client, fake_llm, llm_configured):
+    calls, _queue = fake_llm
+    body = _run(client, _payload_with_variation())
+    assert body["reply"]
+    user_message = calls[0]["body"]["messages"][-1]["content"]
+    assert "SCENARIO VARIATION" in user_message
+    assert VARIATION["detail"] in user_message
+    assert VARIATION["opening_line"] in user_message
+    assert calls[0]["body"]["temperature"] == 0.9

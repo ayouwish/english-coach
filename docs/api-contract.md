@@ -1,4 +1,4 @@
-# 接口契约 v1.13（FROZEN · 2026-10-31）
+# 接口契约 v1.14（FROZEN · 2026-11-02）
 
 > **本文件是唯一事实来源（single source of truth）。**
 
@@ -20,6 +20,7 @@
 | 2026-10-31 | v1.11 | 新增 §19 虚拟形象：`POST /v1/image/avatar`（照片→角色卡→5 种风格头像）、`/v1/image/illustrate` 支持 `character_desc`/`character_style` 与 `character_used`；`capabilities.image_avatar` | 向后兼容：illustrate 不带角色卡时提示词逐字节不变 |
 | 2026-10-31 | v1.12 | 虚拟形象改为**预置库 + 选择题**（照片不上云）：新增 `GET /v1/image/avatar/presets`、错误码 `policy_disabled`(403)、配置 `IMAGE_AVATAR_PHOTO=0`；风格白名单硬拒绝写实；`capabilities.avatar_presets`、`image_avatar` 语义调整为"照片生成是否启用" | 向后兼容（照片接口默认关闭）|
 | 2026-10-31 | v1.13 | 新增 §21 `POST /v1/audio/concat`（多段音频按序拼接成一段 WAV，供"整段对话回放"）| 向后兼容 |
+| 2026-11-02 | v1.14 | `/v1/asr` 新增智谱 **GLM-ASR** provider（中文长音频更稳）与 `provider` 选择、`warnings`、`capabilities.asr_providers/asr_effective` | 向后兼容（默认自动选择，英文仍走 Azure）|
 > `web/` 与 `voice/` 两个模块并行开发，任何一方需要改本契约，必须先通知 Lead 并同步改本文件。
 > 冻结范围：路径、请求字段名、响应字段名、枚举值、错误码。
 > 未冻结范围：各 provider 内部实现、日志格式、额外字段（允许追加 `provider_meta` 等可选字段，不得删除或改名已有字段）。
@@ -898,3 +899,48 @@ POST /api/auth/revoke
 
 实测（真实用户 webm + TTS wav + mp3）：6.18s + 1.86s + gap 250 → `x-total-ms=8290`；
 三段混格式 gap 0/250/2000 → 8740/9240/12740；输出恒为 16k/1ch/16bit。
+
+---
+
+## 22. v1.14 新增：智谱 GLM-ASR（中文长音频 + ASR provider 选择）
+
+用户反馈：中文较长录音转录失败、中文场景希望用国内服务更稳。调研结论：智谱 GLM-ASR（¥0.06/分钟，
+中文/方言/中英混杂、强抗噪），复用已有智谱账号。
+
+### 22.1 接口变化
+`POST /v1/asr`（multipart，参数向后兼容）：
+- 新增可选字段 **`provider: "azure" | "zhipu" | "auto"`**（非法值 → 400；默认取配置 `ASR_PROVIDER`，默认 `auto`）
+- 响应新增可选 **`warnings`**（`["segmented"]` 长音频切段、`["provider_fallback"]` 兜底）
+- `duration_ms` 各 provider 都会填
+
+### 22.2 provider 选择矩阵
+| 配置/请求 | 中文（zh）| 英文（en）|
+|---|---|---|
+| `auto`（默认）| **有智谱 key → zhipu 优先**；失败按 mode 链兜底（azure/local→mock），如实回 `provider` + `warnings:["provider_fallback"]` | 保持 mode 主 provider（Azure）|
+| `azure` / `zhipu` | 强制 | 强制 |
+
+**诚实语义**（不静默冒充）：
+- 显式 `provider=zhipu` 但无 key：mock 模式回退 mock 且响应 `provider:"mock"`；**非 mock 模式 → 503 `provider_unavailable`**
+- auto 且无 key：保持原 provider，`health.capabilities.asr_effective` 如实显示
+
+### 22.3 长音频切段（关键限制）
+智谱 GLM-ASR **单文件 ≤25MB、音频 ≤30 秒** → 服务端自动切段：
+- 超过 `ZHIPU_ASR_CHUNK_SECONDS`（默认 25s）时按 20ms 帧 RMS 找 ≥150ms 静音，切在静音中间；
+  找不到静音则硬切（不丢尾部）
+- 逐段识别后拼接（中文直接连、含英文用空格），返回 `warnings:["segmented"]` +
+  `provider_meta: {model, segments, chunk_seconds}`
+- 输入总时长上限仍受 `VOICE_MAX_AUDIO_SECONDS`（默认 120s）约束
+
+### 22.4 配置
+`ASR_PROVIDER=auto`、`ZHIPU_ASR_API_KEY`（不填回退 `IMAGE_API_KEY`）、`ZHIPU_ASR_BASE_URL`
+（默认 `https://open.bigmodel.cn/api/paas/v4`）、`ZHIPU_ASR_MODEL=glm-asr-2512`、
+`ZHIPU_ASR_TIMEOUT_S=60`、`ZHIPU_ASR_CHUNK_SECONDS=25`
+
+### 22.5 能力字段
+`capabilities.asr_providers: ["azure","zhipu"]`、
+`capabilities.asr_effective: {"zh": "zhipu|azure|local|mock", "en": "..."}`
+
+### 22.6 实测
+- 120s 中文录音 → 切 **5 段**（均 ≤25.5s）顺序正确、`duration_ms=120000`、`warnings:["segmented"]`
+- 中文 auto（本机无智谱 key → Azure）200，但**Azure 对中文合成音频识别明显错乱** → 印证中文走 GLM-ASR 的必要性
+- 429 退避 1s/2s 重试 3 次；超时 → `provider_timeout`；4xx 不重试

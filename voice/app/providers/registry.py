@@ -25,6 +25,10 @@ def _make(kind: str, name: str):
             from .azure import AzureASR
 
             return AzureASR()
+        if name == "zhipu":
+            from .zhipu_asr import ZhipuASR  # task-75：智谱 GLM-ASR（中文长音频）
+
+            return ZhipuASR()
     elif kind == "pa":
         if name == "mock":
             return MockPA()
@@ -135,7 +139,75 @@ def reset_providers() -> None:
     get_providers.cache_clear()
 
 
-__all__ = ["ProviderSet", "build_providers", "get_providers", "reset_providers", "ProviderError"]
+__all__ = [
+    "ProviderSet",
+    "build_providers",
+    "get_providers",
+    "reset_providers",
+    "ProviderError",
+    "ASR_PROVIDERS",
+    "ASR_PREFERENCES",
+    "asr_chain_for",
+    "asr_timeout_for",
+    "asr_effective",
+    "provider_availability",
+]
+
+
+# --------------------------------------------------------------------------------------
+# ASR provider 选择（task-75）
+# --------------------------------------------------------------------------------------
+ASR_PROVIDERS = ["azure", "zhipu"]
+ASR_PREFERENCES = ("auto", "azure", "zhipu")
+
+
+def _zhipu_asr_ready(settings: Settings | None = None) -> tuple[bool, str | None]:
+    try:
+        from .zhipu_asr import zhipu_asr_available
+
+        return zhipu_asr_available(settings)
+    except Exception as exc:  # pragma: no cover - 依赖异常按不可用处理
+        return False, f"{type(exc).__name__}: {exc}"
+
+
+def asr_chain_for(
+    providers: ProviderSet, language: str | None, preference: str | None = None, settings: Settings | None = None
+) -> list:
+    """按请求语言/配置决定 ASR 调用链。
+
+    - 显式 azure/zhipu：只先试该 provider（+ mock 兜底；非 mock 模式下 mock 会被 503 拦截，绝不静默冒充）
+    - auto：中文且智谱 key 可用 → 智谱优先，其余按 mode 链兜底；英文保持 mode 主 provider
+    """
+    settings = settings or get_settings()
+    selected = (preference or getattr(settings, "asr_preference", "auto") or "auto").strip().lower()
+    if selected in ("azure", "zhipu"):
+        instance = _make("asr", selected)
+        return [instance, MockASR()]
+    if (language or "").lower().startswith("zh") and _zhipu_asr_ready(settings)[0]:
+        zhipu = _make("asr", "zhipu")
+        chain = [zhipu]
+        chain.extend(provider for provider in providers.asr_chain if getattr(provider, "name", "") != "zhipu")
+        return chain
+    return list(providers.asr_chain)
+
+
+def asr_timeout_for(chain: list, settings: Settings | None = None) -> float:
+    """含智谱（长音频切段可能多次请求）时放宽 ASR 超时。"""
+    from ..execution import TIMEOUTS
+
+    settings = settings or get_settings()
+    base = float(TIMEOUTS.get("asr", 25.0))
+    if any(getattr(provider, "name", "") == "zhipu" for provider in chain):
+        return max(base, float(settings.zhipu_asr_timeout_s))
+    return base
+
+
+def asr_effective(providers: ProviderSet, settings: Settings | None = None) -> dict[str, str]:
+    """health 用：当前生效的 ASR provider（auto 模式下中文/英文可能不同）。"""
+    settings = settings or get_settings()
+    mode_primary = getattr(providers.asr_chain[0], "name", "mock") if providers.asr_chain else "mock"
+    zh = "zhipu" if _zhipu_asr_ready(settings)[0] else mode_primary
+    return {"zh": zh, "en": mode_primary}
 
 
 def provider_availability(kind: str, name: str) -> tuple[bool, str | None]:
@@ -154,6 +226,10 @@ def provider_availability(kind: str, name: str) -> tuple[bool, str | None]:
             from .azure import azure_status
 
             return azure_status()
+        if name == "zhipu" and kind == "asr":
+            from .zhipu_asr import zhipu_asr_available
+
+            return zhipu_asr_available()
         if name == "local":
             import importlib.util
 

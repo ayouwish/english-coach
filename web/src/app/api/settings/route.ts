@@ -11,6 +11,9 @@ export const dynamic = "force-dynamic";
 
 const LEVELS: CorrectionLevel[] = ["gentle", "standard", "none"];
 
+/** task-76：性别枚举（空 = 未设置；插画提示词会退化为 a child） */
+const GENDERS: string[] = ["girl", "boy", "woman", "man", "other"];
+
 /** GET /api/settings — 当前用户偏好 + 今日用量。 */
 export const GET = route(async () => {
   await ensureBootstrap();
@@ -31,6 +34,9 @@ export const PATCH = route(async (req: NextRequest) => {
     tts_voice?: string | null;
     tts_rate?: string;
     display_name?: string;
+    /** task-76 */
+    auto_illustrate?: boolean;
+    gender?: string | null;
   } | null;
   if (!body) throw new HttpError(400, "bad_request", "请求体必须是 JSON");
 
@@ -49,6 +55,17 @@ export const PATCH = route(async (req: NextRequest) => {
     userPatch.dailyLimitMinutes = Math.round(v);
   }
   if (body.allow_free_chat !== undefined) userPatch.allowFreeChat = body.allow_free_chat ? 1 : 0;
+  // task-76：卡通插画自动生成开关（默认关）+ 性别（影响插画提示词）
+  if (body.auto_illustrate !== undefined) userPatch.autoIllustrate = body.auto_illustrate ? 1 : 0;
+  if (body.gender !== undefined) {
+    if (body.gender === null || body.gender === "") {
+      userPatch.gender = null;
+    } else {
+      const g = String(body.gender);
+      if (!GENDERS.includes(g)) throw new HttpError(400, "bad_request", `gender 必须是 ${GENDERS.join("/")} 或 null`);
+      userPatch.gender = g;
+    }
+  }
   if (body.display_name !== undefined) {
     const name = body.display_name.trim();
     if (!name || name.length > 30) throw new HttpError(400, "bad_request", "昵称需为 1–30 个字符");

@@ -190,6 +190,12 @@ def _llm_configured(base_url: str | None, api_key: str | None) -> bool:
     return any(tok in low for tok in ("localhost", "127.0.0.1", "ollama", ":11434", "host.docker.internal"))
 
 
+def _asr_preference() -> str:
+    """ASR_PROVIDER=azure|zhipu|auto（默认 auto）；非法值回 auto，绝不静默选别的 provider。"""
+    value = (_env("ASR_PROVIDER") or "auto").strip().lower()
+    return value if value in ("auto", "azure", "zhipu") else "auto"
+
+
 def _resolve_providers(mode: str) -> tuple[str, str, str, str]:
     """-> (asr, pa, tts, llm) provider names for the given mode (before env overrides)."""
     azure_ready = bool(_env("AZURE_SPEECH_KEY"))
@@ -218,6 +224,13 @@ class Settings:
     asr_provider: str = "mock"
     pa_provider: str = "mock"
     tts_provider: str = "mock"
+    # task-75：ASR 首选策略（auto：中文优先智谱 GLM-ASR，英文保持 mode 主 provider）
+    asr_preference: str = "auto"
+    zhipu_asr_api_key: str | None = None
+    zhipu_asr_base_url: str = "https://open.bigmodel.cn/api/paas/v4"
+    zhipu_asr_model: str = "glm-asr-2512"
+    zhipu_asr_timeout_s: float = 60.0
+    zhipu_asr_chunk_seconds: float = 25.0
     llm_provider: str = "template"
 
     azure_speech_key: str | None = None
@@ -235,6 +248,8 @@ class Settings:
     llm_enabled: bool = False
     # task-69：对话"按轮数强制收尾"的阈值；0（默认）= 不因轮数结束（只由模型语义/web 安全阀决定）
     chat_done_turn_index: int = 0
+    # task-78：对话温度（只影响 dialogue；0–1.5，默认 0.9 让同场景多次对话更有变化）
+    dialogue_temperature: float = 0.9
 
     # 本地模型（ModelScope 镜像下载，绝不访问 HuggingFace）
     whisper_model: str = "small.en"
@@ -352,6 +367,13 @@ def get_settings() -> Settings:
         host=_env("VOICE_HOST", "0.0.0.0") or "0.0.0.0",
         port=_env_int("VOICE_PORT", 8100),
         asr_provider=asr,
+        asr_preference=_asr_preference(),
+        zhipu_asr_api_key=_env("ZHIPU_ASR_API_KEY") or _env("IMAGE_API_KEY"),
+        zhipu_asr_base_url=_env("ZHIPU_ASR_BASE_URL", "https://open.bigmodel.cn/api/paas/v4")
+        or "https://open.bigmodel.cn/api/paas/v4",
+        zhipu_asr_model=_env("ZHIPU_ASR_MODEL", "glm-asr-2512") or "glm-asr-2512",
+        zhipu_asr_timeout_s=_env_float("ZHIPU_ASR_TIMEOUT_S", 60.0),
+        zhipu_asr_chunk_seconds=_env_float("ZHIPU_ASR_CHUNK_SECONDS", 25.0),
         pa_provider=pa,
         tts_provider=tts,
         llm_provider=llm if llm_enabled else llm_name_for_report if llm_enabled else "template",
@@ -367,6 +389,7 @@ def get_settings() -> Settings:
         llm_timeout_s=_env_float("LLM_TIMEOUT_S", 30.0),
         llm_enabled=llm_enabled,
         chat_done_turn_index=_env_int("CHAT_DONE_TURN_INDEX", 0),
+        dialogue_temperature=max(0.0, min(1.5, _env_float("DIALOGUE_TEMPERATURE", 0.9))),
         whisper_model=_env("WHISPER_MODEL", "small.en") or "small.en",
         whisper_model_path=_env("WHISPER_MODEL_PATH"),
         whisper_device=_env("WHISPER_DEVICE", "cpu") or "cpu",

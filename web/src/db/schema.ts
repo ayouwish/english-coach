@@ -23,6 +23,10 @@ export const users = sqliteTable("users", {
   avatarDesc: text("avatar_desc"),
   avatarPrompt: text("avatar_prompt"),
   avatarUpdatedAt: text("avatar_updated_at"),
+  /** 卡通插画自动生成（task-76；默认 0，避免自动花钱） */
+  autoIllustrate: integer("auto_illustrate").notNull().default(0),
+  /** 性别 girl|boy|woman|man|other（task-76；插画提示词用；可空） */
+  gender: text("gender"),
   dailyLimitMinutes: integer("daily_limit_minutes").notNull().default(20),
   allowFreeChat: integer("allow_free_chat").notNull().default(1),
   createdAt: text("created_at").notNull(),

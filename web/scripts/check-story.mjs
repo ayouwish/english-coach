@@ -211,6 +211,7 @@ try {
     /** task-74：concat 调用计数 / 每次 parts 数 + stub 返回的小 WAV */
     const TINY_WAV = Buffer.from("UklGRiQAAABXQVZFZm10IBAAAAABAAEAQB8AAEAfAAABAAgAZGF0YQAAAAA=", "base64");
     let concatCalls = 0;
+    let ttsCalls = 0;
     const concatPartCounts = [];
     /** task-53：插画 stub 行为（ok / 503 / 400 / 502） */
     let illustrateMode = "ok";
@@ -228,6 +229,13 @@ try {
           res.setHeader("content-type", "application/json");
           res.end(JSON.stringify(obj));
         };
+        if (String(req.url).startsWith("/v1/tts")) {
+          ttsCalls += 1;
+          res.statusCode = 200;
+          res.setHeader("content-type", "audio/wav");
+          res.end(TINY_WAV);
+          return;
+        }
         if (String(req.url).startsWith("/v1/audio/concat")) {
           concatCalls += 1;
           const parts = (body.match(/name="parts"/g) ?? []).length;
@@ -489,6 +497,104 @@ try {
           "故事列表卡片有缩略图（has_image 时渲染 story-thumb）",
           storySrc.includes('data-testid="story-thumb"') && /s\.has_image/.test(storySrc),
         );
+      }
+
+      // ── task-76：自动插画开关 + 性别提示词 + 音色 ───────────────────────────
+      {
+        const DB_PATH_T = process.env.DB_PATH ?? path.join(WEB_ROOT, "data/app.db");
+        const readImg = (mid) => {
+          const db = new Database(DB_PATH_T, { readonly: true });
+          const row = db.prepare("SELECT image_path FROM reading_materials WHERE id = ?").get(mid);
+          db.close();
+          return row?.image_path ?? null;
+        };
+        const saveStory = async (title) => {
+          const r = await fetch(`http://127.0.0.1:${port}/api/materials`, {
+            method: "POST",
+            headers: { "content-type": "application/json", cookie: cookie2 },
+            body: JSON.stringify({ title, text: "Today I built a tower. Hua knocked it down.", kind: "story", level: "A2", source: "text" }),
+          });
+          const j = await r.json().catch(() => null);
+          if (j?.id) created.push(j.id);
+          return j?.id ?? null;
+        };
+        const patchSettings = async (patch) =>
+          fetch(`http://127.0.0.1:${port}/api/settings`, {
+            method: "PATCH",
+            headers: { "content-type": "application/json", cookie: cookie2 },
+            body: JSON.stringify(patch),
+          });
+        const waitForImage = async (mid, ms = 6000) => {
+          const t0 = Date.now();
+          while (Date.now() - t0 < ms) {
+            if (readImg(mid)) return true;
+            await new Promise((r) => setTimeout(r, 250));
+          }
+          return Boolean(readImg(mid));
+        };
+
+        // ① 开关默认关：保存故事**不**自动画图（illustrate 调用数不增加）
+        const offBefore = captured.filter((c) => String(c.url).startsWith("/v1/image/illustrate")).length;
+        const offId = await saveStory(`No Auto Illustrate ${Date.now()}`);
+        await new Promise((r) => setTimeout(r, 1200));
+        const offAfter = captured.filter((c) => String(c.url).startsWith("/v1/image/illustrate")).length;
+        check("★ 自动插画默认关：保存后没有任何 illustrate 调用", offAfter === offBefore && readImg(offId) === null, `calls=${offAfter - offBefore} img=${readImg(offId)}`);
+
+        // ② 打开开关 → 保存后服务端自动画一张
+        const setOn = await patchSettings({ auto_illustrate: true });
+        check("打开自动插画开关（PATCH /api/settings 200）", setOn.status === 200, `status=${setOn.status}`);
+        const onId = await saveStory(`Auto Illustrate ${Date.now()}`);
+        const gotImage = await waitForImage(onId, 8000);
+        check("★ 开关打开：保存后自动生成插画（服务端 after()）", gotImage, `image_path=${readImg(onId)}`);
+        await patchSettings({ auto_illustrate: false });
+
+        // ③ 性别进提示词：girl / boy / 未设置
+        const illustrateAndCapture = async (title) => {
+          const mid = await saveStory(title);
+          const r = await fetch(`http://127.0.0.1:${port}/api/story/${mid}/illustrate`, {
+            method: "POST",
+            headers: { "content-type": "application/json", cookie: cookie2 },
+            body: JSON.stringify({ force: false }),
+          });
+          const bodyText = captured[captured.length - 1]?.body ?? "";
+          const m = bodyText.match(/"character_desc":"([^"]*)"/);
+          return { status: r.status, desc: m ? JSON.parse(`"${m[1]}"`) : "" };
+        };
+        await patchSettings({ gender: "girl" });
+        const girlIll = await illustrateAndCapture(`Gender Girl ${Date.now()}`);
+        check('★ 性别 girl → outbound character_desc 含 "a girl"', /a girl/.test(girlIll.desc), girlIll.desc.slice(0, 80));
+        await patchSettings({ gender: "boy" });
+        const boyIll = await illustrateAndCapture(`Gender Boy ${Date.now()}`);
+        check('★ 性别 boy → outbound character_desc 含 "a boy"', /a boy/.test(boyIll.desc), boyIll.desc.slice(0, 80));
+        await patchSettings({ gender: null });
+        const neutralIll = await illustrateAndCapture(`Gender Neutral ${Date.now()}`);
+        check('★ 未设性别 → 中性 "a child"', /a child/.test(neutralIll.desc) && !/a girl|a boy/.test(neutralIll.desc), neutralIll.desc.slice(0, 80));
+
+        // ④ 音色：列表 / 试听 / 保存生效（/api/tts 不带 voice 时回落账号偏好）
+        const voicesRes = await fetch(`http://127.0.0.1:${port}/api/tts/voices`);
+        const voices = await voicesRes.json().catch(() => null);
+        check("★ GET /api/tts/voices 返回可选音色（英文 5 + 中文 4）", voicesRes.status === 200 && (voices?.voices ?? []).length === 9, `count=${(voices?.voices ?? []).length}`);
+        check("音色列表含 Azure 英文/中文（Jenny/Aria/Ana/Guy/Michelle + Xiaoxiao/Xiaoyi/Yunxi/Yunjian）",
+          ["en-US-JennyNeural", "en-US-AriaNeural", "en-US-AnaNeural", "en-US-GuyNeural", "en-US-MichelleNeural", "zh-CN-XiaoxiaoNeural", "zh-CN-XiaoyiNeural", "zh-CN-YunxiNeural", "zh-CN-YunjianNeural"].every((v) => (voices?.voices ?? []).some((x) => x.id === v)));
+        const previewRes = await fetch(`http://127.0.0.1:${port}/api/tts?${new URLSearchParams({ text: "Hello there", rate: "normal", format: "wav", voice: "en-US-AriaNeural" }).toString()}`, { headers: { cookie: cookie2 } });
+        check("★ 音色试听 GET /api/tts?voice=… → 200 audio/*", previewRes.status === 200 && (previewRes.headers.get("content-type") ?? "").startsWith("audio/"), `status=${previewRes.status}`);
+        const previewCaptured = captured[captured.length - 1]?.body ?? "";
+        check("★ 试听把 voice 透传给 voice 服务", /en-US-AriaNeural/.test(previewCaptured), (previewCaptured.match(/"voice":"[^"]*"/) ?? ["(未捕获)"])[0]);
+        const saveVoice = await patchSettings({ tts_voice: "zh-CN-YunxiNeural" });
+        const settingsRes = await fetch(`http://127.0.0.1:${port}/api/settings`, { headers: { cookie: cookie2 } });
+        const settingsBody = await settingsRes.json().catch(() => null);
+        check("★ 保存音色后 /api/settings 返回该音色", saveVoice.status === 200 && settingsBody?.prefs?.ttsVoice === "zh-CN-YunxiNeural", String(settingsBody?.prefs?.ttsVoice));
+        const fallbackPreview = await fetch(`http://127.0.0.1:${port}/api/tts?${new URLSearchParams({ text: "你好", rate: "normal", format: "wav" }).toString()}`, { headers: { cookie: cookie2 } });
+        const fallbackCaptured = captured[captured.length - 1]?.body ?? "";
+        check("★ 不带 voice 的 TTS 用账号偏好音色", fallbackPreview.status === 200 && /zh-CN-YunxiNeural/.test(fallbackCaptured), (fallbackCaptured.match(/"voice":"[^"]*"/) ?? ["(未捕获)"])[0]);
+        await patchSettings({ tts_voice: null });
+
+        // ⑤ 设置页 SSR：开关/性别/音色/试听都在
+        const settingsHtml = await (await fetch(`http://127.0.0.1:${port}/settings`, { headers: { cookie: cookie2 } })).text();
+        check("★ 设置页含插画开关（auto-illustrate-toggle）", settingsHtml.includes('data-testid="auto-illustrate-toggle"'));
+        check("★ 设置页含性别选择（gender-select）", settingsHtml.includes('data-testid="gender-select"'));
+        check("★ 设置页含音色下拉 + 试听（tts-voice-select / tts-voice-preview）", settingsHtml.includes('data-testid="tts-voice-select"') && settingsHtml.includes('data-testid="tts-voice-preview"'));
+        check("设置页含费用说明（每张约 ¥0.1）", /每张约\s*¥?0\.1|每张约/.test(settingsHtml));
       }
 
       // ── task-74 ①：故事整段朗读回放（status/audio、拼接、单条直用、401/404）────

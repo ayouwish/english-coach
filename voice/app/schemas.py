@@ -83,6 +83,7 @@ class FeedbackRequest(_Loose):
 
 class DialogueScenario(_Loose):
     id: str = ""
+    variation: DialogueVariation | None = None
     title: str = ""
     title_zh: str = ""
     setting_zh: str = ""
@@ -95,6 +96,16 @@ class DialogueScenario(_Loose):
 class DialogueHistoryItem(_Loose):
     role: str = "user"
     text: str = ""
+
+
+class DialogueVariation(_Loose):
+    """task-78：场景变体（web 随机选一份），用于开场白/人设/地点/细节/目标。"""
+
+    persona: str = ""
+    place: str = ""
+    detail: str = ""
+    goal: str = ""
+    opening_line: str = ""
 
 
 class DialogueRequest(_Loose):

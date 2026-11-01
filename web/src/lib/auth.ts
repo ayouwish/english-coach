@@ -36,6 +36,10 @@ export interface SessionUser {
   /** 虚拟形象图片可直接用的 URL（预置图 = 静态路径；上传图 = /api/avatar/image） */
   avatarImageUrl: string | null;
   avatarStyle: string | null;
+  /** 卡通插画自动生成（task-76） */
+  autoIllustrate: boolean;
+  /** 性别（task-76；girl|boy|woman|man|other，null=未设置） */
+  gender: string | null;
   dailyLimitMinutes: number;
   allowFreeChat: boolean;
   nativeLanguage: string;
@@ -59,6 +63,8 @@ function toSessionUser(row: typeof users.$inferSelect): SessionUser {
         : "/api/avatar/image"
       : null,
     avatarStyle: row.avatarStyle ?? null,
+    autoIllustrate: row.autoIllustrate === 1,
+    gender: row.gender ?? null,
     dailyLimitMinutes: row.dailyLimitMinutes,
     allowFreeChat: row.allowFreeChat === 1,
     nativeLanguage: row.nativeLanguage,

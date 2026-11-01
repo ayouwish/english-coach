@@ -39,6 +39,9 @@ export interface VoiceCapabilities {
   ocr?: boolean;
   /** 服务端能否解码 HEIC（task-37）：true 时相册里的 HEIC 可以直接上传 */
   heic?: boolean;
+  /** 图像生成（插画）是否已配置（task-76：设置页展示用） */
+  image?: boolean;
+  image_provider?: string | null;
   prosody: boolean;
   intonation_curve: boolean;
   nbest_phonemes: boolean;

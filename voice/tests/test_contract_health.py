@@ -10,6 +10,8 @@ CAPABILITY_KEYS = {
     "ocr", "ocr_provider", "heic", "image", "image_provider", "image_avatar", "avatar_presets",
     # task-73：部署自查标记
     "audio_concat", "chat_done_turn_index", "features",
+    # task-75：ASR provider 矩阵
+    "asr_providers", "asr_effective",
 }
 PROVIDER_KEYS = {"asr", "pa", "tts", "llm"}
 
@@ -39,6 +41,11 @@ def test_health_shape_and_defaults(client):
     features = body["capabilities"]["features"]
     assert isinstance(features, list)
     assert "audio/concat" in features
+    assert body["capabilities"]["asr_providers"] == ["azure", "zhipu"]
+    effective = body["capabilities"]["asr_effective"]
+    assert set(effective) == {"zh", "en"}
+    assert effective["en"] in ("azure", "local", "mock")
+    assert effective["zh"] in ("azure", "zhipu", "local", "mock")
     for expected in ("asr", "pronounce", "feedback", "dialogue", "tts", "warmup", "ocr", "story/rewrite", "image/illustrate"):
         assert expected in features, expected
 

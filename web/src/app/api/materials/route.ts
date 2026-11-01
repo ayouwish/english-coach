@@ -1,4 +1,4 @@
-import { NextRequest } from "next/server";
+import { NextRequest, after } from "next/server";
 import { ensureBootstrap } from "@/db";
 import { HttpError, requireUser } from "@/lib/auth";
 import { jsonOk, route } from "@/lib/http";
@@ -44,6 +44,19 @@ export const POST = route(async (req: NextRequest) => {
       sourceZh: (body as { source_zh?: unknown }).source_zh,
       level: (body as { level?: unknown }).level,
     });
+    // task-76 ①：**服务端**尊重「卡通插画自动生成」开关（默认关）。
+    // 开启时才在响应之后异步画一张（不阻塞保存）；关闭则用户可在故事页手动生成。
+    const isStory = (material as { kind?: string }).kind === "story";
+    if (isStory && user.autoIllustrate) {
+      after(async () => {
+        try {
+          const { generateStoryIllustration } = await import("@/lib/illustrate-story");
+          await generateStoryIllustration(user, material.id, { force: false });
+        } catch (err) {
+          console.warn(`[auto-illustrate] 保存后自动画图失败（${material.id}）：${err instanceof Error ? err.message : err}`);
+        }
+      });
+    }
     return jsonOk(
       {
         ...material,

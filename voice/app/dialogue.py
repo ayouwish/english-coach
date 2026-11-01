@@ -17,6 +17,8 @@ import logging
 import re
 from typing import Any
 
+from .config import get_settings
+
 logger = logging.getLogger("voice.dialogue")
 
 CORRECTION_TYPES = ("grammar", "vocabulary", "politeness", "pronunciation", "none")
@@ -144,7 +146,11 @@ CONTINUITY (most important):
 - Always react to the learner's LAST sentence with something specific - reuse a word or detail they said.
 - When a specific reply is possible, generic fillers are FORBIDDEN as the whole reply:
   "Tell me more", "That sounds good", "Nice!", "OK", "I see", "Really?".
-- Never repeat a question listed under ALREADY_ASKED. Ask something new or move the scenario forward.
+- Never repeat a question you already asked in this conversation; use ALREADY_ASKED and the history to avoid
+  duplicates. Ask exactly ONE question per turn.
+- If ALREADY_ASKED (or the history) already contains 3 or more questions, CHANGE THE ANGLE instead of drilling
+  the same topic. Useful angles: (a) how / why / when instead of what, (b) feelings or preferences,
+  (c) move forward to the next step of the scenario goal.
 
 CORRECTION_LEVEL (exactly one of these behaviours):
 - gentle: correct AT MOST ONE thing, and only if it blocks understanding or is a basic mistake
@@ -219,11 +225,41 @@ def _last_user_text(history: list[dict]) -> str:
     return ""
 
 
+def _clean_variation_value(value) -> str:
+    text = " ".join(str(value or "").replace("\n", " ").replace("\r", " ").split())
+    return text[:200]
+
+
+def variation_details(scenario: dict) -> dict[str, str]:
+    """task-78：场景变体（web 每次随机选一份传进来），空字段会被丢掉。"""
+    variation = scenario.get("variation") if isinstance(scenario, dict) else None
+    if not isinstance(variation, dict):
+        return {}
+    details: dict[str, str] = {}
+    for key in ("persona", "place", "detail", "goal"):
+        value = _clean_variation_value(variation.get(key))
+        if value:
+            details[key] = value
+    return details
+
+
+def scenario_opening_line(scenario: dict) -> str:
+    """开场白优先用 variation.opening_line，否则用 scenario.opening_line。"""
+    if isinstance(scenario, dict):
+        variation = scenario.get("variation")
+        if isinstance(variation, dict):
+            custom = _clean_variation_value(variation.get("opening_line"))
+            if custom:
+                return custom
+        return _clean_variation_value(scenario.get("opening_line"))
+    return ""
+
+
 def _asked_questions(payload: dict, limit: int = 6) -> list[str]:
     """history 里已经问过的问题（含开场白），让模型不要重复。"""
     scenario = payload.get("scenario") or {}
     questions: list[str] = []
-    opening = str(scenario.get("opening_line") or "").strip()
+    opening = scenario_opening_line(scenario)
     if opening:
         questions.append(opening)
     for item in payload.get("history") or []:
@@ -416,19 +452,31 @@ def build_dialogue_user_prompt(payload: dict) -> str:
     history = trim_history(payload.get("history"))
     turn_index = int(payload.get("turn_index") or 0)
     asked = _asked_questions(payload)
+    details = variation_details(scenario)
 
     lines = [
         f"SCENARIO: {scenario.get('title')} / {scenario.get('title_zh')}",
         f"SETTING_ZH: {scenario.get('setting_zh')}",
         f"ROLE_PROMPT: {scenario.get('role_prompt')}",
-        f"OPENING_LINE: {scenario.get('opening_line')}",
+        f"OPENING_LINE: {scenario_opening_line(scenario)}",
         f"SCENARIO_LEVEL: {scenario.get('level')}  MIN_AGE: {scenario.get('min_age')}",
         f"AGE_BAND: {learner.get('age_band') or 'adult'}   <-- apply this block from the system prompt",
         f"LEARNER_LEVEL: {learner.get('level')}  NATIVE: {learner.get('native_language')}  CHILD_SAFE: {learner.get('child_safe')}",
         f"CORRECTION_LEVEL: {payload.get('correction_level')}",
         f"TURN_INDEX: {turn_index}" + ("   (>= 5: wrap up naturally)" if turn_index >= 5 else ""),
-        "ALREADY_ASKED (never repeat these questions):",
+        f"QUESTIONS_ASKED_SO_FAR: {len(asked)}",
     ]
+    if details:
+        lines.append("SCENARIO VARIATION (bring these details up naturally and stay consistent with them):")
+        for key in ("persona", "place", "detail", "goal"):
+            if key in details:
+                lines.append(f"  {key}: {details[key]}")
+    if len(asked) >= 3:
+        lines.append(
+            "TOPIC_FATIGUE: you have already asked 3+ questions; change the angle now "
+            "(e.g. how/why/when, feelings/preferences, or the next step of the goal) instead of repeating."
+        )
+    lines.append("ALREADY_ASKED (never repeat these questions):")
     lines.extend([f'  - "{question}"' for question in asked] or ["  - (none yet)"])
     lines.append(f"LAST_{len(history)}_TURNS:")
     lines.extend(f"  {item.get('role')}: {item.get('text')}" for item in history)
@@ -451,13 +499,15 @@ def complete_dialogue(llm, payload: dict, timeout_s: float = 30.0) -> dict:
     - 降级模板：provider = "template"，degraded_llm = True（不伪装成大模型）
     """
     user_prompt = build_dialogue_user_prompt(payload)
+    temperature = get_settings().dialogue_temperature
     attempts = (
         (DIALOGUE_SYSTEM_PROMPT, user_prompt),
         (DIALOGUE_SYSTEM_PROMPT + STRICT_JSON_REMINDER, user_prompt + STRICT_JSON_REMINDER),
     )
     if getattr(llm, "available", False):
         for index, (system_prompt, prompt) in enumerate(attempts):
-            outcome = llm.chat_json(system_prompt, prompt, timeout_s=timeout_s)
+            # task-78：只对 dialogue 提高温度（其它 LLM 端点保持默认）
+            outcome = llm.chat_json(system_prompt, prompt, timeout_s=timeout_s, temperature=temperature)
             if outcome.ok and _looks_usable(outcome.data):
                 cleaned = sanitize_dialogue(outcome.data, payload)
                 if cleaned.get("reply"):
@@ -482,6 +532,8 @@ __all__ = [
     "sanitize_dialogue",
     "detect_correction",
     "build_dialogue_user_prompt",
+    "variation_details",
+    "scenario_opening_line",
     "complete_dialogue",
     "trim_history",
     "DIALOGUE_SYSTEM_PROMPT",

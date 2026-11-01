@@ -1120,3 +1120,48 @@ no realistic human faces, no text in image, safe for young children`，调用方
 错误实测：坏第 2 段 → `400 unsupported_audio`「第 2 段音频无法解码：…」；空 parts → `400 bad_request`；
 `gap_ms=5000` → `400 bad_request`；201 段 → `413 payload_too_large`。
 
+## 21. 中文长音频：智谱 GLM-ASR（task-75）
+
+用户反馈「中文较长录音转录失败」「中文页面用国内服务更稳」→ 新增智谱 ASR provider，与 Azure 按语言自动选择。
+
+### 21.1 官方接口（2026-11 核对 docs.bigmodel.cn）
+- 端点：`POST {ZHIPU_ASR_BASE_URL}/audio/transcriptions`（默认 `https://open.bigmodel.cn/api/paas/v4`）
+- 认证：`Authorization: Bearer <ZHIPU_ASR_API_KEY>`（未设时可复用 `IMAGE_API_KEY`，同一个智谱 key）
+- `multipart/form-data`：`file`（.wav/.mp3）+ `model`（文档枚举 **`glm-asr-2512`**，默认值同）
+  可选：`prompt`（长文本上下文，<8000 字）、`hotwords`、`stream=false`（同步）、`request_id`、`user_id`
+- **限制**：文件 ≤25MB、**音频时长 ≤30s** → 超长必须切段（本服务按静音切段）
+- 响应 JSON：`{"id","created","model","text","request_id"}`（`stream=true` 时是 SSE delta）
+- 计费 **¥0.06/分钟**；V0 并发 5（429 时按 1s/2s 退避重试，最多 2 次）
+
+### 21.2 provider 选择矩阵
+| 配置/请求 | 中文（zh/zh-CN） | 英文（en/en-US） |
+|---|---|---|
+| `ASR_PROVIDER=auto`（默认）| 配了智谱 key → **智谱优先**，失败按 mode 链兜底（azure/local → mock；响应 `provider` 如实）+ `warnings:["provider_fallback"]` | 保持 mode 主 provider（hybrid/cloud=azure；local=whisper）|
+| `ASR_PROVIDER=azure` | 强制 Azure | 强制 Azure |
+| `ASR_PROVIDER=zhipu` | 强制智谱（无 key → 非 mock 模式 503，不静默冒充）| 强制智谱 |
+| 请求 `provider=azure|zhipu|auto` | 覆盖本次请求（非法值 → **400 bad_request**）| 同 |
+
+- 显式 `provider=zhipu` 且**无 key**：mock 模式回退 mock 且 `provider:"mock"`（如实，不冒充）；非 mock 模式 **503 `provider_unavailable`**。
+- `/v1/asr` 响应新增（可选）：`warnings`（如 `["segmented"]`、兜底时 `["provider_fallback"]`）；`duration_ms` 原有字段，现在各 provider 都会填。
+- `capabilities.asr_providers: ["azure","zhipu"]`；`capabilities.asr_effective: {"zh": "...", "en": "..."}`（当前生效，便于自查）。
+
+### 21.3 长音频切段策略（不静默截断）
+- 音频 > `ZHIPU_ASR_CHUNK_SECONDS`（默认 **25s**，低于文档 30s 上限留余量）时：
+  1. 计算 20ms 帧 RMS；从目标切点向前找连续 ≥150ms 的静音（RMS 低）作为切点，切在静音中间；
+  2. 找不到静音就**硬切**（保证不超限，绝不丢掉尾部）；
+  3. 每段编码为 16k mono PCM16 WAV 逐段识别；中文段直接拼接、含英文段用空格拼接；
+  4. 返回 `warnings:["segmented"]` + `provider_meta:{"model","segments","chunk_seconds"}`。
+- 实测（假客户端）：120s 中文录音 → 5 段（≤25s/段），拼接顺序正确、`duration_ms≈120000`。
+- 注意：`/v1/asr` 输入总时长上限仍是 `VOICE_MAX_AUDIO_SECONDS`（默认 120s）；更长的录音需要调大该值。
+
+### 21.4 配置（`.env`）
+```
+ASR_PROVIDER=auto                 # azure | zhipu | auto（默认 auto，中文优先智谱）
+ZHIPU_ASR_API_KEY=<key>           # 不填则回退 IMAGE_API_KEY（同一个智谱 key）
+# ZHIPU_ASR_BASE_URL=https://open.bigmodel.cn/api/paas/v4
+# ZHIPU_ASR_MODEL=glm-asr-2512
+# ZHIPU_ASR_TIMEOUT_S=60
+# ZHIPU_ASR_CHUNK_SECONDS=25
+```
+> 自查：`curl -s .../v1/health | grep -A2 asr_effective`（zh 为 `zhipu` 说明中文会走智谱）。
+

@@ -211,17 +211,8 @@ export function StoryClient({
         setSaveError(data?.error?.message ?? `保存失败（HTTP ${res.status}），请重试`);
         return;
       }
-      // 保存后：后台自动画一张插画（keepalive 保证跳转后请求继续完成），再进连读
-      try {
-        void fetch(`/api/story/${encodeURIComponent(data.id)}/illustrate`, {
-          method: "POST",
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify({ force: false }),
-          keepalive: true,
-        });
-      } catch {
-        /* 画插画失败不影响阅读 */
-      }
+      // task-76：自动画图已改为**服务端**按账号开关触发（POST /api/materials 内 after()），
+      // 关闭时可在故事详情手动点「生成插画」。
       window.location.href = `/flow?material=${encodeURIComponent(data.id)}`;
     } catch (err) {
       setSaveError(`保存失败：${(err as Error).message}`);

@@ -31,6 +31,17 @@ function normalize(raw: unknown): AvatarPresets | null {
       id: String(c.id ?? ""),
       label_zh: String(c.label_zh ?? c.id ?? ""),
       desc_en: String(c.desc_en ?? ""),
+      // 性别（task-76）：manifest 有就用，否则按内置角色表推断
+      gender: ((): "girl" | "boy" | "woman" | "man" | "other" => {
+        const g = typeof c.gender === "string" ? c.gender : "";
+        const allowed = ["girl", "boy", "woman", "man", "other"];
+        if (allowed.includes(g)) return g as "girl" | "boy" | "woman" | "man" | "other";
+        const fallback: Record<string, "girl" | "boy" | "woman" | "man" | "other"> = {
+          c1: "girl", c2: "girl", c3: "girl", c4: "girl", c5: "boy", c6: "girl",
+          c7: "boy", c8: "girl", c9: "man", c10: "woman", c11: "man", c12: "woman",
+        };
+        return fallback[String(c.id ?? "")] ?? "other";
+      })(),
       // 分组：优先读 manifest 的 audience；缺省按编号推断（c1–c8 儿童、c9–c12 成人）
       audience:
         c.audience === "adult"
