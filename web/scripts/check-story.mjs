@@ -210,6 +210,8 @@ try {
     const captured = [];
     /** task-74：concat 调用计数 / 每次 parts 数 + stub 返回的小 WAV */
     const TINY_WAV = Buffer.from("UklGRiQAAABXQVZFZm10IBAAAAABAAEAQB8AAEAfAAABAAgAZGF0YQAAAAA=", "base64");
+    /** task-77：ASR 失败模式（验证「录音先落盘、失败可重试」） */
+    let asrMode = "ok";
     let concatCalls = 0;
     const concatPartCounts = [];
     /** task-53：插画 stub 行为（ok / 503 / 400 / 502） */
@@ -299,6 +301,12 @@ try {
               provider: "stub-llm",
             },
           );
+          return;
+        }
+        if (asrMode === "fail") {
+          res.statusCode = 422;
+          res.setHeader("content-type", "application/json");
+          res.end(JSON.stringify({ error: { code: "asr_failed", message: "stub 转录失败（音频太长）" } }));
           return;
         }
         send(200, { text: "今天我很开心", provider: "stub-asr", duration_ms: 800 });
@@ -594,6 +602,77 @@ try {
         check("★ 设置页含音色下拉 + 试听（tts-voice-select / tts-voice-preview）", settingsHtml.includes('data-testid="tts-voice-select"') && settingsHtml.includes('data-testid="tts-voice-preview"'));
         check("设置页含费用说明（每张约 ¥0.1）", /每张约\s*¥?0\.1|每张约/.test(settingsHtml));
       }
+
+      // ── task-77：故事录音先落盘、转录失败可重试、录音列表 ─────────────────
+      {
+        const DB_PATH_R = process.env.DB_PATH ?? path.join(WEB_ROOT, "data/app.db");
+        const TINY_WAV_R = Buffer.from("UklGRiQAAABXQVZFZm10IBAAAAABAAEAQB8AAEAfAAABAAgAZGF0YQAAAAA=", "base64");
+        const recIds = [];
+        const cleanupRec = () => {
+          const db = new Database(DB_PATH_R);
+          for (const id of recIds) {
+            const row = db.prepare("SELECT audio_path FROM story_recordings WHERE id = ?").get(id);
+            if (row?.audio_path) {
+              const abs = path.join(WEB_ROOT, "data", row.audio_path);
+              if (fs.existsSync(abs)) fs.rmSync(abs);
+            }
+            db.prepare("DELETE FROM story_recordings WHERE id = ?").run(id);
+          }
+          db.close();
+        };
+        const uploadRecording = async (cookie, bytes = TINY_WAV_R, mime = "audio/wav") => {
+          const form = new FormData();
+          form.append("audio", new Blob([bytes], { type: mime }), "zh-story.wav");
+          const r = await fetch(`http://127.0.0.1:${port}/api/story/recordings`, { method: "POST", headers: { cookie }, body: form });
+          return { status: r.status, body: await r.json().catch(() => null) };
+        };
+        try {
+          asrMode = "fail";
+          const failed = await uploadRecording(cookie2);
+          console.log(`   ↳ 上传录音（ASR 失败）：HTTP ${failed.status} · ${JSON.stringify(failed.body).slice(0, 160)}`);
+          const recId = failed.body?.id ?? null;
+          if (recId) recIds.push(recId);
+          check("★ 转录失败仍 201（录音不丢）", failed.status === 201 && Boolean(recId), `status=${failed.status}`);
+          check("★ 转录失败 → status=failed + 可读 error", failed.body?.status === "failed" && /录音已保存|重试/.test(failed.body?.error ?? ""), String(failed.body?.error ?? "").slice(0, 70));
+          const dbRec = (() => {
+            const db = new Database(DB_PATH_R, { readonly: true });
+            const row = db.prepare("SELECT audio_path, status FROM story_recordings WHERE id = ?").get(recId);
+            db.close();
+            return row;
+          })();
+          check("★ DB 行在 + 状态 failed", dbRec?.status === "failed", JSON.stringify(dbRec ?? {}));
+          check("★ 原始录音文件已落盘", Boolean(dbRec?.audio_path && fs.existsSync(path.join(WEB_ROOT, "data", dbRec.audio_path))), String(dbRec?.audio_path ?? ""));
+          const audioRes = await fetch(`http://127.0.0.1:${port}/api/story/recordings/${recId}/audio`, { headers: { cookie: cookie2 } });
+          check("★ GET 录音音频 → 200 audio/*", audioRes.status === 200 && (audioRes.headers.get("content-type") ?? "").startsWith("audio/"), `status=${audioRes.status} type=${audioRes.headers.get("content-type")}`);
+
+          asrMode = "ok";
+          const retried = await fetch(`http://127.0.0.1:${port}/api/story/recordings/${recId}/transcribe`, { method: "POST", headers: { "content-type": "application/json", cookie: cookie2 }, body: "{}" });
+          const retriedBody = await retried.json().catch(() => null);
+          check("★ 重试转录 → 200 且 status=transcribed", retried.status === 200 && retriedBody?.status === "transcribed", `status=${retried.status} body=${JSON.stringify(retriedBody).slice(0, 100)}`);
+          check("★ 转录文字回填（不用重录）", (retriedBody?.transcript_zh ?? "").includes("今天我很开心"), String(retriedBody?.transcript_zh ?? "").slice(0, 40));
+
+          const listRes = await fetch(`http://127.0.0.1:${port}/api/story/recordings?limit=20`, { headers: { cookie: cookie2 } });
+          const listBody = await listRes.json().catch(() => null);
+          check("★ GET /api/story/recordings 返回我的录音", listRes.status === 200 && (listBody?.items ?? []).some((x) => x.id === recId), `count=${(listBody?.items ?? []).length}`);
+          const storyHtml = await (await fetch(`http://127.0.0.1:${port}/story`, { headers: { cookie: cookie2 } })).text();
+          check("★ 故事页含「🎙️ 我的录音」区块（SSR）", storyHtml.includes('data-testid="story-recordings"') && /我的录音/.test(storyHtml));
+          check("★ 故事页含录音条目 + 播放器", storyHtml.includes('data-testid="story-recording-item"') && storyHtml.includes('data-testid="story-recording-audio"'));
+          check("故事页含「重试转录」按钮（失败条目渲染）", fs.readFileSync(path.join(WEB_ROOT, "src/components/StoryRecordingsSection.tsx"), "utf8").includes("重试转录"));
+
+          check("未登录上传录音 → 401", (await fetch(`http://127.0.0.1:${port}/api/story/recordings`, { method: "POST", body: new FormData() })).status === 401);
+          const otherRec = await fetch(`http://127.0.0.1:${port}/api/story/recordings/${recId}/transcribe`, { method: "POST", headers: { "content-type": "application/json", cookie: dad }, body: "{}" });
+          check("★ 别人的录音 → 404（不越权）", otherRec.status === 404, `status=${otherRec.status}`);
+          const bigBytes = Buffer.alloc(26 * 1024 * 1024, 1);
+          const big = await uploadRecording(cookie2, bigBytes, "audio/wav");
+          check("超过 25MB → 413", big.status === 413, `status=${big.status}`);
+          const notAudio = await uploadRecording(cookie2, Buffer.from("this is not audio", "utf8"), "audio/wav");
+          check("非音频内容 → 400（magic bytes 校验）", notAudio.status === 400, `status=${notAudio.status}`);
+        } finally {
+          asrMode = "ok";
+          cleanupRec();
+        }
+      }
+
 
       // ── task-74 ①：故事整段朗读回放（status/audio、拼接、单条直用、401/404）────
       {

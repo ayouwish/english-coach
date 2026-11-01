@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import { useCallback, useEffect, useRef, useState } from "react";
+import { useRouter } from "next/navigation";
 import { Recorder } from "@/components/Recorder";
 import { harderLevel, simplerLevel } from "@/lib/levels";
 import { consecutiveDays, groupStoriesByDay, streakMessage } from "@/lib/story-stats";
@@ -58,6 +59,10 @@ export function StoryClient({
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [asrBusy, setAsrBusy] = useState(false);
+  /** task-77：录音落盘/转录状态 */
+  const [lastRecording, setLastRecording] = useState<{ id: string; status: string } | null>(null);
+  const [retryingId, setRetryingId] = useState<string | null>(null);
+  const router = useRouter();
   const [sentences, setSentences] = useState<StorySentence[] | null>(null);
   const [titleEn, setTitleEn] = useState("");
   const [readability, setReadability] = useState<Readability | null>(null);
@@ -103,30 +108,69 @@ export function StoryClient({
     };
   }, []);
 
-  /** 「🎤 说中文」：录音 → /api/asr?language=zh-CN → 追加到文本框 */
+  /**
+   * 「🎤 说中文」（task-77）：录音**先落盘**到 `/api/story/recordings`，再做中文转录。
+   * 转录失败也不丢录音：提示「录音已保存」+ 可重试转录 + 可播放刚录的那条。
+   */
   async function speakChinese(blob: Blob) {
     setAsrBusy(true);
     setError(null);
     setNotice(null);
+    setLastRecording(null);
     try {
       const form = new FormData();
       form.append("audio", blob, `story-zh.${blob.type.includes("wav") ? "wav" : "webm"}`);
-      form.append("language", "zh-CN");
-      const res = await fetch("/api/asr?language=zh-CN", { method: "POST", body: form });
+      const res = await fetch("/api/story/recordings", { method: "POST", body: form });
       const data = (await res.json().catch(() => null)) as
-        | { text?: string; error?: { message?: string } }
+        | { id?: string; status?: string; transcript_zh?: string | null; error?: string | { message?: string } }
         | null;
-      if (!res.ok || !data?.text) {
-        setError(data?.error?.message ?? `中文识别失败（HTTP ${res.status}）。可以再录一次，或直接打字。`);
+      if (!res.ok || !data?.id) {
+        const msg = typeof data?.error === "string" ? data?.error : data?.error?.message;
+        setError(msg ?? `录音上传失败（HTTP ${res.status}）。可以再录一次，或直接打字。`);
         return;
       }
-      const text = data.text.trim();
-      setTextZh((prev) => (prev.trim() ? `${prev.trimEnd()} ${text}` : text));
-      setNotice("听到啦，已经写进上面的框里了 ✅");
+      setLastRecording({ id: data.id, status: data.status ?? "pending" });
+      const text = (data.transcript_zh ?? "").trim();
+      if (data.status === "transcribed" && text) {
+        setTextZh((prev) => (prev.trim() ? `${prev.trimEnd()} ${text}` : text));
+        setNotice("听到啦，已经写进上面的框里了 ✅");
+      } else {
+        setError("录音已保存，但这次没听清（可以重试转录，或直接打字）。");
+      }
+      router.refresh();
     } catch (err) {
-      setError(`中文识别失败：${(err as Error).message}。可以再录一次，或直接打字。`);
+      setError(`录音上传失败：${(err as Error).message}。可以再录一次，或直接打字。`);
     } finally {
       setAsrBusy(false);
+    }
+  }
+
+  /** 重新转录（不重录） */
+  async function retryTranscribe(id: string) {
+    setRetryingId(id);
+    setError(null);
+    setNotice(null);
+    try {
+      const res = await fetch(`/api/story/recordings/${encodeURIComponent(id)}/transcribe`, { method: "POST" });
+      const data = (await res.json().catch(() => null)) as
+        | { status?: string; transcript_zh?: string | null; error?: string | { message?: string } }
+        | null;
+      if (!res.ok) {
+        setError((typeof data?.error === "string" ? data.error : data?.error?.message) ?? `重试转录失败（HTTP ${res.status}）`);
+        return;
+      }
+      const text = (data?.transcript_zh ?? "").trim();
+      if (data?.status === "transcribed" && text) {
+        setTextZh((prev) => (prev.trim() ? `${prev.trimEnd()} ${text}` : text));
+        setNotice("转录成功，文字已填进上面的框里 ✅");
+      } else {
+        setError((typeof data?.error === "string" ? data.error : data?.error?.message) ?? "还是没听清；录音还在，可以换一个识别服务再试。");
+      }
+      router.refresh();
+    } catch (err) {
+      setError(`重试转录失败：${(err as Error).message}`);
+    } finally {
+      setRetryingId(null);
     }
   }
 
@@ -287,6 +331,29 @@ export function StoryClient({
             <p className="mt-2 text-sm text-[var(--ec-muted)]" data-testid="story-asr-busy">
               正在听懂你的话… ⏳
             </p>
+          ) : null}
+          {lastRecording && lastRecording.status !== "transcribed" ? (
+            <div className="mt-2 rounded-lg bg-[#fff3d6] p-2 text-xs text-[#7a4d00]" data-testid="story-recording-saved">
+              <p>录音已保存，可以重试转录（不用重录），或直接打字。</p>
+              <div className="mt-1 flex flex-wrap items-center gap-2">
+                <audio
+                  controls
+                  preload="metadata"
+                  src={`/api/story/recordings/${encodeURIComponent(lastRecording.id)}/audio`}
+                  data-testid="story-recording-last-audio"
+                  className="h-8 w-56"
+                />
+                <button
+                  type="button"
+                  className="ec-btn ec-btn-ghost !px-2 !py-0.5 text-xs"
+                  data-testid="story-recording-retry-inline"
+                  disabled={retryingId === lastRecording.id}
+                  onClick={() => void retryTranscribe(lastRecording.id)}
+                >
+                  {retryingId === lastRecording.id ? "转录中…" : "🔁 重试转录"}
+                </button>
+              </div>
+            </div>
           ) : null}
         </div>
       </section>

@@ -332,6 +332,26 @@ export const storyRetells = sqliteTable(
 );
 
 /** web 私有扩展表：纠正强度 / 音色 / 语速偏好（不改动契约冻结列）。 */
+/** 故事录音（task-77）：先落盘再转录；失败的录音也保留，可重试。 */
+export const storyRecordings = sqliteTable(
+  "story_recordings",
+  {
+    id: text("id").primaryKey(),
+    userId: text("user_id").notNull(),
+    materialId: text("material_id"),
+    audioPath: text("audio_path").notNull(),
+    mime: text("mime"),
+    durationMs: integer("duration_ms"),
+    sizeBytes: integer("size_bytes"),
+    transcriptZh: text("transcript_zh"),
+    provider: text("provider"),
+    status: text("status").notNull(),
+    error: text("error"),
+    createdAt: text("created_at").notNull(),
+  },
+  (t) => [index("idx_story_recordings_user").on(t.userId, t.createdAt)],
+);
+
 export const userPrefs = sqliteTable("user_prefs", {
   userId: text("user_id").primaryKey(),
   correctionLevel: text("correction_level").notNull().default("gentle"),

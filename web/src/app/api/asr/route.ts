@@ -22,6 +22,8 @@ export async function POST(req: NextRequest) {
     outbound.append("language", language);
     const prompt = form.get("prompt");
     if (typeof prompt === "string" && prompt) outbound.append("prompt", prompt);
+    const provider = (form.get("provider") as string | null) ?? new URL(req.url).searchParams.get("provider");
+    if (provider) outbound.append("provider", provider);
 
     const result = await callAsr(outbound);
     return NextResponse.json({
@@ -29,6 +31,7 @@ export async function POST(req: NextRequest) {
       provider: result.provider,
       duration_ms: result.duration_ms,
       language,
+      provider_requested: (form.get("provider") as string | null) ?? new URL(req.url).searchParams.get("provider"),
     });
   } catch (err) {
     if (err instanceof HttpError) {

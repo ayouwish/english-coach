@@ -6,6 +6,8 @@ import { getCurrentUser } from "@/lib/auth";
 import { CEFR_LEVELS, isCefrLevel } from "@/lib/levels";
 import { levelSuggestion } from "@/lib/story-stats";
 import { StoryClient } from "./StoryClient";
+import { StoryRecordingsSection } from "@/components/StoryRecordingsSection";
+import { listRecordings } from "@/lib/story-recordings";
 
 export const dynamic = "force-dynamic";
 
@@ -18,6 +20,7 @@ export default async function StoryPage() {
   const user = await getCurrentUser();
   if (!user) redirect("/login");
 
+  const recordings = await listRecordings(user.id);
   const defaultLevel = isCefrLevel(user.cefrLevel)
     ? user.cefrLevel
     : user.isChild
@@ -62,12 +65,15 @@ export default async function StoryPage() {
   }
 
   return (
-    <StoryClient
-      viewerId={user.id}
-      isChild={user.isChild}
-      defaultLevel={defaultLevel}
-      levels={[...CEFR_LEVELS]}
-      levelSuggestion={suggestion}
-    />
+    <div className="flex flex-col gap-5">
+      <StoryClient
+        viewerId={user.id}
+        isChild={user.isChild}
+        defaultLevel={defaultLevel}
+        levels={[...CEFR_LEVELS]}
+        levelSuggestion={suggestion}
+      />
+      <StoryRecordingsSection items={recordings} isChild={user.isChild} />
+    </div>
   );
 }
