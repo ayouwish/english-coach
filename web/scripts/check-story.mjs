@@ -684,6 +684,38 @@ try {
       }
 
 
+      // ── task-82：同一故事两次朗读都入库（重读产生新 attempts）─────────────
+      {
+        const mk = await fetch(`http://127.0.0.1:${port}/api/materials`, {
+          method: "POST",
+          headers: { "content-type": "application/json", cookie: cookie2 },
+          body: JSON.stringify({ title: `Two Rounds ${Date.now()}`, text: "Today I built a tower. Hua knocked it down.", kind: "story", level: "A2", source: "text" }),
+        });
+        const mat = await mk.json().catch(() => null);
+        const mid = mat?.id ?? null;
+        if (mid) created.push(mid);
+        const submit = async () => {
+          const form = new FormData();
+          form.append("audio", new Blob([Buffer.from("UklGRiQAAABXQVZFZm10IBAAAAABAAEAQB8AAEAfAAABAAgAZGF0YQAAAAA=", "base64")], { type: "audio/wav" }), "a.wav");
+          form.append("reference_text", "Today I built a tower.");
+          form.append("mode", "scripted");
+          form.append("material_id", mid);
+          const r = await fetch(`http://127.0.0.1:${port}/api/attempts/async`, { method: "POST", headers: { cookie: cookie2 }, body: form });
+          return { status: r.status, body: await r.json().catch(() => null) };
+        };
+        const t1 = await submit();
+        const t2 = await submit();
+        check("重读第 1/2 遍都创建了新的 attempt", Boolean(t1.body?.id) && Boolean(t2.body?.id) && t1.body.id !== t2.body.id, `${t1.body?.id} vs ${t2.body?.id}`);
+        for (let i = 0; i < 20; i++) {
+          const st = await (await fetch(`http://127.0.0.1:${port}/api/attempts/status?ids=${encodeURIComponent(`${t1.body?.id},${t2.body?.id}`)}`, { headers: { cookie: cookie2 } })).json();
+          if ((st?.items ?? []).every((x) => x.status === "done" || x.status === "failed")) break;
+          await new Promise((r) => setTimeout(r, 500));
+        }
+        const detail2 = await (await fetch(`http://127.0.0.1:${port}/story/${mid}`, { headers: { cookie: cookie2 } })).text();
+        check("★ 故事详情显示读过 2 次（两轮都入库）", /读过这个故事 2 次|朗读记录 2 次/.test(detail2), (detail2.match(/读过这个故事\s*\d+\s*次|朗读记录\s*\d+\s*次/) ?? [""])[0]);
+      }
+
+
       // ── task-77：故事录音先落盘、转录失败可重试、录音列表 ─────────────────
       {
         const DB_PATH_R = process.env.DB_PATH ?? path.join(WEB_ROOT, "data/app.db");

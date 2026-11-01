@@ -521,9 +521,29 @@ try {
   }
 
   console.log(`\n共 ${rows.length} 项断言，通过 ${rows.length - failed}，失败 ${failed}`);
+  // ── task-82：汇总页「再读一遍」（源码级：client 渲染，SSR 里没有汇总页）────────
+  {
+    const flowSrc = fs.readFileSync(path.join(WEB_ROOT, "src/app/flow/FlowClient.tsx"), "utf8");
+    check("★ 汇总页有「🔁 再读一遍」主按钮（flow-reread）", flowSrc.includes('data-testid="flow-reread"'));
+    check("★ 故事模式文案「再读这个故事」/语料模式「再读一遍」都有", flowSrc.includes("再读这个故事") && flowSrc.includes("再读一遍"));
+    check("★ 儿童文案「再读一遍～」", flowSrc.includes("再读一遍～"));
+    check("★ 汇总页显示「第 N 遍」", /第 \{round\} 遍/.test(flowSrc));
+    const rereadStart = flowSrc.indexOf("function reread()");
+    const rereadBody = rereadStart >= 0 ? flowSrc.slice(rereadStart, rereadStart + 1800) : "";
+    check("★ 重读逻辑：索引归零 + 清空本轮结果（attemptId=null）", rereadBody.includes("setCurrent(0)") && rereadBody.includes("attemptId: null") && rereadBody.includes("setPhase(\"running\")"));
+    check("★ 重读逻辑：复用同一批句子（runSentences），不重新抽句", rereadBody.includes("runSentences.map") && rereadBody.includes("s.sentenceId"));
+    check("★ 重读不刷新/不跳转（无反 location.reload / href 跳转）", !/location\.reload|window\.location\.href/.test(rereadBody));
+    check("★ 重读后轮次 +1", rereadBody.includes("setRound((r) => r + 1)") || rereadBody.includes("setRound((r) => r + 1)"));
+    const pendingDiscard = /本轮还没评完的 pending 不等待、直接丢弃/.test(flowSrc);
+    check("★ 说明 pending 处理策略（直接丢弃，不混入新一轮）", pendingDiscard);
+    check("★ 从故事进入时新 attempts 仍带 material_id（两轮都入库）", /initialMaterialId[^\n]*material_id|form\.append\("material_id", initialMaterialId\)/.test(flowSrc));
+  }
+
+
 } catch (err) {
   failed += 1;
   console.error("守卫崩溃：", err);
+
 } finally {
   cleanup();
   const ok = failed === 0;

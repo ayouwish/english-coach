@@ -69,6 +69,10 @@ export function FlowClient({
   initialMaterialId?: string | null;
 }) {
   const [phase, setPhase] = useState<Phase>("setup");
+  /** task-82：第几遍（重读同一批句子） */
+  const [round, setRound] = useState(1);
+  /** 本次连读的句子来源（重读时复用同一批，不重新抽句） */
+  const [runSentences, setRunSentences] = useState<{ text: string; sentenceId: string | null; source: "corpus" | "custom" }[]>([]);
   const [mode, setMode] = useState<"corpus" | "materials" | "custom">("corpus");
   const [level, setLevel] = useState(userLevel || "A1");
   const [start, setStart] = useState(0);
@@ -79,6 +83,7 @@ export function FlowClient({
   const [customText, setCustomText] = useState("");
   const [customSentences, setCustomSentences] = useState<string[]>([]);
   const [items, setItems] = useState<FlowItem[]>([]);
+  const itemsRef = useRef<FlowItem[]>([]);
   const [current, setCurrent] = useState(0);
   const [autoNext, setAutoNext] = useState(true);
   const [busy, setBusy] = useState(false);
@@ -175,19 +180,18 @@ export function FlowClient({
       setError(isChild ? "这一页没有找到句子" : "这一页没有可读的句子");
       return;
     }
-    setItems(
-      list.map((t, i) => ({
-        index: i,
-        text: t,
-        sentenceId: null,
-        source,
-        attemptId: null,
-        status: "unsent" as const,
-        error: null,
-        result: null,
-      })),
-    );
-    beginRun();
+    const nextItems = list.map((t, i) => ({
+      index: i,
+      text: t,
+      sentenceId: null,
+      source,
+      attemptId: null,
+      status: "unsent" as const,
+      error: null,
+      result: null,
+    }));
+    setItems(nextItems);
+    beginRun(nextItems.map((it) => ({ text: it.text, sentenceId: it.sentenceId, source: it.source })));
   }
 
   async function startMaterial(id: string) {
@@ -504,19 +508,18 @@ export function FlowClient({
       setError(isChild ? "这里还没有句子，换一个起点吧" : "这个位置没有句子，换个起点或级别试试");
       return;
     }
-    setItems(
-      preview.map((s, i) => ({
-        index: i,
-        text: s.text,
-        sentenceId: s.id,
-        source: "corpus",
-        attemptId: null,
-        status: "unsent",
-        error: null,
-        result: null,
-      })),
-    );
-    beginRun();
+    const nextItems = preview.map((s, i) => ({
+      index: i,
+      text: s.text,
+      sentenceId: s.id,
+      source: "corpus" as const,
+      attemptId: null,
+      status: "unsent" as const,
+      error: null,
+      result: null,
+    }));
+    setItems(nextItems);
+    beginRun(nextItems.map((it) => ({ text: it.text, sentenceId: it.sentenceId, source: it.source })));
   }
 
   function startCustom() {
@@ -526,29 +529,62 @@ export function FlowClient({
       return;
     }
     setCustomSentences(list);
+    const nextItems = list.map((text, i) => ({
+      index: i,
+      text,
+      sentenceId: null,
+      source: "custom" as const,
+      attemptId: null,
+      status: "unsent" as const,
+      error: null,
+      result: null,
+    }));
+    setItems(nextItems);
+    beginRun(nextItems.map((it) => ({ text: it.text, sentenceId: it.sentenceId, source: it.source })));
+  }
+
+  function beginRun(nextSentences?: { text: string; sentenceId: string | null; source: "corpus" | "custom" }[]) {
+    setCurrent(0);
+    setExpanded(null);
+    setError(null);
+    setRound(1);
+    // 记录本次这批句子（重读复用；不重新抽句/切句）
+    if (nextSentences) setRunSentences(nextSentences);
+    setPhase("running");
+  }
+
+  /**
+   * task-82：同一批句子「再读一遍」——不刷新、不跳转，从第一句重来。
+   * 选择：**本轮还没评完的 pending 不等待、直接丢弃**（新一轮只统计自己的新 attempts；
+   * 上一轮的评分结果仍会写进 DB 的历史 attempts，不会混进新一轮的 items）。
+   */
+  function reread() {
+    if (runSentences.length === 0) return;
     setItems(
-      list.map((text, i) => ({
+      runSentences.map((s, i) => ({
         index: i,
-        text,
-        sentenceId: null,
-        source: "custom" as const,
+        text: s.text,
+        sentenceId: s.sentenceId,
+        source: s.source,
         attemptId: null,
         status: "unsent" as const,
         error: null,
         result: null,
       })),
     );
-    beginRun();
-  }
-
-  function beginRun() {
     setCurrent(0);
     setExpanded(null);
     setError(null);
+    setLimitMessage(null);
+    setRound((r) => r + 1);
     setPhase("running");
   }
 
   // 轮询：还有 pending/scoring 时每 1.2s 查一次
+  useEffect(() => {
+    itemsRef.current = items;
+  }, [items]);
+
   const refreshStatuses = useCallback(async () => {
     const ids = items
       .filter((it) => it.attemptId && (it.status === "pending" || it.status === "scoring"))
@@ -1200,7 +1236,10 @@ export function FlowClient({
     return (
       <div className="flex flex-col gap-5">
         <section className="ec-card">
-          <h1 className="text-xl font-extrabold">🎉 {isChild ? "读完啦！" : "连读完成"}</h1>
+          <h1 className="text-xl font-extrabold">
+            🎉 {isChild ? "读完啦！" : "连读完成"}
+            {round > 1 ? <span className="ml-2 text-sm font-normal text-[var(--ec-muted)]">第 {round} 遍</span> : null}
+          </h1>
           <p className="mt-2 text-sm">
             共 {items.length} 句 · 已评分 {doneItems.length} 句
             {items.some((it) => it.status === "failed") ? ` · 失败 ${items.filter((it) => it.status === "failed").length} 句` : ""}
@@ -1250,7 +1289,15 @@ export function FlowClient({
             </div>
           ) : null}
           <div className="mt-4 flex flex-wrap gap-2">
-            <Link className="ec-btn ec-btn-primary" href="/report">
+            <button
+              type="button"
+              data-testid="flow-reread"
+              className="ec-btn ec-btn-primary"
+              onClick={reread}
+            >
+              {isChild ? "🔁 再读一遍～" : initialMaterialId ? "🔁 再读这个故事" : "🔁 再读一遍"}
+            </button>
+            <Link className="ec-btn ec-btn-ghost" href="/report">
               📊 看发音诊断
             </Link>
             <button
