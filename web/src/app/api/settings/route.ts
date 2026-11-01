@@ -5,6 +5,7 @@ import { auditLog, users } from "@/db/schema";
 import { HttpError, requireUser } from "@/lib/auth";
 import { jsonOk, route } from "@/lib/http";
 import { getPrefs, savePrefs, type CorrectionLevel } from "@/lib/prefs";
+import { isStorySentenceCount } from "@/lib/story-sentences";
 import { getDailyUsage } from "@/lib/usage";
 
 export const dynamic = "force-dynamic";
@@ -37,6 +38,8 @@ export const PATCH = route(async (req: NextRequest) => {
     /** task-76 */
     auto_illustrate?: boolean;
     gender?: string | null;
+    /** task-81：故事句子数；null = 恢复角色默认 */
+    story_sentences?: number | null;
   } | null;
   if (!body) throw new HttpError(400, "bad_request", "请求体必须是 JSON");
 
@@ -57,6 +60,15 @@ export const PATCH = route(async (req: NextRequest) => {
   if (body.allow_free_chat !== undefined) userPatch.allowFreeChat = body.allow_free_chat ? 1 : 0;
   // task-76：卡通插画自动生成开关（默认关）+ 性别（影响插画提示词）
   if (body.auto_illustrate !== undefined) userPatch.autoIllustrate = body.auto_illustrate ? 1 : 0;
+  if (body.story_sentences !== undefined) {
+    if (body.story_sentences === null) {
+      userPatch.storySentences = null;
+    } else if (!isStorySentenceCount(body.story_sentences)) {
+      throw new HttpError(400, "bad_request", "故事句子数需在 3–12 之间");
+    } else {
+      userPatch.storySentences = body.story_sentences;
+    }
+  }
   if (body.gender !== undefined) {
     if (body.gender === null || body.gender === "") {
       userPatch.gender = null;

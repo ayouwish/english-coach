@@ -4,6 +4,7 @@ import { HttpError, requireUser } from "@/lib/auth";
 import { buildDiagnosisRaw } from "@/lib/diagnosis";
 import { CEFR_LEVELS, isCefrLevel } from "@/lib/levels";
 import { callStoryRewrite, VoiceError } from "@/lib/voice";
+import { effectiveStorySentences, isStorySentenceCount } from "@/lib/story-sentences";
 
 export const dynamic = "force-dynamic";
 
@@ -32,7 +33,16 @@ export async function POST(req: NextRequest) {
     if (!isCefrLevel(body.level)) {
       throw new HttpError(400, "bad_request", `难度必须是 ${CEFR_LEVELS.join(" / ")} 之一`);
     }
-    const maxSentences = Math.min(Math.max(1, Number(body.max_sentences) || 6), 12);
+    // task-81：句子数 3–12；不传则用账号默认（儿童 5 / 成人 8 / 用户配置）
+    let maxSentences: number;
+    if (body.max_sentences !== undefined && body.max_sentences !== null) {
+      if (!isStorySentenceCount(body.max_sentences)) {
+        throw new HttpError(400, "bad_request", "句子数需在 3–12 之间");
+      }
+      maxSentences = body.max_sentences;
+    } else {
+      maxSentences = effectiveStorySentences(user);
+    }
     // 弱音（task-50 P2）：复用现有发音诊断（不新造一套），默认带上最弱的 1–2 个音
     const useWeak = (body as { use_weak_phonemes?: unknown }).use_weak_phonemes !== false;
     let weak = Array.isArray(body.weak_phonemes) ? body.weak_phonemes.slice(0, 10).map(String) : [];

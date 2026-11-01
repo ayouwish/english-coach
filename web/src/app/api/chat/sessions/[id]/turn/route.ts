@@ -74,6 +74,13 @@ export const POST = route(async (req: NextRequest, ctx: { params: Promise<{ id: 
     .where(eq(chatMessages.chatSessionId, id))
     .orderBy(asc(chatMessages.createdAt));
 
+  // task-79：把本次会话随机抽到的变体一起转发给 voice（历史会话 NULL → 不带）
+  let variation: unknown = null;
+  try {
+    variation = session.variationJson ? JSON.parse(session.variationJson) : null;
+  } catch {
+    variation = null;
+  }
   const turnIndex = history.filter((m) => m.role === "user").length;
   const prefs = await getPrefs(user.id, user.isChild);
   const childSafe = user.isChild || !user.allowFreeChat;
@@ -92,6 +99,7 @@ export const POST = route(async (req: NextRequest, ctx: { params: Promise<{ id: 
         opening_line: scenario.openingLine,
         level: scenario.level,
         min_age: scenario.minAge,
+        ...(variation ? { variation } : {}),
       },
       learner: {
         age_band: user.ageBand,

@@ -11,6 +11,7 @@ import { readChatAudioMeta } from "@/lib/chat-audio";
 import { ttsUrl } from "@/lib/tts-url";
 import { getCurrentUser } from "@/lib/auth";
 import { audienceForUser, scenarioAudience } from "@/lib/chat";
+import { listCustomScenarios, parseVariants } from "@/lib/custom-scenarios";
 import { getCapabilities } from "@/lib/voice";
 import { getPrefs } from "@/lib/prefs";
 import { effectiveTtsRate } from "@/lib/tts-rate";
@@ -42,6 +43,23 @@ export default async function ChatPage() {
     const tags = JSON.parse(r.tags) as string[];
     return scenarioAudience(tags) === wanted && (!user.isChild || r.minAge <= age);
   });
+  const customRows = await listCustomScenarios(user.id);
+  const customScenarios = customRows
+    .filter((c) => c.audience === wanted)
+    .map((c) => {
+      const variants = parseVariants(c.variantsJson);
+      return {
+        id: c.id,
+        title: c.title,
+        title_zh: c.titleZh,
+        setting_zh: c.settingZh,
+        opening_line: variants[0]?.opening_line ?? c.openingLine,
+        level: c.level,
+        min_age: 0,
+        audience: (c.audience === "child" ? "child" : "adult") as "child" | "adult",
+        is_custom: true as const,
+      };
+    });
   const usage = await getDailyUsage(user.id, user.dailyLimitMinutes);
   const caps = await getCapabilities();
 
@@ -97,6 +115,7 @@ export default async function ChatPage() {
         tags: JSON.parse(r.tags) as string[],
       }))}
       hiddenCount={rows.length - visible.length}
+      customScenarios={customScenarios}
       usage={usage}
       ttsRate={speechRate}
       voiceReachable={caps.reachable}

@@ -40,6 +40,8 @@ export interface SessionUser {
   autoIllustrate: boolean;
   /** 性别（task-76；girl|boy|woman|man|other，null=未设置） */
   gender: string | null;
+  /** 故事句子数（task-81；null = 角色默认 5/8） */
+  storySentences: number | null;
   dailyLimitMinutes: number;
   allowFreeChat: boolean;
   nativeLanguage: string;
@@ -65,6 +67,7 @@ function toSessionUser(row: typeof users.$inferSelect): SessionUser {
     avatarStyle: row.avatarStyle ?? null,
     autoIllustrate: row.autoIllustrate === 1,
     gender: row.gender ?? null,
+    storySentences: row.storySentences ?? null,
     dailyLimitMinutes: row.dailyLimitMinutes,
     allowFreeChat: row.allowFreeChat === 1,
     nativeLanguage: row.nativeLanguage,

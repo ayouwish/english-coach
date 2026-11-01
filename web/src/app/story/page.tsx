@@ -8,6 +8,7 @@ import { levelSuggestion } from "@/lib/story-stats";
 import { StoryClient } from "./StoryClient";
 import { StoryRecordingsSection } from "@/components/StoryRecordingsSection";
 import { listRecordings } from "@/lib/story-recordings";
+import { effectiveStorySentences } from "@/lib/story-sentences";
 
 export const dynamic = "force-dynamic";
 
@@ -68,6 +69,7 @@ export default async function StoryPage() {
     <div className="flex flex-col gap-5">
       <StoryClient
         viewerId={user.id}
+        defaultSentences={effectiveStorySentences(user)}
         isChild={user.isChild}
         defaultLevel={defaultLevel}
         levels={[...CEFR_LEVELS]}

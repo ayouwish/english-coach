@@ -16,6 +16,8 @@ interface SettingsUser {
   autoIllustrate: boolean;
   /** task-76：性别（插画提示词用） */
   gender: string | null;
+  /** task-81：故事句子数（null = 角色默认） */
+  storySentences?: number | null;
 }
 
 export function SettingsForm({
@@ -38,6 +40,8 @@ export function SettingsForm({
   const [ttsRate, setTtsRate] = useState(prefs.ttsRate);
   const [autoIllustrate, setAutoIllustrate] = useState(user.autoIllustrate);
   const [gender, setGender] = useState(user.gender ?? "");
+  const roleDefault = user.isChild ? 5 : 8;
+  const [storySentences, setStorySentences] = useState<number | null>(user.storySentences ?? null);
   const [previewBusy, setPreviewBusy] = useState(false);
   const [previewError, setPreviewError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -84,6 +88,7 @@ export function SettingsForm({
         tts_rate: ttsRate,
         auto_illustrate: autoIllustrate,
         gender: gender || null,
+        story_sentences: storySentences,
       };
       if (!user.isChild) {
         payload.daily_limit_minutes = limit;
@@ -192,6 +197,36 @@ export function SettingsForm({
             只用于插画提示词与形象筛选，不会展示给其他人。
           </span>
         </label>
+
+        {/* task-81：故事句子数（账号默认） */}
+        <div className="rounded-xl bg-[#f8f9ff] p-3" data-testid="story-sentences-section">
+          <p className="text-sm font-semibold">📖 故事句子数（默认 {storySentences ?? roleDefault} 句{storySentences === null ? "，角色默认" : ""}）</p>
+          <div className="mt-1 flex flex-wrap gap-2">
+            {Array.from({ length: 10 }, (_, i) => i + 3).map((n) => (
+              <button
+                key={n}
+                type="button"
+                data-testid={`story-sentences-${n}`}
+                aria-pressed={(storySentences ?? roleDefault) === n}
+                onClick={() => setStorySentences(n)}
+                className={`ec-btn !px-2 !py-0.5 text-xs ${(storySentences ?? roleDefault) === n ? "ec-btn-primary" : "ec-btn-ghost"}`}
+              >
+                {n}
+              </button>
+            ))}
+            <button
+              type="button"
+              data-testid="story-sentences-reset"
+              className="ec-btn ec-btn-ghost !px-2 !py-0.5 text-xs"
+              onClick={() => setStorySentences(null)}
+            >
+              恢复默认（{roleDefault}）
+            </button>
+          </div>
+          <p className="mt-1 text-xs text-[var(--ec-muted)]">
+            句子越多故事越长；家长默认 8 句，孩子默认 5 句（可选 3–12）。故事页里临时改只影响那一次。
+          </p>
+        </div>
 
         <label className="flex flex-col gap-1 text-sm font-medium">
           纠正强度（correction_level）

@@ -41,6 +41,7 @@ export default async function SettingsPage() {
         isChild: user.isChild,
         autoIllustrate: user.autoIllustrate,
         gender: user.gender,
+        storySentences: user.storySentences,
       }}
       prefs={prefs}
       usage={usage}

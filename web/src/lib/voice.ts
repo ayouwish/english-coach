@@ -206,7 +206,7 @@ export async function callStoryRewrite(input: {
       body: JSON.stringify({
         text_zh: input.text_zh,
         level: input.level,
-        max_sentences: input.max_sentences ?? 6,
+        max_sentences: input.max_sentences ?? 8,
         weak_phonemes: input.weak_phonemes ?? [],
       }),
     },

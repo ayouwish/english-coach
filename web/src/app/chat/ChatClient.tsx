@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import { useRouter } from "next/navigation";
 import { Recorder } from "@/components/Recorder";
 import type { ChatPron } from "@/lib/chat-pronunciation";
 import { ChatSessionAudio } from "@/components/ChatSessionAudio";
@@ -11,13 +12,14 @@ import type { DialogueCorrection } from "@/lib/types";
 interface ScenarioItem {
   id: string;
   audience?: "child" | "adult";
+  is_custom?: boolean;
   title: string;
   title_zh: string;
   setting_zh: string;
   opening_line: string;
   level: string;
   min_age: number;
-  tags: string[];
+  tags?: string[];
 }
 
 interface Message {
@@ -68,6 +70,7 @@ export function ChatClient({
   isChild,
   age,
   scenarios,
+  customScenarios = [],
   usage: initialUsage,
   voiceReachable,
   ttsRate: initialTtsRate,
@@ -76,6 +79,8 @@ export function ChatClient({
   age: number;
   scenarios: ScenarioItem[];
   hiddenCount: number;
+  /** task-79：当前用户的自定义场景（自定义优先分组） */
+  customScenarios?: ScenarioItem[];
   usage: Usage;
   voiceReachable: boolean;
   /** 服务端算好的有效语速（偏好优先；儿童默认 slow）—— task-21 */
@@ -92,6 +97,20 @@ export function ChatClient({
   const [showChildScenarios, setShowChildScenarios] = useState(false);
   const [extraChildScenarios, setExtraChildScenarios] = useState<ScenarioItem[]>([]);
   const [childScenariosLoading, setChildScenariosLoading] = useState(false);
+  /** task-79：自定义场景表单 */
+  const [showCustomForm, setShowCustomForm] = useState(false);
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [customForm, setCustomForm] = useState({
+    title: "",
+    title_zh: "",
+    setting_zh: "",
+    role_prompt: "",
+    opening_line: "",
+    level: "A2",
+  });
+  const [customBusy, setCustomBusy] = useState(false);
+  const [customError, setCustomError] = useState<string | null>(null);
+  const router = useRouter();
   /** 提示句（task-34）：点了只显示"照着说"+触发录音，**绝不直接发送文本** */
   const [promptLine, setPromptLine] = useState<string | null>(null);
   /** 递增这个数字即可让 Recorder 开录（Recorder 已有 startSignal 机制） */
@@ -329,6 +348,74 @@ export function ChatClient({
     setMessages((prev) => prev.map((m, i) => (i === index && m.role === "user" ? { ...m, pron: null } : m)));
   }
 
+  /** 提交自定义场景（新建/编辑，task-79） */
+  async function submitCustomScenario() {
+    if (!customForm.title.trim() || !customForm.title_zh.trim() || !customForm.setting_zh.trim() || !customForm.role_prompt.trim() || !customForm.opening_line.trim()) {
+      setCustomError("请把标题/场景说明/角色设定/开场白都填上");
+      return;
+    }
+    setCustomBusy(true);
+    setCustomError(null);
+    try {
+      const payload: Record<string, unknown> = {
+        ...customForm,
+        audience: isChild ? "child" : "adult",
+      };
+      const res = await fetch(editingId ? `/api/chat/scenarios/${encodeURIComponent(editingId)}` : "/api/chat/scenarios", {
+        method: editingId ? "PATCH" : "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+      const data = (await res.json().catch(() => null)) as { error?: { message?: string }; ok?: boolean } | null;
+      if (!res.ok) {
+        setCustomError(data?.error?.message ?? `保存失败（HTTP ${res.status}）`);
+        return;
+      }
+      setShowCustomForm(false);
+      setEditingId(null);
+      setCustomForm({ title: "", title_zh: "", setting_zh: "", role_prompt: "", opening_line: "", level: "A2" });
+      router.refresh();
+    } catch (err) {
+      setCustomError(`保存失败：${(err as Error).message}`);
+    } finally {
+      setCustomBusy(false);
+    }
+  }
+
+  /** 删除自定义场景 */
+  async function deleteCustomScenario(id: string) {
+    if (typeof window !== "undefined" && !window.confirm("确定删除这个自定义场景吗？")) return;
+    setCustomBusy(true);
+    setCustomError(null);
+    try {
+      const res = await fetch(`/api/chat/scenarios/${encodeURIComponent(id)}`, { method: "DELETE" });
+      const data = (await res.json().catch(() => null)) as { error?: { message?: string } } | null;
+      if (!res.ok) {
+        setCustomError(data?.error?.message ?? `删除失败（HTTP ${res.status}）`);
+        return;
+      }
+      router.refresh();
+    } catch (err) {
+      setCustomError(`删除失败：${(err as Error).message}`);
+    } finally {
+      setCustomBusy(false);
+    }
+  }
+
+  function startEditCustom(item: ScenarioItem) {
+    setEditingId(item.id);
+    setShowCustomForm(true);
+    setCustomError(null);
+    setCustomForm({
+      title: item.title,
+      title_zh: item.title_zh,
+      setting_zh: item.setting_zh,
+      role_prompt: "",
+      opening_line: item.opening_line,
+      level: item.level,
+    });
+  }
+
   /** 用户主动结束对话（task-68）：调 /end 后进入汇总页（含整段回放）。 */
   async function endSession() {
     if (!sessionId) return;
@@ -526,6 +613,131 @@ export function ChatClient({
       </section>
 
       <section className="ec-card">
+        {/* task-79：自定义场景（自定义优先分组）+ 新建/编辑表单 */}
+        <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+          <h2 className="font-bold">我的自定义场景（{customScenarios.length}）</h2>
+          <button
+            type="button"
+            data-testid="custom-scenario-new"
+            className="ec-btn ec-btn-ghost text-xs"
+            onClick={() => {
+              setEditingId(null);
+              setShowCustomForm((v) => !v);
+              setCustomError(null);
+            }}
+          >
+            ＋ 自定义场景
+          </button>
+        </div>
+        {customError ? (
+          <p className="mb-2 rounded-lg bg-red-50 p-2 text-xs text-red-700" role="alert" data-testid="custom-scenario-error">
+            {customError}
+          </p>
+        ) : null}
+        {customScenarios.length > 0 ? (
+          <div className="mb-3 grid gap-2 sm:grid-cols-2" data-testid="custom-scenario-list">
+            {customScenarios.map((s) => (
+              <div key={s.id} className="rounded-xl border border-[#e6e8f5] bg-white p-3" data-testid="custom-scenario-card">
+                <button type="button" disabled={busy} onClick={() => start(s)} className="block w-full text-left">
+                  <span className="block font-semibold">
+                    {s.title}
+                    <span className="ml-2 text-xs text-[var(--ec-muted)]">{s.title_zh}</span>
+                  </span>
+                  <span className="mt-1 block text-xs text-[var(--ec-muted)]">
+                    {s.level} · {s.setting_zh}
+                  </span>
+                </button>
+                <div className="mt-2 flex gap-2">
+                  <button
+                    type="button"
+                    data-testid="custom-scenario-edit"
+                    className="ec-btn ec-btn-ghost !px-2 !py-0.5 text-xs"
+                    onClick={() => startEditCustom(s)}
+                  >
+                    ✏️ 编辑
+                  </button>
+                  <button
+                    type="button"
+                    data-testid="custom-scenario-delete"
+                    className="ec-btn ec-btn-ghost !px-2 !py-0.5 text-xs"
+                    disabled={customBusy}
+                    onClick={() => void deleteCustomScenario(s.id)}
+                  >
+                    🗑️ 删除
+                  </button>
+                </div>
+              </div>
+            ))}
+          </div>
+        ) : (
+          <p className="mb-3 text-xs text-[var(--ec-muted)]" data-testid="custom-scenario-empty">
+            还没有自定义场景；点「＋ 自定义场景」写一个你自己的。
+          </p>
+        )}
+        {showCustomForm ? (
+          <div className="mb-4 rounded-xl bg-[#f8f9ff] p-3" data-testid="custom-scenario-form">
+            <p className="text-sm font-semibold">{editingId ? "编辑自定义场景" : "新建自定义场景"}</p>
+            <div className="mt-2 grid gap-2 sm:grid-cols-2">
+              <input
+                value={customForm.title}
+                onChange={(e) => setCustomForm((f) => ({ ...f, title: e.target.value }))}
+                placeholder="英文标题（1–40）"
+                data-testid="custom-title"
+                className="rounded-lg border border-[#d9dcf0] px-2 py-1 text-sm"
+              />
+              <input
+                value={customForm.title_zh}
+                onChange={(e) => setCustomForm((f) => ({ ...f, title_zh: e.target.value }))}
+                placeholder="中文标题（1–40）"
+                data-testid="custom-title-zh"
+                className="rounded-lg border border-[#d9dcf0] px-2 py-1 text-sm"
+              />
+            </div>
+            <input
+              value={customForm.setting_zh}
+              onChange={(e) => setCustomForm((f) => ({ ...f, setting_zh: e.target.value }))}
+              placeholder="场景说明（1–200，中文）"
+              data-testid="custom-setting"
+              className="mt-2 w-full rounded-lg border border-[#d9dcf0] px-2 py-1 text-sm"
+            />
+            <textarea
+              value={customForm.role_prompt}
+              onChange={(e) => setCustomForm((f) => ({ ...f, role_prompt: e.target.value }))}
+              placeholder="角色设定（20–1500，英文）：You are a friendly shopkeeper..."
+              rows={3}
+              data-testid="custom-role-prompt"
+              className="mt-2 w-full rounded-lg border border-[#d9dcf0] px-2 py-1 text-sm"
+            />
+            <input
+              value={customForm.opening_line}
+              onChange={(e) => setCustomForm((f) => ({ ...f, opening_line: e.target.value }))}
+              placeholder="开场白（5–200，英文）"
+              data-testid="custom-opening"
+              className="mt-2 w-full rounded-lg border border-[#d9dcf0] px-2 py-1 text-sm"
+            />
+            <div className="mt-2 flex flex-wrap items-center gap-2">
+              <select
+                value={customForm.level}
+                onChange={(e) => setCustomForm((f) => ({ ...f, level: e.target.value }))}
+                data-testid="custom-level"
+                className="rounded-lg border border-[#d9dcf0] px-2 py-1 text-sm"
+              >
+                {["A1", "A2", "B1", "B2", "C1"].map((lv) => (
+                  <option key={lv} value={lv}>
+                    {lv}
+                  </option>
+                ))}
+              </select>
+              <button type="button" className="ec-btn ec-btn-primary text-xs" disabled={customBusy} data-testid="custom-scenario-save" onClick={() => void submitCustomScenario()}>
+                {customBusy ? "保存中…" : "保存场景"}
+              </button>
+              <button type="button" className="ec-btn ec-btn-ghost text-xs" onClick={() => { setShowCustomForm(false); setEditingId(null); }}>
+                取消
+              </button>
+            </div>
+          </div>
+        ) : null}
+
         <h2 className="font-bold">{active ? "换个场景" : isChild ? "选一个场景开始" : "成人场景"}</h2>
         <div className="mt-3 grid gap-2 sm:grid-cols-2">
           {scenarios.map((s) => (

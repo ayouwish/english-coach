@@ -27,6 +27,8 @@ export const users = sqliteTable("users", {
   autoIllustrate: integer("auto_illustrate").notNull().default(0),
   /** 性别 girl|boy|woman|man|other（task-76；插画提示词用；可空） */
   gender: text("gender"),
+  /** 故事句子数（task-81；NULL = 角色默认：儿童 5 / 成人 8） */
+  storySentences: integer("story_sentences"),
   dailyLimitMinutes: integer("daily_limit_minutes").notNull().default(20),
   allowFreeChat: integer("allow_free_chat").notNull().default(1),
   createdAt: text("created_at").notNull(),
@@ -216,6 +218,8 @@ export const chatSessions = sqliteTable(
     endedAt: text("ended_at"),
     turnCount: integer("turn_count").notNull().default(0),
     summaryJson: text("summary_json"),
+    /** task-79：本次会话随机抽到的场景变体（JSON；历史回看用当时那组，NULL=老会话） */
+    variationJson: text("variation_json"),
   },
   (t) => [index("idx_chat_sessions_user").on(t.userId, t.startedAt)],
 );
@@ -333,6 +337,26 @@ export const storyRetells = sqliteTable(
 
 /** web 私有扩展表：纠正强度 / 音色 / 语速偏好（不改动契约冻结列）。 */
 /** 故事录音（task-77）：先落盘再转录；失败的录音也保留，可重试。 */
+/** 用户自定义对话场景（task-79）：仅 owner 可见/可改。 */
+export const userScenarios = sqliteTable(
+  "user_scenarios",
+  {
+    id: text("id").primaryKey(),
+    ownerId: text("owner_id").notNull(),
+    title: text("title").notNull(),
+    titleZh: text("title_zh").notNull(),
+    settingZh: text("setting_zh").notNull(),
+    rolePrompt: text("role_prompt").notNull(),
+    openingLine: text("opening_line").notNull(),
+    level: text("level").notNull().default("A2"),
+    audience: text("audience").notNull().default("adult"),
+    variantsJson: text("variants_json"),
+    createdAt: text("created_at").notNull(),
+    updatedAt: text("updated_at").notNull(),
+  },
+  (t) => [index("idx_user_scenarios_owner").on(t.ownerId)],
+);
+
 export const storyRecordings = sqliteTable(
   "story_recordings",
   {

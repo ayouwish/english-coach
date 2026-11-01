@@ -7,6 +7,7 @@ import { jsonOk, route } from "@/lib/http";
 import { assertWithinDailyLimit } from "@/lib/limits";
 import { ageOf, audienceForUser, isScenarioAllowedFor, scenarioAudience } from "@/lib/chat";
 import { openingZh } from "@/lib/opening-zh";
+import { builtinVariations, getCustomScenario, parseVariants, pickVariation, type ScenarioVariation } from "@/lib/custom-scenarios";
 
 export const dynamic = "force-dynamic";
 
@@ -26,7 +27,55 @@ export const POST = route(async (req: NextRequest) => {
     .from(chatScenarios)
     .where(and(eq(chatScenarios.id, scenarioId), eq(chatScenarios.enabled, 1)))
     .limit(1);
-  if (!scenario) throw new HttpError(404, "not_found", "场景不存在或未启用");
+
+  // task-79：内置场景不存在 → 可能是当前用户的自定义场景（仅 owner，他人 404）
+  if (!scenario) {
+    const custom = await getCustomScenario(user.id, scenarioId);
+    if (!custom) throw new HttpError(404, "not_found", "场景不存在或未启用");
+    if (custom.audience !== audienceForUser(user)) {
+      throw new HttpError(403, "forbidden", user.isChild ? "这是给大人的场景，换一个小朋友的场景吧" : "这是给小朋友的场景，换一个成人场景吧");
+    }
+    const variants = parseVariants(custom.variantsJson);
+    const variation = pickVariation(variants);
+    const opening = variation?.opening_line ?? custom.openingLine;
+    const sessionId = `cs_${crypto.randomUUID().replace(/-/g, "").slice(0, 20)}`;
+    const now = new Date().toISOString();
+    await db.insert(chatSessions).values({
+      id: sessionId,
+      userId: user.id,
+      scenarioId: custom.id,
+      startedAt: now,
+      endedAt: null,
+      turnCount: 0,
+      summaryJson: null,
+      variationJson: variation ? JSON.stringify(variation) : null,
+    });
+    await db.insert(chatMessages).values({
+      id: `cm_${crypto.randomUUID().replace(/-/g, "").slice(0, 20)}`,
+      chatSessionId: sessionId,
+      role: "assistant",
+      text: opening,
+      textZh: null,
+      correctionJson: null,
+      flag: "ok",
+      audioPath: null,
+      createdAt: now,
+    });
+    return jsonOk({
+      session_id: sessionId,
+      is_custom: true,
+      scenario: {
+        id: custom.id,
+        title: custom.title,
+        title_zh: custom.titleZh,
+        setting_zh: custom.settingZh,
+        opening_line: opening,
+        level: custom.level,
+        min_age: 0,
+        variation,
+      },
+    });
+  }
   if (!isScenarioAllowedFor(user, scenario.minAge)) {
     throw new HttpError(
       403,
@@ -43,6 +92,9 @@ export const POST = route(async (req: NextRequest) => {
     );
   }
 
+  // task-79：随机抽一组变体（开场白随之不同）；历史回看用存下来的这组
+  const variation: ScenarioVariation | null = pickVariation(builtinVariations(scenario.id));
+  const opening = variation?.opening_line ?? scenario.openingLine;
   const sessionId = `cs_${crypto.randomUUID().replace(/-/g, "").slice(0, 20)}`;
   const now = new Date().toISOString();
   await db.insert(chatSessions).values({
@@ -53,12 +105,13 @@ export const POST = route(async (req: NextRequest) => {
     endedAt: null,
     turnCount: 0,
     summaryJson: null,
+    variationJson: variation ? JSON.stringify(variation) : null,
   });
   await db.insert(chatMessages).values({
     id: `cm_${crypto.randomUUID().replace(/-/g, "").slice(0, 20)}`,
     chatSessionId: sessionId,
     role: "assistant",
-    text: scenario.openingLine,
+    text: opening,
     textZh: openingZh(scenario.id),
     correctionJson: null,
     flag: "ok",
@@ -74,9 +127,10 @@ export const POST = route(async (req: NextRequest) => {
         title: scenario.title,
         title_zh: scenario.titleZh,
         setting_zh: scenario.settingZh,
-        opening_line: scenario.openingLine,
+        opening_line: opening,
         level: scenario.level,
         min_age: scenario.minAge,
+        variation,
       },
       age: ageOf(user),
       turn_count: 0,

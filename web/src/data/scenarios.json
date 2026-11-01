@@ -14,7 +14,30 @@
         "self"
       ],
       "sort_order": 1,
-      "audience": "child"
+      "audience": "child",
+      "variations": [
+        {
+          "persona": "a friendly kid named Sam",
+          "place": "a sunny park with a slide",
+          "detail": "Sam is carrying a new kite",
+          "goal": "say hello and ask about the kite",
+          "opening_line": "Hi! I'm Sam. Is that a new kite? It looks so cool!"
+        },
+        {
+          "persona": "a shy girl named Lily",
+          "place": "the school playground at recess",
+          "detail": "Lily is looking for someone to play with",
+          "goal": "introduce yourself and invite her to play",
+          "opening_line": "Um, hi… I'm Lily. Do you want to play tag with me?"
+        },
+        {
+          "persona": "a boy named Max",
+          "place": "a swimming pool lobby",
+          "detail": "Max just finished his first swim class",
+          "goal": "say hello and ask how the class went",
+          "opening_line": "Hey! I'm Max. I just had my first swim class — do you swim too?"
+        }
+      ]
     },
     {
       "id": "ordering_food",
@@ -30,7 +53,30 @@
         "shopping"
       ],
       "sort_order": 2,
-      "audience": "child"
+      "audience": "child",
+      "variations": [
+        {
+          "persona": "a cheerful waiter named Ben",
+          "place": "a family restaurant at noon",
+          "detail": "today's special is tomato pasta",
+          "goal": "order a main dish and a drink",
+          "opening_line": "Hello! Today's special is tomato pasta. What would you like?"
+        },
+        {
+          "persona": "a busy waitress named Sara",
+          "place": "a noodle shop near school",
+          "detail": "the noodle shop is famous for beef noodles",
+          "goal": "ask what is popular and order it",
+          "opening_line": "Welcome in! Our beef noodles are the most popular — want to try?"
+        },
+        {
+          "persona": "a kind cook named Mr. Chen",
+          "place": "a small dumpling house",
+          "detail": "the cook is making dumplings by hand",
+          "goal": "ask how the dumplings are made and order some",
+          "opening_line": "Come in! I'm making dumplings right now. Do you want to watch and try some?"
+        }
+      ]
     },
     {
       "id": "school_day",
@@ -45,7 +91,30 @@
         "school"
       ],
       "sort_order": 3,
-      "audience": "child"
+      "audience": "child",
+      "variations": [
+        {
+          "persona": "a classmate named Amy",
+          "place": "the classroom before first class",
+          "detail": "the class has a new science project",
+          "goal": "talk about the project and what you did",
+          "opening_line": "Morning! Did you see the new science project? I'm so excited."
+        },
+        {
+          "persona": "a teacher named Miss Zhou",
+          "place": "the school library",
+          "detail": "the class is picking books for reading time",
+          "goal": "tell the teacher which book you like",
+          "opening_line": "Hello! It's reading time — which book would you like to borrow today?"
+        },
+        {
+          "persona": "a friend named Tom",
+          "place": "the school hallway after lunch",
+          "detail": "Tom lost his pencil case",
+          "goal": "help him look for it and talk about class",
+          "opening_line": "Hey, wait! I can't find my pencil case. Have you seen it anywhere?"
+        }
+      ]
     },
     {
       "id": "animals_zoo",
@@ -60,7 +129,30 @@
         "animals"
       ],
       "sort_order": 4,
-      "audience": "child"
+      "audience": "child",
+      "variations": [
+        {
+          "persona": "a zookeeper named Emma",
+          "place": "the monkey house",
+          "detail": "a baby monkey was born last week",
+          "goal": "ask about the baby monkey and other animals",
+          "opening_line": "Look over there — we just had a baby monkey! Do you want to see it closer?"
+        },
+        {
+          "persona": "a guide named Peter",
+          "place": "the elephant area",
+          "detail": "the elephants are getting a bath",
+          "goal": "ask how elephants take a bath",
+          "opening_line": "Come quick! The elephants are having a bath. Have you ever seen that?"
+        },
+        {
+          "persona": "a classmate named Anna",
+          "place": "the zoo gift shop",
+          "detail": "Anna is choosing a stuffed panda",
+          "goal": "talk about favourite animals and the gift",
+          "opening_line": "I can't decide between the panda and the tiger. Which animal do you like best?"
+        }
+      ]
     },
     {
       "id": "birthday_party",
@@ -75,7 +167,30 @@
         "party"
       ],
       "sort_order": 5,
-      "audience": "child"
+      "audience": "child",
+      "variations": [
+        {
+          "persona": "a friend named Coco",
+          "place": "a colourful living room",
+          "detail": "the birthday cake is almost ready",
+          "goal": "wish her happy birthday and talk about the cake",
+          "opening_line": "You came! The cake is almost ready — wait until you see it!"
+        },
+        {
+          "persona": "a cousin named Jack",
+          "place": "a garden with balloons",
+          "detail": "there is a treasure hunt behind the tree",
+          "goal": "ask about the treasure hunt",
+          "opening_line": "Psst! There's a treasure hunt behind the tree. Want to join my team?"
+        },
+        {
+          "persona": "a neighbour named Mia",
+          "place": "a party room with music",
+          "detail": "the music is too loud to hear names",
+          "goal": "introduce yourself and ask her name",
+          "opening_line": "Hi! It's so loud in here — I'm Mia, what's your name?"
+        }
+      ]
     },
     {
       "id": "ordering_coffee",
@@ -91,7 +206,30 @@
         "shopping"
       ],
       "sort_order": 6,
-      "audience": "child"
+      "audience": "child",
+      "variations": [
+        {
+          "persona": "a barista named Mia",
+          "place": "a small café near the station",
+          "detail": "today's special is iced matcha latte",
+          "goal": "order a drink and a snack",
+          "opening_line": "Hi there! We've got a new iced matcha today — what can I get you?"
+        },
+        {
+          "persona": "a barista named Tom",
+          "place": "a café inside a bookstore",
+          "detail": "they are out of croissants",
+          "goal": "ask what is still available",
+          "opening_line": "Morning! Just so you know, the croissants are gone — what else can I get you?"
+        },
+        {
+          "persona": "a barista named Leo",
+          "place": "a tiny coffee stand by the river",
+          "detail": "the machine is making a loud noise",
+          "goal": "ask if the coffee is OK and order",
+          "opening_line": "Sorry about the noise! The machine is a bit loud today. Coffee to go?"
+        }
+      ]
     },
     {
       "id": "shopping_clothes",
@@ -106,7 +244,30 @@
         "shopping"
       ],
       "sort_order": 7,
-      "audience": "child"
+      "audience": "child",
+      "variations": [
+        {
+          "persona": "a shop assistant named Grace",
+          "place": "a bright clothing store",
+          "detail": "the blue jacket is on sale",
+          "goal": "ask about the jacket and try it on",
+          "opening_line": "Welcome! That blue jacket is half price today — want to try it on?"
+        },
+        {
+          "persona": "a shop assistant named Ken",
+          "place": "a sports shop",
+          "detail": "new running shoes just arrived",
+          "goal": "ask which shoes are good for running",
+          "opening_line": "Hi! Our new running shoes just arrived — are you looking for something light?"
+        },
+        {
+          "persona": "a friend named Lily",
+          "place": "a clothes shop with a big mirror",
+          "detail": "Lily is trying on a red dress",
+          "goal": "give your opinion about the dress",
+          "opening_line": "What do you think of this red dress? Be honest — should I get it?"
+        }
+      ]
     },
     {
       "id": "weather_smalltalk",
@@ -122,7 +283,30 @@
         "social"
       ],
       "sort_order": 8,
-      "audience": "child"
+      "audience": "child",
+      "variations": [
+        {
+          "persona": "a neighbour named Mrs. Brown",
+          "place": "the building entrance",
+          "detail": "it is raining and she has no umbrella",
+          "goal": "offer to share your umbrella and talk about the rain",
+          "opening_line": "Oh dear, it's pouring! I forgot my umbrella — do you have one?"
+        },
+        {
+          "persona": "a classmate named Ben",
+          "place": "the school gate on a windy day",
+          "detail": "the wind blew Ben's hat away",
+          "goal": "talk about the wind and help catch the hat",
+          "opening_line": "Whoa! My hat! The wind is crazy today — can you help me catch it?"
+        },
+        {
+          "persona": "a friend named Sara",
+          "place": "a bus stop on a hot day",
+          "detail": "the bus is late and it is very hot",
+          "goal": "talk about the heat and the late bus",
+          "opening_line": "It's so hot today and the bus is late again. Do you take this bus often?"
+        }
+      ]
     },
     {
       "id": "doctor_visit",
@@ -137,7 +321,30 @@
         "health"
       ],
       "sort_order": 9,
-      "audience": "child"
+      "audience": "child",
+      "variations": [
+        {
+          "persona": "a kind doctor named Dr. Lee",
+          "place": "a quiet clinic room",
+          "detail": "you have a sore throat",
+          "goal": "describe your symptoms",
+          "opening_line": "Hello, come in. What seems to be the problem today?"
+        },
+        {
+          "persona": "a nurse named Nancy",
+          "place": "the hospital waiting room",
+          "detail": "it is your turn for a check-up",
+          "goal": "ask about the check-up",
+          "opening_line": "Hi! You're next for your check-up — are you feeling nervous?"
+        },
+        {
+          "persona": "a doctor named Dr. Green",
+          "place": "a children's clinic",
+          "detail": "the doctor is checking your height",
+          "goal": "talk about growing taller",
+          "opening_line": "Let's see how tall you are now! Have you been eating your vegetables?"
+        }
+      ]
     },
     {
       "id": "hobbies_chat",
@@ -153,7 +360,30 @@
         "social"
       ],
       "sort_order": 10,
-      "audience": "child"
+      "audience": "child",
+      "variations": [
+        {
+          "persona": "a friend named Alex",
+          "place": "the art room after school",
+          "detail": "Alex is painting a dragon",
+          "goal": "ask about painting and your own hobby",
+          "opening_line": "Look at this dragon I'm painting! What do you like to do after school?"
+        },
+        {
+          "persona": "a classmate named Zoe",
+          "place": "the music room",
+          "detail": "Zoe is learning the piano",
+          "goal": "talk about music and practise together",
+          "opening_line": "I'm learning the piano! Do you want to try playing a few notes?"
+        },
+        {
+          "persona": "a neighbour named Sam",
+          "place": "the basketball court",
+          "detail": "Sam is practising free throws",
+          "goal": "talk about basketball and have a go",
+          "opening_line": "Hey! I'm practising free throws — want to try one?"
+        }
+      ]
     },
     {
       "id": "airport_travel",
@@ -168,7 +398,30 @@
         "travel"
       ],
       "sort_order": 11,
-      "audience": "child"
+      "audience": "child",
+      "variations": [
+        {
+          "persona": "an airline clerk named Anna",
+          "place": "the check-in counter",
+          "detail": "your flight is delayed one hour",
+          "goal": "ask about the delay and the gate",
+          "opening_line": "Good morning! Your flight is delayed by an hour. Do you need help with the gate?"
+        },
+        {
+          "persona": "a security officer named Bob",
+          "place": "the security line",
+          "detail": "you need to take out your laptop",
+          "goal": "ask what to put in the tray",
+          "opening_line": "Please take out your laptop — anything else in your bag?"
+        },
+        {
+          "persona": "a traveller named Mia",
+          "place": "the waiting area near gate 12",
+          "detail": "Mia is flying to see her grandma",
+          "goal": "talk about your trip",
+          "opening_line": "Gate 12, right? I'm flying to see my grandma. Where are you going?"
+        }
+      ]
     },
     {
       "id": "adult_coffee_order",
@@ -184,7 +437,30 @@
         "daily",
         "service"
       ],
-      "sort_order": 101
+      "sort_order": 101,
+      "variations": [
+        {
+          "persona": "a friendly barista named Mia",
+          "place": "a café near the office",
+          "detail": "the special is a honey oat latte",
+          "goal": "order a coffee before work",
+          "opening_line": "Morning! Our honey oat latte is new — can I get you one?"
+        },
+        {
+          "persona": "a barista named Tom",
+          "place": "a café inside a bookstore",
+          "detail": "the machine is being repaired",
+          "goal": "ask what they can make without the machine",
+          "opening_line": "Heads up — the machine is being repaired. Filter coffee only today, is that OK?"
+        },
+        {
+          "persona": "a barista named Lena",
+          "place": "a tiny café by the river",
+          "detail": "there is a two-for-one offer",
+          "goal": "order two drinks for colleagues",
+          "opening_line": "Two-for-one until noon! Getting something for your colleagues too?"
+        }
+      ]
     },
     {
       "id": "adult_hotel_booking",
@@ -200,7 +476,30 @@
         "travel",
         "service"
       ],
-      "sort_order": 102
+      "sort_order": 102,
+      "variations": [
+        {
+          "persona": "a receptionist named Anna",
+          "place": "a business hotel lobby",
+          "detail": "there is a late check-out option",
+          "goal": "book a room for a business trip",
+          "opening_line": "Good evening — checking in for business? We still have late check-out available."
+        },
+        {
+          "persona": "a receptionist named David",
+          "place": "a hotel by the airport",
+          "detail": "the airport shuttle is free",
+          "goal": "ask about the shuttle and book",
+          "opening_line": "Welcome! Our airport shuttle is free for guests. How many nights?"
+        },
+        {
+          "persona": "a receptionist named Sofia",
+          "place": "a small boutique hotel",
+          "detail": "breakfast is included on the rooftop",
+          "goal": "ask about breakfast and the room",
+          "opening_line": "Hello! Breakfast is on the rooftop — would you like a quiet room?"
+        }
+      ]
     },
     {
       "id": "adult_work_report",
@@ -216,7 +515,30 @@
         "work",
         "meeting"
       ],
-      "sort_order": 103
+      "sort_order": 103,
+      "variations": [
+        {
+          "persona": "a manager named Rachel",
+          "place": "a weekly team meeting",
+          "detail": "the project is behind schedule",
+          "goal": "give a progress update",
+          "opening_line": "Thanks for joining. The project is a bit behind — can you walk me through where we are?"
+        },
+        {
+          "persona": "a manager named Mark",
+          "place": "a one-on-one in the office",
+          "detail": "the client asked for a change",
+          "goal": "report on the client's request",
+          "opening_line": "Quick one-on-one: the client asked for a change. How should we handle it?"
+        },
+        {
+          "persona": "a team lead named Grace",
+          "place": "a video call with the team",
+          "detail": "the deadline moved to Friday",
+          "goal": "summarise the plan for the new deadline",
+          "opening_line": "Heads up, everyone: the deadline moved to Friday. Could you summarise your plan?"
+        }
+      ]
     },
     {
       "id": "adult_weekend_chat",
@@ -232,7 +554,30 @@
         "smalltalk",
         "work"
       ],
-      "sort_order": 104
+      "sort_order": 104,
+      "variations": [
+        {
+          "persona": "a colleague named James",
+          "place": "the office kitchen",
+          "detail": "James is planning a hiking trip",
+          "goal": "chat about weekend plans",
+          "opening_line": "Finally Friday! I'm thinking of hiking this weekend — any plans?"
+        },
+        {
+          "persona": "a colleague named Nina",
+          "place": "the lift after work",
+          "detail": "Nina is trying a new restaurant",
+          "goal": "talk about food plans for the weekend",
+          "opening_line": "I'm trying that new noodle place on Saturday. Want to come along?"
+        },
+        {
+          "persona": "a colleague named Paul",
+          "place": "the lunch table",
+          "detail": "Paul is going to a concert",
+          "goal": "chat about music and weekend activities",
+          "opening_line": "My friend gave me concert tickets for Sunday — do you like live music?"
+        }
+      ]
     },
     {
       "id": "adult_asking_directions",
@@ -248,7 +593,30 @@
         "travel",
         "daily"
       ],
-      "sort_order": 105
+      "sort_order": 105,
+      "variations": [
+        {
+          "persona": "a passer-by named Lucy",
+          "place": "a busy street corner",
+          "detail": "the metro station is behind the bank",
+          "goal": "ask for directions to the station",
+          "opening_line": "You look lost — looking for the metro? It's just behind the bank."
+        },
+        {
+          "persona": "a shopkeeper named Mr. Wang",
+          "place": "outside a corner shop",
+          "detail": "the museum is two blocks away",
+          "goal": "ask how to get to the museum",
+          "opening_line": "The museum? Two blocks down, then turn left — you can't miss it."
+        },
+        {
+          "persona": "a cyclist named Sam",
+          "place": "a riverside path",
+          "detail": "there is a shortcut through the park",
+          "goal": "ask for the quickest way to the station",
+          "opening_line": "Station? There's a shortcut through the park — want me to point it out?"
+        }
+      ]
     },
     {
       "id": "adult_doctor_visit",
@@ -264,7 +632,30 @@
         "health",
         "service"
       ],
-      "sort_order": 106
+      "sort_order": 106,
+      "variations": [
+        {
+          "persona": "a calm GP named Dr. Evans",
+          "place": "a quiet consulting room",
+          "detail": "you have had a headache for days",
+          "goal": "describe your symptoms",
+          "opening_line": "Hello, take a seat. How long have you had these headaches?"
+        },
+        {
+          "persona": "a nurse named Emma",
+          "place": "the clinic reception",
+          "detail": "your blood test results are ready",
+          "goal": "ask about the results",
+          "opening_line": "Your blood test results came in — would you like to go through them now?"
+        },
+        {
+          "persona": "a doctor named Dr. Patel",
+          "place": "a walk-in clinic",
+          "detail": "you need a prescription refill",
+          "goal": "ask about the prescription",
+          "opening_line": "You're here for a refill? Which medication are you currently taking?"
+        }
+      ]
     },
     {
       "id": "adult_supermarket",
@@ -280,7 +671,30 @@
         "daily",
         "shopping"
       ],
-      "sort_order": 107
+      "sort_order": 107,
+      "variations": [
+        {
+          "persona": "a staff member named Alex",
+          "place": "the fruit section",
+          "detail": "the apples are on special today",
+          "goal": "ask where to find something and about the apples",
+          "opening_line": "Hi! Apples are on special today — are you looking for anything else?"
+        },
+        {
+          "persona": "a cashier named Maria",
+          "place": "the checkout line",
+          "detail": "the card reader is slow today",
+          "goal": "ask about payment methods",
+          "opening_line": "Sorry for the wait, the card reader is slow today. Do you have another payment method?"
+        },
+        {
+          "persona": "a stock clerk named Ben",
+          "place": "the dairy aisle",
+          "detail": "the milk delivery is late",
+          "goal": "ask where the milk is",
+          "opening_line": "Looking for milk? The delivery is late today — have you tried the second shelf?"
+        }
+      ]
     },
     {
       "id": "adult_cooking_class",
@@ -296,7 +710,30 @@
         "hobby",
         "learning"
       ],
-      "sort_order": 108
+      "sort_order": 108,
+      "variations": [
+        {
+          "persona": "a chef named Marco",
+          "place": "a bright cooking studio",
+          "detail": "today's dish is mushroom risotto",
+          "goal": "learn the first steps",
+          "opening_line": "Welcome! Today it's mushroom risotto. Ready to start with the onions?"
+        },
+        {
+          "persona": "a chef named Yuki",
+          "place": "a small kitchen with a big table",
+          "detail": "the class is making dumplings",
+          "goal": "ask how to fold the dumplings",
+          "opening_line": "We're making dumplings today! Would you like to try folding one?"
+        },
+        {
+          "persona": "a chef named Anna",
+          "place": "a bakery workshop",
+          "detail": "the bread needs to rest for an hour",
+          "goal": "ask about the bread and what to do while waiting",
+          "opening_line": "The dough needs an hour to rest — shall we prepare the topping while we wait?"
+        }
+      ]
     }
   ]
 }

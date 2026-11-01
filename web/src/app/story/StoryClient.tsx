@@ -42,12 +42,15 @@ interface Readability {
 export function StoryClient({
   viewerId,
   isChild,
+  defaultSentences = 8,
   defaultLevel,
   levels,
   levelSuggestion = { suggest: null, message: null },
 }: {
   viewerId: string;
   isChild: boolean;
+  /** task-81：账号默认句子数（儿童 5 / 成人 8 / 用户配置） */
+  defaultSentences?: number;
   defaultLevel: string;
   levels: string[];
   /** 难度自适应提示（task-50 P2）：只提示，不强制 */
@@ -55,6 +58,8 @@ export function StoryClient({
 }) {
   const [textZh, setTextZh] = useState("");
   const [level, setLevel] = useState(defaultLevel);
+  /** task-81：本次生成句数（默认账号默认；临时改不影响账号） */
+  const [sentenceCount, setSentenceCount] = useState(defaultSentences);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
@@ -189,7 +194,7 @@ export function StoryClient({
         body: JSON.stringify({
           text_zh: textZh,
           level: nextLevel,
-          max_sentences: 6,
+          max_sentences: sentenceCount,
           use_weak_phonemes: useWeakPhonemes,
         }),
       });
@@ -361,6 +366,25 @@ export function StoryClient({
       {/* 难度 + 生成 */}
       <section className="ec-card">
         <div className="flex flex-wrap items-center gap-3">
+          <span className="text-sm font-semibold">{isChild ? "想听几句？" : "句子数："}</span>
+          <span className="text-xs text-[var(--ec-muted)]" data-testid="story-sentence-count">
+            {sentenceCount} 句
+          </span>
+          <div className="flex flex-wrap gap-1" data-testid="story-sentences-options">
+            {Array.from({ length: 10 }, (_, i) => i + 3).map((n) => (
+              <button
+                key={n}
+                type="button"
+                data-testid={`story-sentences-${n}`}
+                aria-pressed={sentenceCount === n}
+                onClick={() => setSentenceCount(n)}
+                className={`ec-btn !px-2 !py-0.5 text-xs ${sentenceCount === n ? "ec-btn-primary" : "ec-btn-ghost"}`}
+              >
+                {n}
+              </button>
+            ))}
+          </div>
+          <span className="mx-2 h-5 w-px bg-[#e6e8f5]" />
           <span className="text-sm font-semibold">难度：</span>
           {levels.map((l) => (
             <button
@@ -454,7 +478,8 @@ export function StoryClient({
           <h2 className="text-lg font-extrabold">你的故事 · 英文版</h2>
           <p className="mt-1 text-xs text-[var(--ec-muted)]">英文可以直接改；保存后就会变成你以后要读的故事。</p>
           <label className="mt-2 flex flex-col gap-1">
-            <span className="text-xs text-[var(--ec-muted)]">标题</span>
+            <span className="text-xs text-[var(--ec-muted)]">
+              {readability ? `${readability.sentence_count} 句 × 平均 ${readability.avg_words ?? "—"} 词 · ` : ""}标题</span>
             <input
               value={titleEn}
               onChange={(e) => setTitleEn(e.target.value.slice(0, 60))}

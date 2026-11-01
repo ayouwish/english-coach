@@ -603,6 +603,87 @@ try {
         check("设置页含费用说明（每张约 ¥0.1）", /每张约\s*¥?0\.1|每张约/.test(settingsHtml));
       }
 
+      // ── task-81：故事句子数（角色默认 5/8 + 设置可改 + outbound）───────────
+      {
+        const DB_PATH_S = process.env.DB_PATH ?? path.join(WEB_ROOT, "data/app.db");
+        const patchSettings = async (cookie, patch) =>
+          fetch(`http://127.0.0.1:${port}/api/settings`, {
+            method: "PATCH",
+            headers: { "content-type": "application/json", cookie },
+            body: JSON.stringify(patch),
+          });
+        // React SSR 会在动态文本旁插 <!-- -->（如 "5<!-- --> 句"）→ 先去掉注释再断言
+        const storyHtml = async (cookie) => {
+          const res = await fetch(`http://127.0.0.1:${port}/story`, { headers: { cookie } });
+          const text = await res.text();
+          return text.replace(/<!--[\s\S]*?-->/g, "");
+        };
+        const dadCookie2 = await (async () => {
+          const res = await fetch(`http://127.0.0.1:${port}/api/auth/login`, {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({ email: "dad@example.com", password: "Dad12345!" }),
+          });
+          const raw = typeof res.headers.getSetCookie === "function" ? res.headers.getSetCookie() : [];
+          return (raw.find((c) => c.startsWith("ec_session=")) ?? raw[0] ?? "").split(";")[0];
+        })();
+
+        await patchSettings(cookie2, { story_sentences: null });
+        await patchSettings(dadCookie2, { story_sentences: null });
+        const childHtml = await storyHtml(cookie2);
+        const dadHtml = await storyHtml(dadCookie2);
+        check("★ 儿童未设置 → 故事页默认 5 句", /data-testid="story-sentence-count"[^>]*>\s*5 句|5 句/.test(childHtml) && childHtml.includes('data-testid="story-sentence-count"'), (childHtml.match(/(\d+) 句/) ?? [""])[0]);
+        check("★ 家长未设置 → 故事页默认 8 句", /8 句/.test(dadHtml), (dadHtml.match(/(\d+) 句/) ?? [""])[0]);
+
+        const set10 = await patchSettings(cookie2, { story_sentences: 10 });
+        check("设置页改默认句子数 → PATCH 200", set10.status === 200, `status=${set10.status}`);
+        const after10 = await storyHtml(cookie2);
+        check("★ 改成 10 后故事页默认 = 10", /10 句/.test(after10));
+        const reset = await patchSettings(cookie2, { story_sentences: null });
+        const afterReset = await storyHtml(cookie2);
+        check("★ 恢复默认后回到 5 句", reset.status === 200 && /5 句/.test(afterReset));
+        const settingsHtml2 = await (await fetch(`http://127.0.0.1:${port}/settings`, { headers: { cookie: cookie2 } })).text();
+        check("★ 设置页有「📖 故事句子数」区块 + 3–12 选项 + 恢复默认", settingsHtml2.includes('data-testid="story-sentences-section"') && settingsHtml2.includes('data-testid="story-sentences-3"') && settingsHtml2.includes('data-testid="story-sentences-12"') && settingsHtml2.includes('data-testid="story-sentences-reset"'));
+
+        // 前端只给 3–12（2/13 不在选项里）
+        check("★ 故事页句子数选项只有 3–12（无 2/13）", afterReset.includes('data-testid="story-sentences-3"') && afterReset.includes('data-testid="story-sentences-12"') && !afterReset.includes('data-testid="story-sentences-2"') && !afterReset.includes('data-testid="story-sentences-13"'));
+
+        // outbound：12 / 3 / 默认；非法 2/13 → 400
+        const rewrite = async (cookie, maxSentences) => {
+          const body = { text_zh: "今天我和朋友一起搭了一个很高的积木塔。", level: "A2" };
+          if (maxSentences !== undefined) body.max_sentences = maxSentences;
+          const before = captured.length;
+          const r = await fetch(`http://127.0.0.1:${port}/api/story/rewrite`, {
+            method: "POST",
+            headers: { "content-type": "application/json", cookie },
+            body: JSON.stringify(body),
+          });
+          const outbound = captured.slice(before).find((c) => String(c.url).startsWith("/v1/story/rewrite"))?.body ?? "";
+          return { status: r.status, outbound };
+        };
+        const r12 = await rewrite(cookie2, 12);
+        check("★ 选 12 → outbound max_sentences=12", r12.status === 200 && /"max_sentences":12/.test(r12.outbound), (r12.outbound.match(/"max_sentences":\d+/) ?? ["(未捕获)"])[0]);
+        const r3 = await rewrite(cookie2, 3);
+        check("★ 选 3 → outbound max_sentences=3", r3.status === 200 && /"max_sentences":3/.test(r3.outbound), (r3.outbound.match(/"max_sentences":\d+/) ?? ["(未捕获)"])[0]);
+        const bad2 = await rewrite(cookie2, 2);
+        check("★ 直接调接口 2 句 → 400", bad2.status === 400, `status=${bad2.status}`);
+        const bad13 = await rewrite(cookie2, 13);
+        check("★ 直接调接口 13 句 → 400", bad13.status === 400, `status=${bad13.status}`);
+        const def = await rewrite(cookie2);
+        check("★ 不传时用账号默认（儿童 5）", def.status === 200 && /"max_sentences":5/.test(def.outbound), (def.outbound.match(/"max_sentences":\d+/) ?? ["(未捕获)"])[0]);
+
+        const dbCols = (() => {
+          const d = new Database(DB_PATH_S, { readonly: true });
+          const cols = d.prepare("PRAGMA table_info(users)").all().map((c) => c.name);
+          const rows = d.prepare("SELECT id, story_sentences FROM users").all();
+          d.close();
+          return { cols, rows };
+        })();
+        check("迁移 0017：users.story_sentences 存在", dbCols.cols.includes("story_sentences"));
+        check("历史行 story_sentences 为 NULL（不崩）", dbCols.rows.every((r) => r.story_sentences === null || typeof r.story_sentences === "number"), JSON.stringify(dbCols.rows));
+      }
+
+
       // ── task-77：故事录音先落盘、转录失败可重试、录音列表 ─────────────────
       {
         const DB_PATH_R = process.env.DB_PATH ?? path.join(WEB_ROOT, "data/app.db");
