@@ -24,7 +24,7 @@ class StoryRewriteRequest(_Loose):
 
     text_zh: str = ""
     level: str = "A1"  # A1 | A2 | B1 | B2
-    max_sentences: int = 6  # 1..6
+    max_sentences: int = 6  # 3..12（task-80；默认 6）
     weak_phonemes: list[str] = []
     avoid_words: list[str] = []
 

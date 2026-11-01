@@ -87,8 +87,10 @@ def test_story_request_validation(client, llm_env):
     assert client.post("/v1/story/rewrite", json=_story_body(text_zh="")).status_code == 400
     assert client.post("/v1/story/rewrite", json=_story_body(text_zh="中" * 2001)).status_code == 400
     assert client.post("/v1/story/rewrite", json=_story_body(level="C2")).status_code == 400  # C1 合法、C2 非法
-    assert client.post("/v1/story/rewrite", json=_story_body(max_sentences=0)).status_code == 400
-    assert client.post("/v1/story/rewrite", json=_story_body(max_sentences=7)).status_code == 400
+    for invalid in (0, 1, 2, 13):
+        response = client.post("/v1/story/rewrite", json=_story_body(max_sentences=invalid))
+        assert response.status_code == 400, invalid
+        assert "3..12" in response.json()["error"]["message"]
 
 
 def test_story_requires_llm(client, monkeypatch):
@@ -437,3 +439,70 @@ def test_c1_avg_words_threshold_is_16():
     too_long = evaluate_readability([" ".join(["word"] * 17)], level="C1", max_sentences=6, vocab=set())
     assert ok["ok"] is True and ok["avg_words"] == 16.0
     assert too_long["ok"] is False and "avg_words_too_high" in too_long["violations"]
+
+
+# --------------------------------------------------------------------------------------
+# task-80：max_sentences 3–12（家长可写更长故事）
+# --------------------------------------------------------------------------------------
+def _sentences(count: int) -> list[str]:
+    return ["I like my school." for _ in range(count)]
+
+
+@pytest.mark.parametrize("max_sentences", [3, 6, 8, 12])
+def test_story_max_sentences_range_accepted(client, llm_env, monkeypatch, tmp_path, max_sentences):
+    story = {"title_en": "My School", "sentences": _sentences(min(max_sentences, 6))}
+    monkeypatch.setenv("STORY_VOCAB_PATH", _vocab_file(tmp_path, " ".join(story["sentences"])))
+    reset_story_cache()
+    calls = _patch_llm(monkeypatch, [story])
+    response = client.post("/v1/story/rewrite", json=_story_body(max_sentences=max_sentences))
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["readability"]["sentence_count"] == len(story["sentences"])
+    assert body["readability"]["ok"] is True
+    assert f"about {max_sentences} sentences" in calls[0]["user"]
+    if max_sentences >= 8:
+        assert "keep every sentence short and simple" in calls[0]["user"]
+    else:
+        assert "keep every sentence short and simple" not in calls[0]["user"]
+
+
+def test_story_max_sentences_twelve_full_story(client, llm_env, monkeypatch, tmp_path):
+    """max=12 实测：LLM 产出 12 句短句 → 通过，sentence_count=12。"""
+    story = {"title_en": "Twelve Little Things", "sentences": _sentences(12)}
+    monkeypatch.setenv("STORY_VOCAB_PATH", _vocab_file(tmp_path, " ".join(story["sentences"])))
+    reset_story_cache()
+    calls = _patch_llm(monkeypatch, [story])
+    body = client.post("/v1/story/rewrite", json=_story_body(max_sentences=12)).json()
+    assert body["readability"]["sentence_count"] == 12
+    assert body["readability"]["ok"] is True
+    assert len(body["sentences"]) == 12
+    assert body["warnings"] == []
+    assert len(calls) == 1
+
+
+def test_story_too_many_sentences_rewrites_once_then_warns_without_truncating(
+    client, llm_env, monkeypatch, tmp_path
+):
+    """13 句 + max=12：重写一次仍超 → 不截断内容，warnings 标注 too_many_sentences。"""
+    story = {"title_en": "Too Long", "sentences": _sentences(13)}
+    monkeypatch.setenv("STORY_VOCAB_PATH", _vocab_file(tmp_path, " ".join(story["sentences"])))
+    reset_story_cache()
+    calls = _patch_llm(monkeypatch, [story, story])
+    body = client.post("/v1/story/rewrite", json=_story_body(max_sentences=12)).json()
+    assert len(calls) == 2, "超句数应重写一次"
+    assert "too many sentences" in calls[1]["user"].lower(), "重写反馈应说明原因"
+    assert body["readability"]["sentence_count"] == 13
+    assert body["readability"]["ok"] is False
+    assert len(body["sentences"]) == 13, "不允许静默丢弃内容"
+    assert "too_hard" in body["warnings"]
+    assert "too_many_sentences" in body["warnings"], "超句数必须显式告警"
+
+
+def test_story_default_max_sentences_is_six(client, llm_env, monkeypatch, tmp_path):
+    story = {"title_en": "Default", "sentences": _sentences(6)}
+    monkeypatch.setenv("STORY_VOCAB_PATH", _vocab_file(tmp_path, " ".join(story["sentences"])))
+    reset_story_cache()
+    calls = _patch_llm(monkeypatch, [story])
+    response = client.post("/v1/story/rewrite", json={"text_zh": "今天我很开心", "level": "A1"})
+    assert response.status_code == 200
+    assert "about 6 sentences" in calls[0]["user"]

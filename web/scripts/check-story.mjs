@@ -211,7 +211,6 @@ try {
     /** task-74：concat 调用计数 / 每次 parts 数 + stub 返回的小 WAV */
     const TINY_WAV = Buffer.from("UklGRiQAAABXQVZFZm10IBAAAAABAAEAQB8AAEAfAAABAAgAZGF0YQAAAAA=", "base64");
     let concatCalls = 0;
-    let ttsCalls = 0;
     const concatPartCounts = [];
     /** task-53：插画 stub 行为（ok / 503 / 400 / 502） */
     let illustrateMode = "ok";
@@ -230,7 +229,6 @@ try {
           res.end(JSON.stringify(obj));
         };
         if (String(req.url).startsWith("/v1/tts")) {
-          ttsCalls += 1;
           res.statusCode = 200;
           res.setHeader("content-type", "audio/wav");
           res.end(TINY_WAV);

@@ -1,4 +1,4 @@
-# 接口契约 v1.14（FROZEN · 2026-11-02）
+# 接口契约 v1.15（FROZEN · 2026-11-02）
 
 > **本文件是唯一事实来源（single source of truth）。**
 
@@ -21,6 +21,7 @@
 | 2026-10-31 | v1.12 | 虚拟形象改为**预置库 + 选择题**（照片不上云）：新增 `GET /v1/image/avatar/presets`、错误码 `policy_disabled`(403)、配置 `IMAGE_AVATAR_PHOTO=0`；风格白名单硬拒绝写实；`capabilities.avatar_presets`、`image_avatar` 语义调整为"照片生成是否启用" | 向后兼容（照片接口默认关闭）|
 | 2026-10-31 | v1.13 | 新增 §21 `POST /v1/audio/concat`（多段音频按序拼接成一段 WAV，供"整段对话回放"）| 向后兼容 |
 | 2026-11-02 | v1.14 | `/v1/asr` 新增智谱 **GLM-ASR** provider（中文长音频更稳）与 `provider` 选择、`warnings`、`capabilities.asr_providers/asr_effective` | 向后兼容（默认自动选择，英文仍走 Azure）|
+| 2026-11-02 | v1.15 | `/v1/dialogue` 新增 `scenario.variation`（场景变体：人设/地点/细节/目标/开场白）与 `DIALOGUE_TEMPERATURE`（默认 0.9）；prompt 增加"禁止重复提问/换角度"约束 | 向后兼容（不传 variation 行为不变）|
 > `web/` 与 `voice/` 两个模块并行开发，任何一方需要改本契约，必须先通知 Lead 并同步改本文件。
 > 冻结范围：路径、请求字段名、响应字段名、枚举值、错误码。
 > 未冻结范围：各 provider 内部实现、日志格式、额外字段（允许追加 `provider_meta` 等可选字段，不得删除或改名已有字段）。
@@ -343,6 +344,28 @@
 - `done` 为 `true` 表示本场景该收尾了（`turn_index >= 6` 或 LLM 判定）。
 
 ---
+
+### 6.x v1.15 新增：场景变体（variation）与对话温度
+
+用户反馈"同一场景聊几次重复度高"。解决方式：**web 每次开对话随机抽一份场景变体传给 voice**。
+
+`/v1/dialogue` 请求的 `scenario` 对象新增**可选** `variation`：
+```json
+{"scenario": {"id": "coffee_order", "role_prompt": "...", "opening_line": "Hi! What can I get for you?",
+  "variation": {"persona": "a friendly barista named Mia",
+                "place": "a small café near the station",
+                "detail": "today's special is iced matcha latte",
+                "goal": "order a drink and a snack",
+                "opening_line": "Hi there! We've got a new iced matcha today — what can I get you?"}}}
+```
+- **开场白**优先用 `variation.opening_line`，否则 `scenario.opening_line`
+- prompt 注入 persona/place/detail/goal，要求自然带出
+- **禁止重复提问**：`ALREADY_ASKED` + 历史里已问 ≥3 个问题时**换角度**（how/why/when、感受偏好、推进目标）
+- **不传 `variation` 时行为与 v1.14 完全一致**（回归测试锁定）
+
+`DIALOGUE_TEMPERATURE`（默认 **0.9**，范围 0–1.5，仅作用于 `/v1/dialogue`）
+
+真实实测（deepseek）：同场景三份变体 → 三条回复互不相同且各自用上细节。
 
 ## 7. `GET /v1/audio/{audio_id}`
 

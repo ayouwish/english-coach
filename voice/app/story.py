@@ -2,7 +2,7 @@
 
 故事模式：孩子用中文讲一件事（语音或文字），这里**改写**（不是直译）成适合其阅读级别的英文短故事。
 硬约束由服务端校验（不能只靠模型自觉）：
-- 句数 ≤ max_sentences；平均词数 ≤ 8/10/12/14（A1/A2/B1/B2）；最长句 ≤ 平均上限 + 4
+- 句数 ≤ max_sentences（3–12，默认 6）；平均词数 ≤ 8/10/12/14/16（A1/A2/B1/B2/C1）；最长句 ≤ 平均上限 + 4
 - 单一叙事时态（过去 / 现在）
 - 词汇尽量取自 `web/src/data/sentences.json` 的 A1/A2 句库；`unknown_words` > 2 → 重写一次
 - 可选 `weak_phonemes`：尽量把发音弱的音塞进故事，未达成写进 warnings
@@ -41,7 +41,9 @@ LEVEL_GUIDANCE: dict[str, str] = {
 }
 MAX_EXTRA_WORDS = 4
 MAX_UNKNOWN_WORDS = 2
-MAX_SENTENCES = 6
+MIN_SENTENCES = 3
+MAX_SENTENCES = 12
+DEFAULT_SENTENCES = 6
 MAX_TEXT_ZH_CHARS = 2000
 
 STORY_MAX_TOKENS = 2000
@@ -412,12 +414,17 @@ def build_prompts(
     word_list = ", ".join(sorted(vocab)[:120]) if vocab else "simple everyday words"
     guidance = LEVEL_GUIDANCE.get(level, LEVEL_GUIDANCE["A1"])
     parts = [
-        f"Level: {level}. Target: at most {max_sentences} sentences.",
+        f"Level: {level}. Write about {max_sentences} sentences (no more than {max_sentences}).",
         f"Level guidance: {guidance}.",
         f"Average sentence length must be <= {limit} words; every sentence must be <= {limit + MAX_EXTRA_WORDS} words.",
         "Use ONLY ONE tense (past tense if the story already happened; present tense for routines). Do not mix tenses.",
         f"Prefer simple words from this list: {word_list}.",
     ]
+    if max_sentences >= 8:
+        parts.append(
+            f"You are writing about {max_sentences} sentences, so keep every sentence short and simple; "
+            "avoid long sentences and keep the whole story easy to read aloud."
+        )
     if weak_phonemes:
         hints = _phoneme_hints(weak_phonemes, phoneme_examples)
         if hints:
@@ -477,7 +484,7 @@ def rewrite_story(
     text_zh: str,
     *,
     level: str = "A1",
-    max_sentences: int = MAX_SENTENCES,
+    max_sentences: int = DEFAULT_SENTENCES,
     weak_phonemes: list[str] | None = None,
     avoid_words: list[str] | None = None,
     settings: Settings | None = None,
@@ -492,8 +499,10 @@ def rewrite_story(
         raise BadRequest("text_zh is required")
     if len(text_zh) > MAX_TEXT_ZH_CHARS:
         raise BadRequest(f"text_zh too long: {len(text_zh)} > {MAX_TEXT_ZH_CHARS} chars")
-    if not 1 <= int(max_sentences) <= MAX_SENTENCES:
-        raise BadRequest(f"max_sentences must be 1..{MAX_SENTENCES}")
+    if not MIN_SENTENCES <= int(max_sentences) <= MAX_SENTENCES:
+        raise BadRequest(
+            f"max_sentences must be {MIN_SENTENCES}..{MAX_SENTENCES} (default {DEFAULT_SENTENCES})"
+        )
     weak_phonemes = [str(item).strip() for item in (weak_phonemes or []) if str(item).strip()][:5]
     avoid_words = [str(item).strip().lower() for item in (avoid_words or []) if str(item).strip()][:20]
     for word in avoid_words:
@@ -577,6 +586,9 @@ def rewrite_story(
     warnings: list[str] = []
     if not last_eval["ok"]:
         warnings.append("too_hard")
+        # task-80：句数超限时不截断内容（不静默丢内容），用 warning 显式告知前端
+        if "too_many_sentences" in (last_eval.get("violations") or []):
+            warnings.append("too_many_sentences")
     achieved, missing = achieved_weak_phonemes(last_sentences, weak_phonemes)
     if missing:
         warnings.append("weak_phonemes_missing")

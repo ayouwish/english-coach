@@ -129,6 +129,7 @@ routes(/v1/*) ──> ProviderSet{ asr, pa, tts } ──> 调用链: 主 provide
 | `VOICE_MAX_AUDIO_SECONDS` | `120` | 超长音频 → `413 audio_too_long` |
 | `VOICE_GPU` | `false` | 上报到 `capabilities.gpu` |
 | `CHAT_DONE_TURN_INDEX` | `0` | 对话"按轮数强制收尾"阈值；**0 = 不限**（默认），>0 保留轮数收尾能力 |
+| `DIALOGUE_TEMPERATURE` | `0.9` | 对话温度（0–1.5，仅影响 `/v1/dialogue`；越高同场景越有变化）|
 | `CACHE_ENABLED` | `true` | 关掉后 `provider_meta.cache` 全为 `disabled`，不写缓存（v1.0 行为）|
 | `CACHE_MAX_BYTES` | `524288000`（500MB）| 缓存字节上限，超出按 LRU 淘汰 |
 | `CACHE_MAX_ENTRIES` | `2000` | 缓存文件条数上限（audio + f0 合计）|
@@ -1164,4 +1165,16 @@ ZHIPU_ASR_API_KEY=<key>           # 不填则回退 IMAGE_API_KEY（同一个智
 # ZHIPU_ASR_CHUNK_SECONDS=25
 ```
 > 自查：`curl -s .../v1/health | grep -A2 asr_effective`（zh 为 `zhipu` 说明中文会走智谱）。
+
+**场景变体（task-78，降低重复感）**：`scenario.variation`（可选，`_Loose` 兼容）：
+```json
+{"scenario": {"id": "coffee_order", "...": "...",
+  "variation": {"persona": "a friendly barista named Mia", "place": "a small café near the station",
+                "detail": "today's special is iced matcha latte", "goal": "order a drink and a snack",
+                "opening_line": "Hi there! We've got a new iced matcha today — what can I get you?"}}}
+```
+- 有 `variation` 时：`persona/place/detail/goal` 注入 prompt（模型自然带出细节）；**开场白优先用 `variation.opening_line`**，否则用 `scenario.opening_line`；
+- 无 `variation` 时行为与之前一致（回归测试锁定：prompt 不含变体段、开场白仍取 `scenario.opening_line`）；
+- prompt 新增硬约束：**不重复历史里问过的问题**（用 ALREADY_ASKED/history 判断）、每轮**只问一个问题**；历史已问 ≥3 个问题时要求**换角度**（how/why/when、感受/偏好、目标下一步），并输出 `QUESTIONS_ASKED_SO_FAR` / `TOPIC_FATIGUE` 提示；
+- 温度：dialogue 默认 **0.9**（`DIALOGUE_TEMPERATURE`，钳制 0–1.5，只影响 dialogue，其它 LLM 端点不变）。
 
