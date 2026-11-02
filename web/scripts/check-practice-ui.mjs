@@ -125,7 +125,8 @@ function setLatest(attemptId) {
 
 async function practiceHtml() {
   const res = await fetch(`${BASE}/practice`, { headers: { cookie } });
-  return { status: res.status, html: await res.text() };
+  const html = (await res.text()).replace(/<!--[\s\S]*?-->/g, "");
+  return { status: res.status, html };
 }
 
 if (!fs.existsSync(DB_PATH)) {
@@ -209,6 +210,69 @@ section("C. 「只听示范」立即播放（playDemo 源码级断言）");
   check("兜底：原生 <audio controls> 仍在且带说明", src.includes("<audio controls src={demoUrl}") && src.includes("也可以用这个播放器重复听"));
   check("切句/卸载会停播并 revoke（不 revoke 正在播的）", src.includes("stopDemoAudio()") && src.includes("URL.revokeObjectURL(demoUrlRef.current)"));
   check("「跟我读」未被改动（仍是自己 new Audio(url) 播放）", /async function followAlong\([\s\S]{0,1200}?new Audio\(url\)/.test(src));
+}
+
+// ── D. task-84：练习游标（继续上次）+ 单句历史/进步曲线 ──────────────────────
+section("D. task-84 练习游标 + 单句历史");
+{
+  const db84 = new Database(DB_PATH, { readonly: true });
+  const sentenceRow = db84.prepare("SELECT id FROM sentences ORDER BY sort_order LIMIT 1").get();
+  const historySentence = db84.prepare("SELECT sentence_id, COUNT(*) c FROM attempts WHERE sentence_id IS NOT NULL GROUP BY sentence_id ORDER BY c DESC LIMIT 1").get();
+  const cursorTable = db84.prepare("SELECT name FROM sqlite_master WHERE name='practice_cursors'").get();
+  db84.close();
+  const sentenceId = sentenceRow?.id ?? "s-a1-01";
+  const historyId = historySentence?.sentence_id ?? sentenceId;
+
+  check("迁移 0019：practice_cursors 表存在", Boolean(cursorTable?.name));
+
+  const put = async (body) =>
+    fetch(`${BASE}/api/practice/cursor`, { method: "PUT", headers: { "content-type": "application/json", cookie }, body: JSON.stringify(body) });
+  const get = async () => (await (await fetch(`${BASE}/api/practice/cursor?scope=all`, { headers: { cookie } })).json())?.cursor ?? null;
+
+  const putRes = await put({ scope: "all", position: 2, total: 10, sentence_id: sentenceId });
+  const cursor = await get();
+  check("★ PUT 游标 → 200 且 GET 一致", putRes.status === 200 && cursor?.position === 2 && cursor?.sentence_id === sentenceId, JSON.stringify(cursor));
+  const withBanner = await practiceHtml();
+  check("★ 有游标时页面显示「上次练到第 3 句」", withBanner.html.includes('data-testid="practice-cursor-banner"') && /上次练到第\s*3\s*句/.test(withBanner.html), (withBanner.html.match(/上次练到第\s*\d+\s*句/) ?? [""])[0]);
+  check("★ 横幅有「继续上次」+「从头开始」按钮", withBanner.html.includes('data-testid="practice-cursor-continue"') && withBanner.html.includes('data-testid="practice-cursor-restart"'));
+
+  const reset = await put({ scope: "all", position: 0, total: 10, sentence_id: sentenceId });
+  const resetCursor = await get();
+  const noBanner = await practiceHtml();
+  check("★ position=0 → 横幅消失（无游标不打扰）", reset.status === 200 && resetCursor?.position === 0 && !noBanner.html.includes('data-testid="practice-cursor-banner"'));
+
+  const badPut = await put({ scope: "all", position: -2, total: 10 });
+  check("非法 position → 400", badPut.status === 400, `status=${badPut.status}`);
+  const badSentence = await put({ scope: "all", position: 1, total: 10, sentence_id: "s-not-exist" });
+  check("不存在的句子 → 400", badSentence.status === 400, `status=${badSentence.status}`);
+
+  // 单句历史 API（仅本人；儿童零 IPA）
+  const hRes = await fetch(`${BASE}/api/sentences/${encodeURIComponent(historyId)}/attempts?limit=20`, { headers: { cookie } });
+  const hBody = await hRes.json().catch(() => null);
+  check("★ GET /api/sentences/:id/attempts → 200 且含 sentence/attempts", hRes.status === 200 && Boolean(hBody?.sentence?.id) && Array.isArray(hBody?.attempts), `status=${hRes.status}`);
+  check("儿童历史响应零 IPA", !/[θðɹŋæʃɪʌɔɜəʊʒɑɒɛ]/.test(JSON.stringify(hBody ?? {})));
+  const otherLogin = await fetch(`${BASE}/api/auth/login`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ email: "dad@example.com", password: "Dad12345!" }),
+  });
+  const rawOther = otherLogin.ok && typeof otherLogin.headers.getSetCookie === "function" ? otherLogin.headers.getSetCookie() : [];
+  const dadCookie = (rawOther.find((c) => c.startsWith("ec_session=")) ?? rawOther[0] ?? "").split(";")[0];
+  if (dadCookie) {
+    const hOther = await (await fetch(`${BASE}/api/sentences/${encodeURIComponent(historyId)}/attempts?limit=20`, { headers: { cookie: dadCookie } })).json();
+    check("★ 单句历史仅本人（他人看不到儿童记录）", (hOther?.attempts ?? []).length === 0 || (hOther?.attempts ?? []).every((a) => a.id !== hBody?.attempts?.[0]?.id), `other=${(hOther?.attempts ?? []).length}`);
+  }
+
+  // 曲线/历史 UI（源码级：SVG 元素 + ≥2 才画 + 空态）
+  const histSrc = fs.readFileSync(path.join(WEB_ROOT, "src/components/SentenceHistory.tsx"), "utf8");
+  check("★ 进步曲线用 SVG polyline（≥2 次才画）", histSrc.includes("<polyline") && histSrc.includes("scored.length >= 2"));
+  check("★ 首末对比文案存在", histSrc.includes("首末对比"));
+  check("★ 0 次时显示空态「多读几次就能看到曲线」", histSrc.includes("多读几次就能看到曲线"));
+  check("结果区挂载「这一句的历史」组件", fs.readFileSync(path.join(WEB_ROOT, "src/app/practice/PracticeClient.tsx"), "utf8").includes("<SentenceHistory"));
+  check("列表有「📈 历史」入口", fs.readFileSync(path.join(WEB_ROOT, "src/app/practice/PracticeClient.tsx"), "utf8").includes('data-testid="sentence-history-button"'));
+  const practiceSrc = fs.readFileSync(path.join(WEB_ROOT, "src/app/practice/PracticeClient.tsx"), "utf8");
+  check("★ 提交即保存游标（不依赖评分完成）", /saveCursor\(idx\)/.test(practiceSrc) && /setResponse\(data\)/.test(practiceSrc));
+  check("继续上次按 position 定位句子", /sentences\[cursor\.position\]/.test(practiceSrc));
 }
 
 console.log(`\n合计断言失败 ${failed} 项`);

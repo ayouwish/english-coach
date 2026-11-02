@@ -1,7 +1,7 @@
 import { redirect } from "next/navigation";
 import { and, asc, desc, eq } from "drizzle-orm";
 import { ensureBootstrap, getDb } from "@/db";
-import { attempts, sentences } from "@/db/schema";
+import { attempts, practiceCursors, sentences } from "@/db/schema";
 import { NoSpeechNotice, ReadonlyResultSections, type ResultSnapshot } from "@/components/ResultSections";
 import { getCurrentUser } from "@/lib/auth";
 import { wordsFromPhonemeScores } from "@/lib/attempt-view";
@@ -9,7 +9,7 @@ import { childSafeDeep } from "@/lib/child-safe";
 import { parseJsonArray, parseJsonObject } from "@/lib/http";
 import { isSpeechMissing } from "@/lib/speech-detection";
 import { getCapabilities } from "@/lib/voice";
-import { getPrefs } from "@/lib/prefs";
+import { getPrefs, effectiveShowWordIpa } from "@/lib/prefs";
 import { effectiveTtsRate } from "@/lib/tts-rate";
 import { getDailyUsage } from "@/lib/usage";
 import { resolveFocus, isMinimalPairSentence } from "@/lib/focus";
@@ -34,6 +34,15 @@ export default async function PracticePage({
   const db = getDb();
   const rows = await db.select().from(sentences).orderBy(asc(sentences.sortOrder));
   const caps = await getCapabilities();
+  // task-84：练习游标（scope=all，位置是"上次练的那句"在列表里的下标）
+  const [cursorRow] = await db
+    .select()
+    .from(practiceCursors)
+    .where(and(eq(practiceCursors.userId, user.id), eq(practiceCursors.scope, "all")))
+    .limit(1);
+  const initialCursor = cursorRow
+    ? { position: cursorRow.position, total: cursorRow.total, sentence_id: cursorRow.sentenceId, updated_at: cursorRow.updatedAt }
+    : null;
   const usage = await getDailyUsage(user.id, user.dailyLimitMinutes);
 
   // 上一次（非盲测）结果：页面加载即可见 + 整句没听到时直接给提示。
@@ -114,6 +123,8 @@ export default async function PracticePage({
   return (
     <div className="flex flex-col gap-5">
       <PracticeClient
+      showWordIpa={effectiveShowWordIpa(await getPrefs(user.id, user.isChild), user.isChild)}
+      initialCursor={initialCursor}
         sentences={items}
         isChild={user.isChild}
         userLevel={user.cefrLevel}

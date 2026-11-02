@@ -336,6 +336,20 @@ export const storyRetells = sqliteTable(
 );
 
 /** web 私有扩展表：纠正强度 / 音色 / 语速偏好（不改动契约冻结列）。 */
+/** 跟读练习游标（task-84）：按 (user, scope) 记住上次练到第几句。 */
+export const practiceCursors = sqliteTable(
+  "practice_cursors",
+  {
+    userId: text("user_id").notNull(),
+    scope: text("scope").notNull(),
+    position: integer("position").notNull().default(0),
+    total: integer("total").notNull().default(0),
+    sentenceId: text("sentence_id"),
+    updatedAt: text("updated_at").notNull(),
+  },
+  (t) => [primaryKey({ columns: [t.userId, t.scope] })],
+);
+
 /** 故事录音（task-77）：先落盘再转录；失败的录音也保留，可重试。 */
 /** 用户自定义对话场景（task-79）：仅 owner 可见/可改。 */
 export const userScenarios = sqliteTable(
@@ -381,5 +395,7 @@ export const userPrefs = sqliteTable("user_prefs", {
   correctionLevel: text("correction_level").notNull().default("gentle"),
   ttsVoice: text("tts_voice"),
   ttsRate: text("tts_rate").notNull().default("normal"),
+  /** 单词显示音标（task-87；NULL = 角色默认：成人开/儿童关） */
+  showWordIpa: integer("show_word_ipa"),
   updatedAt: text("updated_at").notNull(),
 });

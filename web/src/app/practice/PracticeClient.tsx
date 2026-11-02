@@ -2,7 +2,9 @@
 
 import Link from "next/link";
 import { ScopedDiagnosisCard } from "@/components/ScopedDiagnosisCard";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { SentenceHistory } from "@/components/SentenceHistory";
+import { WordText } from "@/components/WordText";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Recorder } from "@/components/Recorder";
 import { RecordedAudio } from "@/components/RecordedAudio";
 import {
@@ -32,6 +34,10 @@ interface Props {
   ttsRate: "slow" | "normal";
   /** 强化练习模式（来自 /report 的「去练这 N 句」） */
   focus?: { active: boolean; label: string; count: number; matched: boolean; defaultLevel: string };
+  /** task-87：单词是否显示音标（成人默认开/儿童默认关） */
+  showWordIpa?: boolean;
+  /** task-84：上次练到哪（position 是列表下标） */
+  initialCursor?: { position: number; total: number; sentence_id: string | null; updated_at: string } | null;
 }
 
 export function PracticeClient({
@@ -44,6 +50,8 @@ export function PracticeClient({
   initialUsage,
   ttsRate,
   focus,
+  showWordIpa = true,
+  initialCursor = null,
 }: Props) {
   const [level, setLevel] = useState<string>(focus?.defaultLevel ?? (userLevel || "A1"));
   const [selectedId, setSelectedId] = useState<string>(sentences[0]?.id ?? "");
@@ -65,6 +73,12 @@ export function PracticeClient({
   const [followBusy, setFollowBusy] = useState(false);
   const [startSignal, setStartSignal] = useState(0);
   const [attemptsToday, setAttemptsToday] = useState(0);
+  /** task-84：练习游标（上次练到哪）+ 单句历史 */
+  const [cursor, setCursor] = useState<{ position: number; total: number; sentence_id: string | null; updated_at: string } | null>(
+    initialCursor,
+  );
+  const [cursorBannerDismissed, setCursorBannerDismissed] = useState(false);
+  const [historyId, setHistoryId] = useState<string | null>(null);
   const objectUrls = useRef<string[]>([]);
 
   const levels = useMemo(() => [...new Set(sentences.map((s) => s.level))].sort(), [sentences]);
@@ -99,6 +113,50 @@ export function PracticeClient({
     }, 1500);
     return () => clearTimeout(timer);
   }, [level, list]);
+
+  /** task-84：保存练习游标（提交即保存，不依赖评分完成） */
+  const saveCursor = useCallback(
+    (position: number) => {
+      const sentence = sentences[position];
+      void fetch("/api/practice/cursor", {
+        method: "PUT",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ scope: "all", position, total: sentences.length, sentence_id: sentence?.id ?? null }),
+      })
+        .then((r) => (r.ok ? r.json() : null))
+        .then((data) => {
+          if (data?.cursor) setCursor(data.cursor);
+        })
+        .catch(() => {
+          /* 进度保存失败不影响练习 */
+        });
+    },
+    [sentences],
+  );
+
+  /** 继续上次：定位到游标那句（0-based position） */
+  function continueFromCursor() {
+    if (!cursor) return;
+    const target = sentences[cursor.position] ?? sentences[0];
+    if (target) {
+      setLevel(target.level);
+      setSelectedId(target.id);
+      setResponse(null);
+    }
+    setCursorBannerDismissed(true);
+  }
+
+  /** 从头开始：回到第一句并把游标置 0 */
+  function restartFromStart() {
+    const first = sentences[0];
+    if (first) {
+      setLevel(first.level);
+      setSelectedId(first.id);
+      setResponse(null);
+    }
+    setCursorBannerDismissed(true);
+    saveCursor(0);
+  }
 
   /** 停掉当前示范音（重复点击/切换句子/卸载都用它） */
   function stopDemoAudio() {
@@ -176,6 +234,11 @@ export function PracticeClient({
       setUsage(data.usage);
       setAttemptsToday((n) => n + 1);
       setDemoUrl(null);
+      // task-84：练完一句立刻保存游标（不等后台评分）
+      {
+        const idx = sentences.findIndex((x) => x.id === selected.id);
+        if (idx >= 0) saveCursor(idx);
+      }
     } catch (err) {
       setError((err as Error).message);
     } finally {
@@ -307,6 +370,19 @@ export function PracticeClient({
 
   return (
     <div className="flex flex-col gap-5">
+      {cursor && cursor.position > 0 && !cursorBannerDismissed ? (
+        <div className="mb-3 flex flex-wrap items-center gap-2 rounded-xl bg-[#eef4ff] p-3 text-sm" data-testid="practice-cursor-banner">
+          <span className="font-semibold">
+            {isChild ? "接着上次的继续？" : "继续上次练习"}：上次练到第 {cursor.position + 1} 句
+          </span>
+          <button type="button" className="ec-btn ec-btn-primary !px-2 !py-0.5 text-xs" data-testid="practice-cursor-continue" onClick={continueFromCursor}>
+            ▶ {isChild ? "接着上次" : "继续上次"}
+          </button>
+          <button type="button" className="ec-btn ec-btn-ghost !px-2 !py-0.5 text-xs" data-testid="practice-cursor-restart" onClick={restartFromStart}>
+            从头开始
+          </button>
+        </div>
+      ) : null}
       {focus?.active ? (
         <section
           className="ec-card border-2 border-[var(--ec-primary)]"
@@ -409,6 +485,14 @@ export function PracticeClient({
                   </span>
                 ) : null}
               </button>
+              <button
+                type="button"
+                data-testid="sentence-history-button"
+                className="mt-1 text-xs text-[var(--ec-muted)] underline"
+                onClick={() => setHistoryId(s.id)}
+              >
+                📈 历史
+              </button>
             </li>
           ))}
         </ul>
@@ -416,9 +500,23 @@ export function PracticeClient({
 
       {/* 右列：录音与结果。宽屏吸顶常驻；窄屏紧跟（已被限高的）列表之后，一屏内可达。 */}
       <div className="flex flex-col gap-5 lg:sticky lg:top-4">
+      {historyId ? (
+        <section className="ec-card" data-testid="sentence-history-panel">
+          <button
+            type="button"
+            className="text-xs text-[var(--ec-muted)] underline"
+            onClick={() => setHistoryId(null)}
+          >
+            收起历史
+          </button>
+          <SentenceHistory sentenceId={historyId} isChild={isChild} />
+        </section>
+      ) : null}
       {selected ? (
         <section className="ec-card">
-          <h2 className="text-2xl font-extrabold leading-snug">{selected.text}</h2>
+          <h2 className="text-2xl font-extrabold leading-snug">
+            <WordText text={selected.text} showIpa={showWordIpa} />
+          </h2>
           <p className="mt-1 text-sm text-[var(--ec-muted)]">{selected.translation_zh}</p>
 
           <div className="mt-4 flex flex-wrap items-center gap-3">
@@ -481,6 +579,8 @@ export function PracticeClient({
             {response?.attempt_id ? (
               <ScopedDiagnosisCard scope="attempt" attemptIds={[response.attempt_id]} isChild={isChild} label="这一句的问题" />
             ) : null}
+            {/* task-84：这一句的历史 + 进步曲线 */}
+            {selected ? <SentenceHistory sentenceId={selected.id} isChild={isChild} refreshKey={attemptsToday} /> : null}
             <div className="flex flex-wrap items-center justify-between gap-3">
               {noSpeech ? (
                 <p className="text-lg font-bold">— 本次没有有效评分</p>
@@ -525,7 +625,7 @@ export function PracticeClient({
                 <section className="ec-card">
                   <h3 className="text-lg font-bold">{isChild ? "🔤 每个词读得怎么样" : "逐词得分"}</h3>
                   <div className="mt-3">
-                    <WordBars words={words} isChild={isChild} />
+                    <WordBars words={words} isChild={isChild} showIpa={showWordIpa} />
                   </div>
                   <PhonemeChips words={words} phonemeLevel={phonemeLevel} isChild={isChild} />
                 </section>
