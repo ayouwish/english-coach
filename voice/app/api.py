@@ -26,6 +26,7 @@ from .dialogue import complete_dialogue
 from .errors import BadRequest, PayloadTooLarge, PolicyDisabled, ProviderError, ProviderUnavailable
 from .voice_names import is_valid_voice_name
 from .audio_concat import MAX_TOTAL_INPUT_BYTES, concat_audio
+from .word_ipa import word_ipa as word_ipa_lookup
 from .languages import SUPPORTED_ASR_LANGUAGES, normalize_language
 from .story import retell_story, rewrite_story
 from .image_gen import (
@@ -208,6 +209,7 @@ async def health() -> dict:
     capabilities["avatar_presets"] = True
     # task-73：部署自查用静态标记（端点存在即 true，不做远程/耗时探测）
     capabilities["audio_concat"] = True
+    capabilities["word_ipa"] = True  # task-86：cmudict 音标查询（惰性加载，不影响启动）
     # task-75：ASR provider 矩阵（静态实现 + 当前生效，auto 下中英文可能不同）
     capabilities["asr_providers"] = list(ASR_PROVIDERS)
     capabilities["asr_effective"] = asr_effective(providers, settings)
@@ -708,6 +710,14 @@ async def story_retell(payload: StoryRetellRequest) -> dict:
         level=payload.level,
         settings=settings,
     )
+
+
+# --------------------------------------------------------------------------------------
+# 13. words/ipa（task-86：单词 → cmudict IPA 音标；惰性加载词典）
+# --------------------------------------------------------------------------------------
+@router.get("/words/ipa")
+async def words_ipa(word: str | None = None) -> dict:
+    return await run_in_threadpool(word_ipa_lookup, word)
 
 
 # --------------------------------------------------------------------------------------

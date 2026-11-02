@@ -56,6 +56,7 @@ curl -s -X POST localhost:8100/v1/pronounce \
 | 13 | `POST /v1/image/avatar` | v2.1：照片 → 风格化虚拟形象（**默认关闭**，见 §19.1）|
 | 14 | `GET /v1/image/avatar/presets` | v2.2：预置卡通形象库元数据（12 角色 × 5 风格，见 §19.2）|
 | 15 | `POST /v1/audio/concat` | v2.3：多段音频按序拼成一段 WAV（见 §20）|
+| 16 | `GET /v1/words/ipa` | v2.4：单词 → IPA 音标（cmudict 全量词典，见 §22）|
 
 统一错误格式：`{"error":{"code","message","detail"}}`，错误码为契约 §8 的固定集合。
 
@@ -1179,4 +1180,33 @@ ZHIPU_ASR_API_KEY=<key>           # 不填则回退 IMAGE_API_KEY（同一个智
 - 无 `variation` 时行为与之前一致（回归测试锁定：prompt 不含变体段、开场白仍取 `scenario.opening_line`）；
 - prompt 新增硬约束：**不重复历史里问过的问题**（用 ALREADY_ASKED/history 判断）、每轮**只问一个问题**；历史已问 ≥3 个问题时要求**换角度**（how/why/when、感受/偏好、目标下一步），并输出 `QUESTIONS_ASKED_SO_FAR` / `TOPIC_FATIGUE` 提示；
 - 温度：dialogue 默认 **0.9**（`DIALOGUE_TEMPERATURE`，钳制 0–1.5，只影响 dialogue，其它 LLM 端点不变）。
+
+## 22. 单词音标：`GET /v1/words/ipa`（task-86）
+
+用户需求：对话/跟读/故事里**所有单词点一下显示音标**。voice 用本地 **cmudict 全量词典**（约 12.6 万词，离线零成本），
+web 只需代理 + UI。
+
+- 请求：`GET /v1/words/ipa?word=think`
+- 响应：`{"word":"think","ipa":"θɪŋk","variants":["θɪŋk"],"source":"cmudict","syllables":1}`
+  - `ipa`：主发音；`variants`：cmudict 多发音去重后**最多 2 个**；`syllables`：元音数估算
+- 错误：未收录 → **404 `not_found`**（「词典里没有这个词，可以听发音」）；空/超长（>64）/非字母 → **400 bad_request**
+- 输入处理：小写化；支持撇号（`don't`，cmudict 自带常见缩写）与连字符（`well-known`：**优先整体查**，未收录再按 `-` 拆分逐段拼接）；
+  `'s` 所有格（如 `Ming's`）未收录时尝试词根 + `z`
+- **惰性加载**：`import app.main` 与 `/v1/health` 都不会加载词典；首次查询才 `import cmudict`（lru_cache 单例），冷启动不变慢
+- `capabilities.word_ipa: true`
+
+**ARPAbet → IPA 映射（GA 风格，与项目 canonical 一致）**：
+```
+AA→ɑ  AE→æ  AH→ʌ（AH0→ə）  AO→ɔ  AW→aʊ  AY→aɪ  B→b  CH→tʃ  D→d  DH→ð  EH→e
+ER→ɜr（ER0→ər）  EY→eɪ  F→f  G→ɡ  HH→h  IH→ɪ  IY→i  JH→dʒ  K→k  L→l
+M→m  N→n  NG→ŋ  OW→əʊ  OY→ɔɪ  P→p  R→r  S→s  SH→ʃ  T→t  TH→θ
+UH→ʊ  UW→u  V→v  W→w  Y→j  Z→z  ZH→ʒ
+```
+重音：cmudict 的 `1`→`ˈ`、`2`→`ˌ`，放在对应音节 onset 前；**单音节词不标重音**（think → `θɪŋk`）。
+
+实测：`think→θɪŋk`、`hello→həˈləʊ`（变体 `heˈləʊ`）、`either→["ˈiðər","ˈaɪðər"]`、`world→wɜrld`、`rhythm→ˈrɪðəm`、
+`comfortable→ˈkʌmfərtəbəl`、`well-known→ˈwelˈnəʊn`、`don't→dəʊnt`、`HELLO→hello`。
+
+依赖：`pyproject.toml` 新增 `cmudict`（纯 python），`requirements.txt` 由
+`uv export --frozen --no-dev --extra azure …` 重新生成（**azure extra 保留**，Dockerfile 无需改）。
 

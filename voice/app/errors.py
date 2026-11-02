@@ -10,6 +10,7 @@ STATUS_BY_CODE: dict[str, int] = {
     "audio_too_long": 413,
     "payload_too_large": 413,
     "audio_not_found": 404,
+    "not_found": 404,  # task-86：单词不在 cmudict 词典里
     "provider_error": 502,
     "provider_timeout": 504,
     "no_provider": 503,
@@ -76,6 +77,12 @@ class ProviderError(VoiceError):
 
 class ProviderTimeout(ProviderError):
     code = "provider_timeout"
+
+
+class NotFound(VoiceError):
+    """资源不存在（task-86：单词未收录）。"""
+
+    code = "not_found"
 
 
 class PolicyDisabled(VoiceError):

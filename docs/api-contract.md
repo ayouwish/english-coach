@@ -1,4 +1,4 @@
-# 接口契约 v1.17（FROZEN · 2026-11-02）
+# 接口契约 v1.18（FROZEN · 2026-11-03）
 
 > **本文件是唯一事实来源（single source of truth）。**
 
@@ -24,6 +24,7 @@
 | 2026-11-02 | v1.15 | `/v1/dialogue` 新增 `scenario.variation`（场景变体：人设/地点/细节/目标/开场白）与 `DIALOGUE_TEMPERATURE`（默认 0.9）；prompt 增加"禁止重复提问/换角度"约束 | 向后兼容（不传 variation 行为不变）|
 | 2026-11-02 | v1.16 | `/v1/story/rewrite` 的 `max_sentences` 范围 **1–6 → 3–12**（默认 6）；超句数不截断、`warnings` 增加 `too_many_sentences` | 向后兼容（旧值仍在范围内）|
 | 2026-11-02 | v1.17 | 新增 §23 **web 层扩展 API 汇总**（虚拟形象/故事录音/整段音频回放/音色/诊断分层），供原生客户端对接 | 新增端点，向后兼容 |
+| 2026-11-03 | v1.18 | 新增 §24 `GET /v1/words/ipa`（cmudict → IPA 音标）、错误码 `not_found`、`capabilities.word_ipa` | 新增端点，向后兼容 |
 > `web/` 与 `voice/` 两个模块并行开发，任何一方需要改本契约，必须先通知 Lead 并同步改本文件。
 > 冻结范围：路径、请求字段名、响应字段名、枚举值、错误码。
 > 未冻结范围：各 provider 内部实现、日志格式、额外字段（允许追加 `provider_meta` 等可选字段，不得删除或改名已有字段）。
@@ -1045,3 +1046,28 @@ GET/PATCH /api/settings → {auto_illustrate, gender, tts_voice, story_sentences
 - `auto_illustrate` 默认 **0（关）**：保存故事不自动画图（省成本），可手动 `POST /api/story/:id/illustrate`
 - `gender` ∈ `girl|boy|woman|man|other|NULL` → 影响插画提示词与形象推荐
 - `story_sentences` ∈ 3–12 或 NULL（NULL = 角色默认：儿童 5、成人 8）
+
+---
+
+## 24. v1.18 新增：`GET /v1/words/ipa`（单词音标）
+
+用户需求：对话/跟读/故事里**所有单词点一下就能看音标**。数据源 **cmudict 全量词典（126,052 词）**，
+纯离线、零成本；ARPAbet → IPA（美式 GA 风格）。
+
+```
+GET /v1/words/ipa?word=think
+200 {"word":"think","ipa":"θɪŋk","variants":["θɪŋk"],"source":"cmudict","syllables":1}
+```
+- `ipa` 主发音；`variants` 去重后最多 2 个；`syllables` 按元音数估算
+- 重音：`ˈ` 主 / `ˌ` 次（按音节 onset 放置）；**单音节词不标重音**
+- 输入：大小写不敏感；撇号整体查（`don't`）；连字符优先整体（`well-known`），未收录再拆分
+- 未收录 → **404 `not_found`**（message「词典里没有这个词，可以听发音」）
+- 空/超长(>64)/非字母 → 400 `bad_request`
+- **惰性加载**：启动与 `/v1/health` 都不加载词典，首次查询才 import
+- `capabilities.word_ipa: true`
+- 依赖 `cmudict>=1.1`（纯 python；requirements 由 uv export 生成，保留 azure extra）
+
+实测：`think→θɪŋk`、`hello→həˈləʊ`（变体 `heˈləʊ`）、`either→["ˈiðər","ˈaɪðər"]`、
+`world→wɜrld`、`rhythm→ˈrɪðəm`、`comfortable→ˈkʌmfərtəbəl`、`don't→dəʊnt`、`well-known→ˈwelˈnəʊn`
+
+客户端用法：句子按 `/[\w'-]+/` 切词 → 点击时调此接口（或批量预取）；404 时提示"可以听发音"（配 TTS 单词发音）。
