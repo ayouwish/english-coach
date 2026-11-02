@@ -31,7 +31,17 @@ export const POST = route(async (req: NextRequest) => {
   await ensureBootstrap();
   const user = await requireUser();
   const body = (await req.json().catch(() => null)) as
-    | { title?: unknown; text?: unknown; image_b64?: unknown; source?: unknown; kind?: unknown; source_zh?: unknown; level?: unknown }
+    | {
+        title?: unknown;
+        text?: unknown;
+        image_b64?: unknown;
+        source?: unknown;
+        kind?: unknown;
+        source_zh?: unknown;
+        level?: unknown;
+        /** task-83：本次使用的原始录音 id（回填 story_recordings.material_id） */
+        recording_id?: unknown;
+      }
     | null;
   if (!body) throw new HttpError(400, "bad_request", "请求体必须是 JSON");
   try {
@@ -44,6 +54,20 @@ export const POST = route(async (req: NextRequest) => {
       sourceZh: (body as { source_zh?: unknown }).source_zh,
       level: (body as { level?: unknown }).level,
     });
+    // task-83：把这次用的原始录音关联到故事（只接受本人录音；不需要新列）
+    const recordingId = typeof body.recording_id === "string" ? body.recording_id.trim() : "";
+    if (recordingId) {
+      const { getRecording } = await import("@/lib/story-recordings");
+      const rec = await getRecording(user.id, recordingId);
+      if (rec) {
+        const { getDb } = await import("@/db");
+        const { storyRecordings } = await import("@/db/schema");
+        const { eq } = await import("drizzle-orm");
+        await getDb().update(storyRecordings).set({ materialId: material.id }).where(eq(storyRecordings.id, recordingId));
+      } else {
+        console.warn(`[materials] recording_id 不属于当前用户，忽略（${recordingId}）`);
+      }
+    }
     // task-76 ①：**服务端**尊重「卡通插画自动生成」开关（默认关）。
     // 开启时才在响应之后异步画一张（不阻塞保存）；关闭则用户可在故事页手动生成。
     const isStory = (material as { kind?: string }).kind === "story";

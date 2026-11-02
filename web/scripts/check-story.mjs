@@ -603,6 +603,170 @@ try {
         check("设置页含费用说明（每张约 ¥0.1）", /每张约\s*¥?0\.1|每张约/.test(settingsHtml));
       }
 
+      // ── task-85：多选故事 → 故事集打印（封面 + 每篇分页）────────────────────
+      {
+        const makeStory = async (n) => {
+          const r = await fetch(`http://127.0.0.1:${port}/api/materials`, {
+            method: "POST",
+            headers: { "content-type": "application/json", cookie: cookie2 },
+            body: JSON.stringify({
+              title: `Collection Story ${n} ${Date.now()}`,
+              text: `I went to the park with my friend number ${n}. We played on the slide.`,
+              kind: "story",
+              level: "A2",
+              source: "text",
+              source_zh: `故事${n}：我和朋友去公园玩滑梯。`,
+            }),
+          });
+          const body = await r.json().catch(() => null);
+          if (body?.id) created.push(body.id);
+          return body?.id ?? null;
+        };
+        const ids = [];
+        for (let i = 1; i <= 3; i++) ids.push(await makeStory(i));
+        check("task-85：创建 3 篇测试故事", ids.every(Boolean), `ids=${ids.length}`);
+        const idsQs = ids.join(",");
+
+        const coll = (await (await fetch(`http://127.0.0.1:${port}/story/print?ids=${encodeURIComponent(idsQs)}`, { headers: { cookie: cookie2 } })).text()).replace(/<!--[\s\S]*?-->/g, "");
+        check("★ 故事集打印页 200 且含封面", coll.includes('data-testid="collection-cover"') && /我的故事集/.test(coll));
+        check("★ 封面显示篇数「共 3 篇」", /共\s*3\s*篇/.test(coll));
+        check("★ 3 篇都渲染（collection-story ×3）", (coll.match(/data-testid="collection-story"/g) ?? []).length === 3);
+        check("★ 每篇有编号句子", (coll.match(/data-testid="print-sentence"/g) ?? []).length >= 3);
+        check("★ 每篇另起一页（break-before: page）", /break-before:\s*page/.test(coll));
+        check("★ 页脚「第 X / N 篇」", /第\s*1\s*\/\s*3\s*篇/.test(coll) && /第\s*3\s*\/\s*3\s*篇/.test(coll));
+        check("★ 合集有打印按钮 + @media print", coll.includes('data-testid="collection-print-button"') && /@media print/.test(coll));
+        check("合集默认不显示中文", !coll.includes('data-testid="print-source-zh"'));
+
+        const collZh = (await (await fetch(`http://127.0.0.1:${port}/story/print?ids=${encodeURIComponent(idsQs)}&zh=1&lines=1`, { headers: { cookie: cookie2 } })).text()).replace(/<!--[\s\S]*?-->/g, "");
+        check("★ ?zh=1 显示中文原文", collZh.includes('data-testid="print-source-zh"') && /故事1：我和朋友去公园玩滑梯/.test(collZh));
+        check("★ ?lines=1 加书写留白行", collZh.includes("print-line"));
+        check("合集页儿童零 IPA、无字面 **", leaks(collZh).length === 0 && !collZh.includes("**"));
+
+        const empty = (await (await fetch(`http://127.0.0.1:${port}/story/print`, { headers: { cookie: cookie2 } })).text()).replace(/<!--[\s\S]*?-->/g, "");
+        check("★ 空 ids → 可读提示（不白屏）", empty.includes('data-testid="collection-empty"') && /还没有选择要打印的故事/.test(empty));
+        const missing = (await (await fetch(`http://127.0.0.1:${port}/story/print?ids=${encodeURIComponent(`${ids[0]},mat_not_exist_xxx`)}`, { headers: { cookie: cookie2 } })).text()).replace(/<!--[\s\S]*?-->/g, "");
+        check("★ 不存在的 id → 跳过并提示（不泄漏/不白屏）", missing.includes('data-testid="collection-missing"') && (missing.match(/data-testid="collection-story"/g) ?? []).length === 1);
+        const tooManyIds = Array.from({ length: 31 }, (_, i) => ids[i % 3] ?? ids[0]).join(",");
+        const tooMany = await fetch(`http://127.0.0.1:${port}/story/print?ids=${encodeURIComponent(tooManyIds)}`, { headers: { cookie: cookie2 } });
+        const tooManyHtml = (await tooMany.text()).replace(/<!--[\s\S]*?-->/g, "");
+        check("★ >30 篇 → 截断并提示（200 + 可读提示）", tooMany.status === 200 && tooManyHtml.includes('data-testid="collection-too-many"'), `status=${tooMany.status}`);
+
+        const single = (await (await fetch(`http://127.0.0.1:${port}/story/${ids[0]}/print`, { headers: { cookie: cookie2 } })).text()).replace(/<!--[\s\S]*?-->/g, "");
+        check("单篇打印页仍正常（回归）", single.includes('data-testid="print-sentences"') && single.includes('data-testid="print-button"'));
+
+        const storyListHtml = (await (await fetch(`http://127.0.0.1:${port}/story`, { headers: { cookie: cookie2 } })).text()).replace(/<!--[\s\S]*?-->/g, "");
+        check("★ /story 有「选择」模式入口（SSR）", storyListHtml.includes('data-testid="story-select-toggle"'));
+        check("★ /story 有「打印故事集」按钮与已选数量（SSR，默认隐藏）", storyListHtml.includes('data-testid="story-collection-print"') && /已选\s*0\s*篇/.test(storyListHtml));
+        check("★ 儿童文案「打印出来读」/「选几篇打印」", storyListHtml.includes("选几篇打印") || storyListHtml.includes("打印出来读"));
+        const storySrc85 = fs.readFileSync(path.join(WEB_ROOT, "src/app/story/StoryClient.tsx"), "utf8");
+        check("多选逻辑：勾选框 + 全选 + 最多 30 篇", storySrc85.includes('data-testid="story-select-check"') && storySrc85.includes('data-testid="story-select-all"') && storySrc85.includes("slice(0, 30)"));
+      }
+
+
+      // ── task-83：故事原始输入留存（原话 + 原声）+ 可打印文档 ────────────────
+      {
+        const DB_PATH_83 = process.env.DB_PATH ?? path.join(WEB_ROOT, "data/app.db");
+        const TINY_WAV_83 = Buffer.from("UklGRiQAAABXQVZFZm10IBAAAAABAAEAQB8AAEAfAAABAAgAZGF0YQAAAAA=", "base64");
+        const recIds83 = [];
+        asrMode = "ok";
+        // ① 上传一段录音（中文转录成功）
+        let recId = null;
+        {
+          const form = new FormData();
+          form.append("audio", new Blob([TINY_WAV_83], { type: "audio/wav" }), "src.wav");
+          const r = await fetch(`http://127.0.0.1:${port}/api/story/recordings`, { method: "POST", headers: { cookie: cookie2 }, body: form });
+          const body = await r.json().catch(() => null);
+          recId = body?.id ?? null;
+          if (recId) recIds83.push(recId);
+          check("task-83：上传原始录音 → 201 transcribed", r.status === 201 && body?.status === "transcribed", `status=${r.status}`);
+        }
+        try {
+          // ② 保存故事时带 recording_id → 回填 material_id
+          const mk = await fetch(`http://127.0.0.1:${port}/api/materials`, {
+            method: "POST",
+            headers: { "content-type": "application/json", cookie: cookie2 },
+            body: JSON.stringify({
+              title: `Source Story ${Date.now()}`,
+              text: "Today I built a tower with Ming. Hua knocked it down.",
+              kind: "story",
+              level: "A2",
+              source: "text",
+              source_zh: "今天我和小明搭积木塔，小华把它推倒了。",
+              recording_id: recId,
+            }),
+          });
+          const material = await mk.json().catch(() => null);
+          const mid = material?.id ?? null;
+          if (mid) created.push(mid);
+          check("task-83：保存故事（带 recording_id）→ 201", mk.status === 201 && Boolean(mid), `status=${mk.status}`);
+          const dbRec = (() => {
+            const d = new Database(DB_PATH_83, { readonly: true });
+            const row = d.prepare("SELECT material_id FROM story_recordings WHERE id = ?").get(recId);
+            d.close();
+            return row;
+          })();
+          check("★ 回填证据：story_recordings.material_id = 故事 id", dbRec?.material_id === mid, `${dbRec?.material_id} vs ${mid}`);
+
+          // ③ 详情页「🗣️ 我当时讲的原话」+ 原声播放器
+          const detail = (await (await fetch(`http://127.0.0.1:${port}/story/${mid}`, { headers: { cookie: cookie2 } })).text()).replace(/<!--[\s\S]*?-->/g, "");
+          check("★ 详情页含「🗣️ 我当时讲的原话」区块", detail.includes('data-testid="detail-source"') && /我当时讲的原话/.test(detail));
+          check("★ 详情页显示中文原文", detail.includes('data-testid="detail-source-zh"') && /今天我和小明搭积木塔/.test(detail));
+          check("★ 详情页有原声播放器（/api/story/recordings/<id>/audio）", detail.includes('data-testid="detail-source-audio"') && detail.includes(`/api/story/recordings/${recId}/audio`));
+          check("★ 详情页有打印入口", detail.includes('data-testid="detail-print-link"'));
+          const recAudio = await fetch(`http://127.0.0.1:${port}/api/story/recordings/${recId}/audio`, { headers: { cookie: cookie2 } });
+          check("原声可播放（200 audio/*）", recAudio.status === 200 && (recAudio.headers.get("content-type") ?? "").startsWith("audio/"), `status=${recAudio.status}`);
+          const otherAudio = await fetch(`http://127.0.0.1:${port}/api/story/recordings/${recId}/audio`, { headers: { cookie: dad } });
+          check("★ 越权：别人听我的原声 → 404", otherAudio.status === 404, `status=${otherAudio.status}`);
+
+          // ④ 无录音的故事：只有中文原文，没有坏播放器
+          const mk2 = await fetch(`http://127.0.0.1:${port}/api/materials`, {
+            method: "POST",
+            headers: { "content-type": "application/json", cookie: cookie2 },
+            body: JSON.stringify({ title: `Typed Story ${Date.now()}`, text: "I like apples.", kind: "story", level: "A1", source: "text", source_zh: "我喜欢苹果。" }),
+          });
+          const typed = await mk2.json().catch(() => null);
+          const mid2 = typed?.id ?? null;
+          if (mid2) created.push(mid2);
+          const detail2 = (await (await fetch(`http://127.0.0.1:${port}/story/${mid2}`, { headers: { cookie: cookie2 } })).text()).replace(/<!--[\s\S]*?-->/g, "");
+          check("★ 无录音故事：只显示中文原文", detail2.includes('data-testid="detail-source-zh"') && /我喜欢苹果/.test(detail2));
+          check("★ 无录音故事：不显示原声播放器（无坏播放器）", !detail2.includes('data-testid="detail-source-audio"'));
+
+          // ⑤ 列表：有原声的卡片有 🎙️ 标记（API has_recording + 源码标记）
+          const list = await (await fetch(`http://127.0.0.1:${port}/api/materials?kind=story&limit=50`, { headers: { cookie: cookie2 } })).json();
+          const row = (list?.items ?? []).find((x) => x.id === mid);
+          check("★ 列表 API 标记 has_recording + recording_id", row?.has_recording === true && row?.recording_id === recId, JSON.stringify({ has: row?.has_recording, rec: row?.recording_id }));
+          const storySrc83 = fs.readFileSync(path.join(WEB_ROOT, "src/app/story/StoryClient.tsx"), "utf8");
+          check("★ 故事卡片有 🎙️ 标记与 🖨️ 打印入口", storySrc83.includes('data-testid="story-recording-mark"') && storySrc83.includes('data-testid="story-print-link"'));
+
+          // ⑥ 打印页：编号句子 + @media print + 打印按钮 + 可选中文/留白行
+          const printRes = await fetch(`http://127.0.0.1:${port}/story/${mid}/print`, { headers: { cookie: cookie2 } });
+          const printHtml = (await printRes.text()).replace(/<!--[\s\S]*?-->/g, "");
+          check("★ 打印页 200", printRes.status === 200, `status=${printRes.status}`);
+          check("★ 打印页含编号英文句子（≥2 条）", (printHtml.match(/data-testid="print-sentence"/g) ?? []).length >= 2);
+          check("★ 打印页含 @media print 样式", /@media print/.test(printHtml) && /print-color-adjust/.test(printHtml));
+          check("★ 打印页有「🖨️ 打印 / 另存为 PDF」按钮", printHtml.includes('data-testid="print-button"') && /打印 \/ 另存为 PDF/.test(printHtml));
+          check("默认不显示中文原文", !printHtml.includes('data-testid="print-source-zh"'));
+          const zhLines = (await (await fetch(`http://127.0.0.1:${port}/story/${mid}/print?zh=1&lines=1`, { headers: { cookie: cookie2 } })).text()).replace(/<!--[\s\S]*?-->/g, "");
+          check("★ ?zh=1 显示中文原文", zhLines.includes('data-testid="print-source-zh"') && /今天我和小明搭积木塔/.test(zhLines));
+          check("★ ?lines=1 加书写留白行", zhLines.includes("print-line"));
+          check("打印页页脚有名字/日期手写栏", /名字 Name/.test(printHtml) && /日期 Date/.test(printHtml));
+          check("打印页零 IPA、无字面 **", leaks(zhLines).length === 0 && !zhLines.includes("**"));
+        } finally {
+          asrMode = "ok";
+          const d = new Database(DB_PATH_83);
+          for (const id of recIds83) {
+            const r = d.prepare("SELECT audio_path FROM story_recordings WHERE id = ?").get(id);
+            if (r?.audio_path) {
+              const abs = path.join(WEB_ROOT, "data", r.audio_path);
+              if (fs.existsSync(abs)) fs.rmSync(abs);
+            }
+            d.prepare("DELETE FROM story_recordings WHERE id = ?").run(id);
+          }
+          d.close();
+        }
+      }
+
+
       // ── task-81：故事句子数（角色默认 5/8 + 设置可改 + outbound）───────────
       {
         const DB_PATH_S = process.env.DB_PATH ?? path.join(WEB_ROOT, "data/app.db");

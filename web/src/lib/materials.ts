@@ -14,7 +14,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { desc, eq, inArray } from "drizzle-orm";
 import { DATA_DIR, getDb } from "@/db";
-import { readingMaterials, users } from "@/db/schema";
+import { readingMaterials, storyRecordings, users } from "@/db/schema";
 import type { SessionUser } from "./auth";
 import { countSentences } from "./sentence-split";
 
@@ -97,6 +97,10 @@ export interface MaterialSummary {
   kind: string;
   level: string | null;
   has_source_zh: boolean;
+  /** task-83：这个故事是否关联了原始录音（story_recordings.material_id 反查） */
+  has_recording: boolean;
+  /** task-83：关联的录音 id（没有则 null） */
+  recording_id: string | null;
   created_by: string | null;
   created_at: string;
   updated_at: string;
@@ -106,6 +110,7 @@ function toSummary(
   r: typeof readingMaterials.$inferSelect,
   authorName: string | null = null,
   authorAvatarPath: string | null = null,
+  recordingId: string | null = null,
 ): MaterialSummary {
   return {
     id: r.id,
@@ -123,6 +128,8 @@ function toSummary(
     kind: r.kind,
     level: r.level,
     has_source_zh: Boolean(r.sourceZh),
+    has_recording: Boolean(recordingId),
+    recording_id: recordingId,
     created_by: r.createdBy,
     created_at: r.createdAt,
     updated_at: r.updatedAt,
@@ -220,6 +227,18 @@ export async function listMaterials(
     .orderBy(desc(readingMaterials.createdAt))
     .limit(limit)
     .offset(offset);
+  // task-83：反查每个故事关联的原始录音（不需要新列）
+  const materialIds = rows.map((r) => r.id);
+  const recordingByMaterial = new Map<string, string>();
+  if (materialIds.length > 0) {
+    const recRows = await db
+      .select({ id: storyRecordings.id, materialId: storyRecordings.materialId })
+      .from(storyRecordings)
+      .where(inArray(storyRecordings.materialId, materialIds));
+    for (const rec of recRows) {
+      if (rec.materialId) recordingByMaterial.set(rec.materialId, rec.id);
+    }
+  }
   // 作者昵称（家庭应用成员很少，直接一次查 map）
   const ids = [...new Set(rows.map((r) => r.createdBy).filter((x): x is string => Boolean(x)))];
   const names = new Map<string, string>();
@@ -239,6 +258,7 @@ export async function listMaterials(
       r,
       r.createdBy ? (names.get(r.createdBy) ?? null) : null,
       r.createdBy ? (avatars.get(r.createdBy) ?? null) : null,
+      recordingByMaterial.get(r.id) ?? null,
     ),
   );
 }

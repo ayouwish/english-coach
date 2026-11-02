@@ -11,7 +11,10 @@ export async function GET(req: NextRequest) {
     await ensureBootstrap();
     const user = await requireUser();
     const limit = Number(req.nextUrl.searchParams.get("limit") ?? 20);
-    const items = await listRecordings(user.id, Number.isFinite(limit) ? limit : 20);
+    const materialId = req.nextUrl.searchParams.get("material_id");
+    const items = (await listRecordings(user.id, Number.isFinite(limit) ? limit : 20)).filter(
+      (x) => !materialId || x.material_id === materialId,
+    );
     return jsonOk({ count: items.length, items });
   } catch (err) {
     if (err instanceof HttpError) {

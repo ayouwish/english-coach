@@ -2,7 +2,7 @@ import Link from "next/link";
 import { redirect } from "next/navigation";
 import { and, desc, eq } from "drizzle-orm";
 import { ensureBootstrap, getDb } from "@/db";
-import { attempts, storyRetells } from "@/db/schema";
+import { attempts, storyRecordings, storyRetells } from "@/db/schema";
 import { getCurrentUser } from "@/lib/auth";
 import { getMaterial } from "@/lib/materials";
 import { IllustrateBox } from "@/components/IllustrateBox";
@@ -48,6 +48,13 @@ export default async function StoryDetailPage({ params }: { params: Promise<{ id
     .orderBy(desc(attempts.createdAt))
     .limit(20);
   const lastWithAudio = reads.find((r) => r.audioPath) ?? null;
+  // task-83：当时讲这个故事用的原始录音（story_recordings.material_id 反查；仅本人）
+  const [sourceRecording] = await getDb()
+    .select()
+    .from(storyRecordings)
+    .where(and(eq(storyRecordings.materialId, material.id), eq(storyRecordings.userId, user.id)))
+    .orderBy(desc(storyRecordings.createdAt))
+    .limit(1);
   const retells = await db
     .select()
     .from(storyRetells)
@@ -95,11 +102,49 @@ export default async function StoryDetailPage({ params }: { params: Promise<{ id
             <li key={i}>{s}</li>
           ))}
         </ol>
-        {material.sourceZh ? (
-          <details className="mt-3 text-xs text-[var(--ec-muted)]">
-            <summary className="cursor-pointer">看看你当时怎么讲的（中文）</summary>
-            <p className="mt-1 whitespace-pre-wrap">{material.sourceZh}</p>
-          </details>
+        {/* task-83：原始输入留存 —— 当时讲的原话 + 原声播放器 */}
+        {material.sourceZh || sourceRecording ? (
+          <div className="mt-3 rounded-xl bg-[#f8f9ff] p-3" data-testid="detail-source">
+            <h3 className="text-sm font-extrabold">🗣️ 我当时讲的原话</h3>
+            {material.sourceZh ? (
+              <p className="mt-1 whitespace-pre-wrap text-sm" data-testid="detail-source-zh">
+                {material.sourceZh}
+              </p>
+            ) : null}
+            {sourceRecording ? (
+              <div className="mt-2" data-testid="detail-source-recording">
+                <div className="flex flex-wrap items-center gap-2 text-xs text-[var(--ec-muted)]">
+                  <span>原声：</span>
+                  <span>{new Date(sourceRecording.createdAt).toLocaleString("zh-CN")}</span>
+                  {sourceRecording.provider ? <span>· 转录 provider：{sourceRecording.provider}</span> : null}
+                  <span>
+                    · 状态：
+                    {sourceRecording.status === "transcribed" ? "已转录" : sourceRecording.status === "failed" ? "当时没听清，但原声还在" : "待转录"}
+                  </span>
+                </div>
+                {sourceRecording.status === "failed" && sourceRecording.error ? (
+                  <p className="mt-1 text-xs text-[#7a4d00]">{sourceRecording.error}</p>
+                ) : null}
+                <audio
+                  controls
+                  preload="metadata"
+                  src={`/api/story/recordings/${sourceRecording.id}/audio`}
+                  data-testid="detail-source-audio"
+                  aria-label="播放我当时讲的原声"
+                  className="mt-1 h-9 w-full max-w-[320px]"
+                />
+              </div>
+            ) : (
+              <p className="mt-1 text-xs text-[var(--ec-muted)]">这个故事是打字输入的，没有原声录音。</p>
+            )}
+            <Link
+              href={`/story/${material.id}/print`}
+              className="ec-btn ec-btn-ghost mt-2 !px-2 !py-0.5 text-xs"
+              data-testid="detail-print-link"
+            >
+              🖨️ {user.isChild ? "打印出来读" : "打印 / 另存为 PDF"}
+            </Link>
+          </div>
         ) : null}
       </section>
 

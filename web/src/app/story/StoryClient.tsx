@@ -13,6 +13,8 @@ interface StorySentence {
 }
 
 interface MaterialItem {
+  has_recording?: boolean;
+  recording_id?: string | null;
   id: string;
   title: string;
   sentence_count: number;
@@ -66,6 +68,11 @@ export function StoryClient({
   const [asrBusy, setAsrBusy] = useState(false);
   /** task-77：录音落盘/转录状态 */
   const [lastRecording, setLastRecording] = useState<{ id: string; status: string } | null>(null);
+  /** task-83：本条故事用到的原始录音（保存时回填关联） */
+  const [recordingId, setRecordingId] = useState<string | null>(null);
+  /** task-85：故事集多选打印 */
+  const [selectMode, setSelectMode] = useState(false);
+  const [selected, setSelected] = useState<string[]>([]);
   const [retryingId, setRetryingId] = useState<string | null>(null);
   const router = useRouter();
   const [sentences, setSentences] = useState<StorySentence[] | null>(null);
@@ -135,6 +142,7 @@ export function StoryClient({
         return;
       }
       setLastRecording({ id: data.id, status: data.status ?? "pending" });
+      setRecordingId(data.id);
       const text = (data.transcript_zh ?? "").trim();
       if (data.status === "transcribed" && text) {
         setTextZh((prev) => (prev.trim() ? `${prev.trimEnd()} ${text}` : text));
@@ -253,6 +261,7 @@ export function StoryClient({
           source_zh: textZh,
           level,
           source: "text",
+          ...(recordingId ? { recording_id: recordingId } : {}),
         }),
       });
       const data = (await res.json().catch(() => null)) as { id?: string; error?: { message?: string } } | null;
@@ -586,6 +595,70 @@ export function StoryClient({
             <p className="text-sm font-semibold">🔥 {streakMessage(consecutiveDays(stories.map((s) => s.created_at)))}</p>
           </div>
         ) : null}
+        {/* task-85：多选 → 打印故事集 */}
+        <div className="mt-2 flex flex-wrap items-center gap-2">
+          <button
+            type="button"
+            data-testid="story-select-toggle"
+            className={`ec-btn ${selectMode ? "ec-btn-primary" : "ec-btn-ghost"} !px-2 !py-0.5 text-xs`}
+            onClick={() => {
+              setSelectMode((v) => !v);
+              setSelected([]);
+            }}
+          >
+            ☑️ {isChild ? "选几篇打印" : "选择"}
+          </button>
+          <span className="text-xs text-[var(--ec-muted)]">勾选多篇故事，生成一本故事集打印出来</span>
+        </div>
+        <div
+          data-testid="story-collection-toolbar"
+          data-select-mode={selectMode ? "1" : "0"}
+          hidden={!selectMode}
+          className="sticky top-2 z-10 mt-2 flex flex-wrap items-center gap-2 rounded-xl border border-[#d9dcf0] bg-white p-2 shadow-sm"
+        >
+          <span className="text-xs font-semibold" data-testid="story-selected-count">
+            已选 {selected.length} 篇
+          </span>
+          <button
+            type="button"
+            data-testid="story-collection-print"
+            className="ec-btn ec-btn-primary !px-2 !py-0.5 text-xs"
+            disabled={selected.length === 0 || selected.length > 30}
+            onClick={() => {
+              if (selected.length === 0) return;
+              const ids = selected.slice(0, 30).join(",");
+              window.open(`/story/print?ids=${encodeURIComponent(ids)}`, "_blank", "noopener,noreferrer");
+            }}
+          >
+            🖨️ {isChild ? "打印出来读" : "打印故事集"}
+          </button>
+          <button
+            type="button"
+            data-testid="story-select-all"
+            className="ec-btn ec-btn-ghost !px-2 !py-0.5 text-xs"
+            onClick={() => {
+              const scoped = storyScope === "mine" ? stories.filter((x) => x.created_by === viewerId) : stories;
+              setSelected(scoped.slice(0, 30).map((x) => x.id));
+            }}
+          >
+            全选（≤30）
+          </button>
+          <button
+            type="button"
+            data-testid="story-select-cancel"
+            className="ec-btn ec-btn-ghost !px-2 !py-0.5 text-xs"
+            onClick={() => {
+              setSelected([]);
+              setSelectMode(false);
+            }}
+          >
+            取消
+          </button>
+          {selected.length > 30 ? (
+            <span className="text-xs text-red-700">最多 30 篇</span>
+          ) : null}
+        </div>
+
         {stories.length === 0 ? (
           <p className="mt-2 text-sm text-[var(--ec-muted)]" data-testid="stories-empty">
             还没有故事。讲讲今天发生的事，存下来就是你的第一本英文故事书。
@@ -609,6 +682,20 @@ export function StoryClient({
                       {sec.items.map((s) => (
                         <li key={s.id} className="rounded-xl border border-[#e6e8f5] p-3" data-testid="story-item">
                           <div className="flex flex-wrap items-center gap-3">
+                            {selectMode ? (
+                              <input
+                                type="checkbox"
+                                data-testid="story-select-check"
+                                aria-label={`选择《${s.title}》打印`}
+                                checked={selected.includes(s.id)}
+                                onChange={(e) => {
+                                  setSelected((prev) =>
+                                    e.target.checked ? [...prev.filter((x) => x !== s.id), s.id].slice(0, 30) : prev.filter((x) => x !== s.id),
+                                  );
+                                }}
+                                className="h-6 w-6"
+                              />
+                            ) : null}
                             {s.has_image ? (
                               // eslint-disable-next-line @next/next/no-img-element -- 本地 API 图片
                               <img
@@ -628,7 +715,22 @@ export function StoryClient({
                                 {s.sentence_count} 句{s.level ? ` · ${s.level}` : ""} ·{" "}
                                 {new Date(s.created_at).toLocaleDateString("zh-CN")}
                                 {s.created_by_name ? ` · ${s.created_by_name}` : ""}
-                                {s.created_by_avatar_url ? (
+                                {s.has_recording ? (
+                  <span className="ml-1 text-xs" title="有原始录音" data-testid="story-recording-mark">
+                    🎙️
+                  </span>
+                ) : null}
+                <a
+                  href={`/story/${encodeURIComponent(s.id)}/print`}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="ml-1 text-xs underline"
+                  data-testid="story-print-link"
+                  title="打印 / 另存为 PDF"
+                >
+                  🖨️
+                </a>
+                {s.created_by_avatar_url ? (
                                   <>
                                     {" "}
                                     {/* eslint-disable-next-line @next/next/no-img-element -- 本地 API 图片 */}
