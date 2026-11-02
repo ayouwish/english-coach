@@ -13,7 +13,7 @@ import { getCurrentUser } from "@/lib/auth";
 import { audienceForUser, scenarioAudience } from "@/lib/chat";
 import { listCustomScenarios, parseVariants } from "@/lib/custom-scenarios";
 import { getCapabilities } from "@/lib/voice";
-import { getPrefs } from "@/lib/prefs";
+import { getPrefs, effectiveShowWordIpa } from "@/lib/prefs";
 import { effectiveTtsRate } from "@/lib/tts-rate";
 import { getDailyUsage } from "@/lib/usage";
 import { ChatClient } from "./ChatClient";
@@ -119,6 +119,7 @@ export default async function ChatPage() {
       usage={usage}
       ttsRate={speechRate}
       voiceReachable={caps.reachable}
+      showWordIpa={effectiveShowWordIpa(await getPrefs(user.id, user.isChild), user.isChild)}
     />
 
       {lastMessages.length > 0 ? (

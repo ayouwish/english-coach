@@ -2,11 +2,13 @@ import Link from "next/link";
 import { redirect } from "next/navigation";
 import { desc, eq } from "drizzle-orm";
 import { getDb } from "@/db";
+import { getPrefs, effectiveShowWordIpa } from "@/lib/prefs";
 import { attempts } from "@/db/schema";
 import { ensureBootstrap } from "@/db";
 import { AudioButton } from "@/components/AudioButton";
 import { ContrastButton } from "@/components/ContrastButton";
 import { ArticulationDemo } from "@/components/ArticulationDemo";
+import { WordText } from "@/components/WordText";
 import { getArticulation } from "@/lib/articulation";
 import type { Articulation } from "@/lib/articulation";
 import { getCurrentUser } from "@/lib/auth";
@@ -37,6 +39,8 @@ export default async function ReportPage({
   if (!user) redirect("/login");
 
   const isChild = user.isChild;
+  // task-87：单词是否显示音标（成人默认开、儿童默认关；设置可覆盖）
+  const showWordIpa = effectiveShowWordIpa(await getPrefs(user.id, user.isChild), user.isChild);
   // task-71：默认「最近 7 天」，可切「全部累计」(?scope=all)
   const params = await searchParams;
   const scope = params.scope === "all" ? "all" : "recent";
@@ -169,6 +173,7 @@ export default async function ReportPage({
               contrast={contrast}
               compareNote={compareNote}
               isChild={isChild}
+              showIpa={showWordIpa}
             />
           );
         })
@@ -250,12 +255,14 @@ function ReportCard({
   contrast,
   compareNote,
   isChild,
+  showIpa = true,
 }: {
   item: DiagnosisItem;
   primary: Articulation;
   contrast: Articulation | null;
   compareNote: string | null;
   isChild: boolean;
+  showIpa?: boolean;
 }) {
   const demoText = item.examples.slice(0, 3).join(", ");
   const title = isChild ? item.child_label : `/${item.phoneme}/ · ${item.child_label}`;
@@ -344,7 +351,13 @@ function ReportCard({
             </Link>
             {item.error_words.length > 0 ? (
               <span className="text-xs text-[var(--ec-muted)]">
-                相关的词：{item.error_words.map((w) => w.word).join(" · ")}
+                相关的词：
+                {item.error_words.map((w, wi) => (
+                  <span key={`${w.word}-${wi}`}>
+                    {wi > 0 ? " · " : ""}
+                    <WordText text={w.word} showIpa={showIpa} />
+                  </span>
+                ))}
               </span>
             ) : null}
           </div>

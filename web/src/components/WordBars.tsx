@@ -1,4 +1,5 @@
 import { encodeWordRows, wordBarAriaLabel, type RawWordScore, type WordRow } from "@/lib/word-encoding";
+import { WordText } from "./WordText";
 
 /**
  * 词级反馈：**长度编码**（task-14 C）。
@@ -11,10 +12,13 @@ export function WordBars({
   words,
   isChild,
   showAll = true,
+  showIpa = false,
 }: {
   words: RawWordScore[];
   isChild: boolean;
   showAll?: boolean;
+  /** task-87：单词可点查看音标 */
+  showIpa?: boolean;
 }) {
   const { all, problem, worst } = encodeWordRows(words);
 
@@ -38,7 +42,7 @@ export function WordBars({
         ) : (
           <ul className="mt-1 flex flex-col gap-1">
             {problem.map((row) => (
-              <WordBarRow key={`p-${row.index}-${row.word}`} row={row} isChild={isChild} markWorst={row === problem[0]} />
+              <WordBarRow key={`p-${row.index}-${row.word}`} row={row} isChild={isChild} markWorst={row === problem[0]} showIpa={showIpa} />
             ))}
           </ul>
         )}
@@ -57,6 +61,7 @@ export function WordBars({
                 row={row}
                 isChild={isChild}
                 markWorst={worst !== null && row.index === worst.index && row.problem}
+                showIpa={showIpa}
               />
             ))}
           </ul>
@@ -70,10 +75,12 @@ function WordBarRow({
   row,
   isChild,
   markWorst,
+  showIpa = false,
 }: {
   row: WordRow;
   isChild: boolean;
   markWorst: boolean;
+  showIpa?: boolean;
 }) {
   return (
     <li
@@ -86,7 +93,7 @@ function WordBarRow({
     >
       <span className={`w-24 shrink-0 truncate ${row.problem ? "font-bold" : "font-medium"}`} title={row.word}>
         {row.problem ? "⚠️ " : ""}
-        {row.word}
+        {showIpa ? <WordText text={row.word} showIpa={showIpa} /> : row.word}
       </span>
       {/* 条长 = 分数（唯一主编码）；颜色对所有行相同，不编码任何信息 */}
       <span

@@ -5,6 +5,7 @@ import { sentences } from "@/db/schema";
 import { getCurrentUser } from "@/lib/auth";
 import { getCapabilities } from "@/lib/voice";
 import { FlowClient } from "./FlowClient";
+import { getPrefs, effectiveShowWordIpa } from "@/lib/prefs";
 
 export const dynamic = "force-dynamic";
 
@@ -33,6 +34,7 @@ export default async function FlowPage({
   return (
     <FlowClient
       isChild={user.isChild}
+      showWordIpa={effectiveShowWordIpa(await getPrefs(user.id, user.isChild), user.isChild)}
       userLevel={user.cefrLevel}
       corpus={corpus}
       voiceReachable={caps.reachable}

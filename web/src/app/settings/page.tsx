@@ -42,6 +42,7 @@ export default async function SettingsPage() {
         autoIllustrate: user.autoIllustrate,
         gender: user.gender,
         storySentences: user.storySentences,
+        showWordIpa: prefs.showWordIpa,
       }}
       prefs={prefs}
       usage={usage}

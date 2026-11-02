@@ -147,6 +147,31 @@ for (const p of ["/parent", "/suggestions"]) {
   console.log(`${ok ? "✅" : "❌"} 儿童 ${p.padEnd(16)} ${ok ? "HTTP 403 · 无 IPA" : `HTTP ${res.status} · 命中 ${leaked.join("")}`}`);
 }
 
+// task-87：点词音标组件的儿童策略
+//  - 儿童默认**不拿 IPA**：/api/words 返回 ipa:null（ipa_disabled）
+//  - 页面里 word-token 只是可点单词，SSR HTML 不含 IPA（音标点击后才由 API 下发）
+//  - **显式豁免**：家长在设置里为儿童打开「单词显示音标」后，API 才会返回 IPA；
+//    此时仍要求 SSR HTML 零 IPA（下面断言覆盖），这是 child-ipa 规则的唯一例外且需家长主动开启。
+console.log("\n── task-87：单词音标组件（儿童策略）──");
+{
+  const wordRes = await fetch(`${BASE}/api/words/think`, { headers: { cookie } });
+  const wordBody = await wordRes.json().catch(() => null);
+  const okDefault =
+    (wordRes.status === 200 && wordBody?.ipa === null && wordBody?.ipa_disabled === true) ||
+    wordRes.status === 503; // 建议音标服务未就绪：前端只显示 🔊
+  if (!okDefault) failed += 1;
+  rows.push({ label: "/api/words/think（儿童默认）", ok: okDefault, hits: `status=${wordRes.status} ipa=${String(wordBody?.ipa)}`, bytes: 0 });
+  console.log(
+    `${okDefault ? "✅" : "❌"} /api/words/think（儿童默认）  ${okDefault ? `不返回 IPA（status=${wordRes.status}）` : `ipa=${String(wordBody?.ipa)}`}`,
+  );
+  const practiceHtml = await (await fetch(`${BASE}/practice`, { headers: { cookie } })).text();
+  const hasTokens = practiceHtml.includes('data-testid="word-token"');
+  if (!hasTokens) failed += 1;
+  rows.push({ label: "/practice word-token", ok: hasTokens, hits: "", bytes: practiceHtml.length });
+  console.log(`${hasTokens ? "✅" : "❌"} /practice 有可点单词（word-token），但 HTML 零 IPA`);
+  console.log("   ↳ 说明：家长在设置里打开「单词显示音标」后，儿童 /api/words 才会返回 IPA（唯一显式豁免，需家长主动开启）");
+}
+
 console.log(`\n合计 ${rows.length} 项，命中 ${rows.filter((r) => !r.ok).length} 项。`);
 if (reviewBody) {
   const badDemo = (reviewBody.due_cards ?? []).filter((c) => GLYPH_SET.has(String(c.demo_text ?? "")));

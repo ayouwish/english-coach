@@ -18,6 +18,8 @@ interface SettingsUser {
   gender: string | null;
   /** task-81：故事句子数（null = 角色默认） */
   storySentences?: number | null;
+  /** task-87：单词显示音标（null = 角色默认：成人开/儿童关） */
+  showWordIpa?: boolean | null;
 }
 
 export function SettingsForm({
@@ -42,6 +44,9 @@ export function SettingsForm({
   const [gender, setGender] = useState(user.gender ?? "");
   const roleDefault = user.isChild ? 5 : 8;
   const [storySentences, setStorySentences] = useState<number | null>(user.storySentences ?? null);
+  const [showWordIpa, setShowWordIpa] = useState<boolean | null>(user.showWordIpa ?? null);
+  const wordIpaDefault = !user.isChild;
+  const wordIpaOn = showWordIpa ?? wordIpaDefault;
   const [previewBusy, setPreviewBusy] = useState(false);
   const [previewError, setPreviewError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -89,6 +94,7 @@ export function SettingsForm({
         auto_illustrate: autoIllustrate,
         gender: gender || null,
         story_sentences: storySentences,
+        show_word_ipa: showWordIpa,
       };
       if (!user.isChild) {
         payload.daily_limit_minutes = limit;
@@ -197,6 +203,31 @@ export function SettingsForm({
             只用于插画提示词与形象筛选，不会展示给其他人。
           </span>
         </label>
+
+        {/* task-87：单词显示音标（成人默认开、儿童默认关） */}
+        <div className="rounded-xl bg-[#f8f9ff] p-3" data-testid="word-ipa-section">
+          <label className="flex items-center gap-2 text-sm font-semibold">
+            <input
+              type="checkbox"
+              data-testid="word-ipa-toggle"
+              checked={wordIpaOn}
+              onChange={(e) => setShowWordIpa(e.target.checked)}
+            />
+            🔤 单词显示音标（{user.isChild ? "孩子" : "我"}当前{wordIpaOn ? "显示" : "不显示"}）
+          </label>
+          <p className="mt-1 text-xs text-[var(--ec-muted)]">
+            开着时点句子里的单词会显示音标（例如 think）；关掉后仍可点 🔊 听发音。
+            {user.isChild ? "孩子默认关闭，家长可以在这里打开。" : "成人默认打开。"}
+          </p>
+          <button
+            type="button"
+            className="ec-btn ec-btn-ghost mt-1 !px-2 !py-0.5 text-xs"
+            data-testid="word-ipa-reset"
+            onClick={() => setShowWordIpa(null)}
+          >
+            恢复默认（{wordIpaDefault ? "显示" : "不显示"}）
+          </button>
+        </div>
 
         {/* task-81：故事句子数（账号默认） */}
         <div className="rounded-xl bg-[#f8f9ff] p-3" data-testid="story-sentences-section">

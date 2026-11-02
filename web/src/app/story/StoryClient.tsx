@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { Recorder } from "@/components/Recorder";
+import { WordText } from "@/components/WordText";
 import { harderLevel, simplerLevel } from "@/lib/levels";
 import { consecutiveDays, groupStoriesByDay, streakMessage } from "@/lib/story-stats";
 
@@ -45,6 +46,7 @@ export function StoryClient({
   viewerId,
   isChild,
   defaultSentences = 8,
+  showWordIpa = true,
   defaultLevel,
   levels,
   levelSuggestion = { suggest: null, message: null },
@@ -53,6 +55,8 @@ export function StoryClient({
   isChild: boolean;
   /** task-81：账号默认句子数（儿童 5 / 成人 8 / 用户配置） */
   defaultSentences?: number;
+  /** task-87：单词是否显示音标 */
+  showWordIpa?: boolean;
   defaultLevel: string;
   levels: string[];
   /** 难度自适应提示（task-50 P2）：只提示，不强制 */
@@ -532,6 +536,12 @@ export function StoryClient({
                   aria-label={`第 ${i + 1} 句英文`}
                   className="mt-1 w-full rounded-lg border border-[#d9dcf0] px-2 py-1 text-base"
                 />
+                {/* task-87：预览里点词看音标 */}
+                {s.en.trim() ? (
+                  <p className="mt-1 text-xs text-[var(--ec-muted)]" data-testid="story-preview-words">
+                    <WordText text={s.en} showIpa={showWordIpa} />
+                  </p>
+                ) : null}
               </li>
             ))}
           </ol>

@@ -10,6 +10,8 @@ import { StoryAudioReplay } from "@/components/StoryAudioReplay";
 import { SuggestButton } from "@/components/SuggestButton";
 import { RetellPanel } from "@/components/RetellPanel";
 import { splitSentences } from "@/lib/sentence-split";
+import { WordText } from "@/components/WordText";
+import { getPrefs, effectiveShowWordIpa } from "@/lib/prefs";
 
 export const dynamic = "force-dynamic";
 
@@ -22,6 +24,7 @@ export default async function StoryDetailPage({ params }: { params: Promise<{ id
   await ensureBootstrap();
   const user = await getCurrentUser();
   if (!user) redirect("/login");
+  const showWordIpa = effectiveShowWordIpa(await getPrefs(user.id, user.isChild), user.isChild);
   const { id } = await params;
   const material = await getMaterial(id);
   if (!material || material.kind !== "story") {
@@ -99,7 +102,9 @@ export default async function StoryDetailPage({ params }: { params: Promise<{ id
         <h2 className="text-base font-extrabold">英文全文</h2>
         <ol className="mt-2 list-decimal pl-5 text-sm leading-relaxed">
           {sentences.map((s, i) => (
-            <li key={i}>{s}</li>
+            <li key={i}>
+              <WordText text={s} showIpa={showWordIpa} />
+            </li>
           ))}
         </ol>
         {/* task-83：原始输入留存 —— 当时讲的原话 + 原声播放器 */}

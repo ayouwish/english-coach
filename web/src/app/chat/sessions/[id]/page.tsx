@@ -4,12 +4,13 @@ import { asc, eq } from "drizzle-orm";
 import { ensureBootstrap, getDb } from "@/db";
 import { chatMessages, chatScenarios, chatSessions, users } from "@/db/schema";
 import { ChatSessionAudio } from "@/components/ChatSessionAudio";
+import { WordText } from "@/components/WordText";
 import { PronunciationNote } from "@/components/PronunciationNote";
 import { parsePron } from "@/lib/chat-pronunciation";
 import { parseSessionSummary } from "@/lib/chat-summary";
 import { ttsUrl } from "@/lib/tts-url";
 import { getCurrentUser } from "@/lib/auth";
-import { getPrefs } from "@/lib/prefs";
+import { getPrefs, effectiveShowWordIpa } from "@/lib/prefs";
 import { effectiveTtsRate } from "@/lib/tts-rate";
 import type { DialogueCorrection } from "@/lib/types";
 
@@ -49,6 +50,7 @@ export default async function ChatSessionDetailPage({ params }: { params: Promis
   const summary = parseSessionSummary(session.summaryJson);
   const prefs = await getPrefs(user.id, user.isChild);
   const speechRate = effectiveTtsRate(user, prefs);
+  const showWordIpa = effectiveShowWordIpa(prefs, user.isChild);
   const [owner] = await db.select({ displayName: users.displayName }).from(users).where(eq(users.id, user.id)).limit(1);
 
   return (
@@ -105,7 +107,9 @@ export default async function ChatSessionDetailPage({ params }: { params: Promis
                   m.role === "user" ? "self-end bg-[var(--ec-primary)] text-white" : "self-start bg-[#f8f9ff]"
                 }`}
               >
-                <p className="font-medium">{m.text}</p>
+                <p className="font-medium">
+                  <WordText text={m.text} showIpa={showWordIpa} />
+                </p>
                 {m.textZh ? <p className="mt-0.5 text-xs opacity-80">{m.textZh}</p> : null}
                 {/* task-74 ②：历史里也保留「更自然：…」校正提示 */}
                 {correction ? (

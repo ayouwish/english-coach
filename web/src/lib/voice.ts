@@ -34,6 +34,8 @@ export const TIMEOUTS = {
   avatar: 90_000,
   /** 对话整段音频拼接（task-68）：多段合成，给 120s */
   concat: 120_000,
+  /** 单词音标（task-87）：查字典，很快 */
+  word_ipa: 8_000,
   pronounce: 60_000,
   tts: 20_000,
   feedback: 40_000,
@@ -350,6 +352,36 @@ export async function callAudioConcat(parts: ConcatPart[], gapMs = 250): Promise
     throw new VoiceError(code, `voice /v1/audio/concat ${res.status}：${text.slice(0, 120)}`, res.status);
   }
   return { bytes: new Uint8Array(await res.arrayBuffer()), contentType: res.headers.get("content-type") ?? "audio/wav" };
+}
+
+export interface WordIpaResult {
+  word: string;
+  ipa: string | null;
+  variants?: string[];
+  source?: string | null;
+  syllables?: number | null;
+}
+
+/** 单词 IPA 查询（task-87）：voice `/v1/words/ipa`。404 = 词典未收录（ipa:null）。 */
+export async function callWordIpa(word: string): Promise<WordIpaResult> {
+  try {
+    const res = await fetch(`${VOICE_SERVICE_URL}/v1/words/ipa?word=${encodeURIComponent(word)}`, {
+      signal: AbortSignal.timeout(TIMEOUTS.word_ipa),
+      cache: "no-store",
+    });
+    if (res.status === 404) {
+      return { word, ipa: null, variants: [], source: null, syllables: null };
+    }
+    if (!res.ok) {
+      throw new VoiceError("provider_error", `voice /v1/words/ipa ${res.status}`, res.status);
+    }
+    return (await res.json()) as WordIpaResult;
+  } catch (err) {
+    if (err instanceof VoiceError) throw err;
+    const e = err as Error;
+    const timeout = e.name === "TimeoutError" || e.name === "AbortError";
+    throw new VoiceError(timeout ? "provider_timeout" : "voice_unreachable", `voice 不可达（单词音标）：${e.message}`);
+  }
 }
 
 /** 预置形象库（task-64）：voice `/v1/image/avatar/presets` 兜底读取 */

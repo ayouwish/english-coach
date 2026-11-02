@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { Recorder } from "@/components/Recorder";
 import type { ChatPron } from "@/lib/chat-pronunciation";
 import { ChatSessionAudio } from "@/components/ChatSessionAudio";
+import { WordText } from "@/components/WordText";
 import { PronunciationNote } from "@/components/PronunciationNote";
 import { ttsUrl } from "@/lib/tts-url";
 import type { DialogueCorrection } from "@/lib/types";
@@ -68,6 +69,7 @@ interface TurnResponse {
 
 export function ChatClient({
   isChild,
+  showWordIpa = true,
   age,
   scenarios,
   customScenarios = [],
@@ -79,6 +81,8 @@ export function ChatClient({
   age: number;
   scenarios: ScenarioItem[];
   hiddenCount: number;
+  /** task-87：单词是否显示音标 */
+  showWordIpa?: boolean;
   /** task-79：当前用户的自定义场景（自定义优先分组） */
   customScenarios?: ScenarioItem[];
   usage: Usage;
@@ -838,7 +842,9 @@ export function ChatClient({
                     : "self-start bg-white shadow-sm"
                 }`}
               >
-                <p className="font-medium">{m.text}</p>
+                <p className="font-medium">
+                  <WordText text={m.text} showIpa={showWordIpa} />
+                </p>
                 {m.text_zh ? <p className="mt-0.5 text-xs opacity-80">{m.text_zh}</p> : null}
                 {m.correction?.has_error ? (
                   <div className="mt-2 rounded-lg bg-[#fff3d6] p-2 text-xs text-[#7a4d00]">

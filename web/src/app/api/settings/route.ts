@@ -40,6 +40,8 @@ export const PATCH = route(async (req: NextRequest) => {
     gender?: string | null;
     /** task-81：故事句子数；null = 恢复角色默认 */
     story_sentences?: number | null;
+    /** task-87：单词显示音标；null = 恢复角色默认（成人开/儿童关） */
+    show_word_ipa?: boolean | null;
   } | null;
   if (!body) throw new HttpError(400, "bad_request", "请求体必须是 JSON");
 
@@ -97,6 +99,7 @@ export const PATCH = route(async (req: NextRequest) => {
     correctionLevel: (body.correction_level as CorrectionLevel | undefined) ?? undefined,
     ttsVoice: body.tts_voice !== undefined ? (body.tts_voice || null) : undefined,
     ttsRate: (body.tts_rate as "slow" | "normal" | undefined) ?? undefined,
+    showWordIpa: body.show_word_ipa !== undefined ? (body.show_word_ipa === null ? null : Boolean(body.show_word_ipa)) : undefined,
   });
 
   await db.insert(auditLog).values({

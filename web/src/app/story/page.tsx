@@ -9,6 +9,7 @@ import { StoryClient } from "./StoryClient";
 import { StoryRecordingsSection } from "@/components/StoryRecordingsSection";
 import { listRecordings } from "@/lib/story-recordings";
 import { effectiveStorySentences } from "@/lib/story-sentences";
+import { getPrefs, effectiveShowWordIpa } from "@/lib/prefs";
 
 export const dynamic = "force-dynamic";
 
@@ -70,6 +71,7 @@ export default async function StoryPage() {
       <StoryClient
         viewerId={user.id}
         defaultSentences={effectiveStorySentences(user)}
+        showWordIpa={effectiveShowWordIpa(await getPrefs(user.id, user.isChild), user.isChild)}
         isChild={user.isChild}
         defaultLevel={defaultLevel}
         levels={[...CEFR_LEVELS]}

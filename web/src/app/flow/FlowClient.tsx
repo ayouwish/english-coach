@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import { ScopedDiagnosisCard } from "@/components/ScopedDiagnosisCard";
+import { WordText } from "@/components/WordText";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { EncouragementBox } from "@/components/EncouragementBox";
 import { RetellPanel } from "@/components/RetellPanel";
@@ -50,6 +51,7 @@ const COUNTS = [5, 10, 15];
  */
 export function FlowClient({
   isChild,
+  showWordIpa = true,
   userLevel,
   corpus,
   voiceReachable,
@@ -58,6 +60,8 @@ export function FlowClient({
   initialMaterialId = null,
 }: {
   isChild: boolean;
+  /** task-87：单词是否显示音标 */
+  showWordIpa?: boolean;
   userLevel: string;
   corpus: CorpusSentence[];
   voiceReachable: boolean;
@@ -1357,7 +1361,7 @@ export function FlowClient({
       {item ? (
         <section className="ec-card">
           <p className={isChild ? "text-3xl font-extrabold leading-snug" : "text-2xl font-extrabold leading-snug"}>
-            {item.text}
+            <WordText text={item.text} showIpa={showWordIpa} />
           </p>
           <div className="mt-4">
             <Recorder onRecorded={submit} disabled={busy} isChild={isChild} recording={busy} />

@@ -155,6 +155,8 @@ if (!fs.existsSync(DB_PATH)) {
   );
   check("不出现「没听到」提示（这是正常结果）", !normal.html.includes("这次好像没听到你的声音"));
   check("儿童页不出现 IPA 字形", !/[θðɹŋæʃɪʌɔɜəʊʒɑɒɛ]/.test(normal.html));
+  // task-87：单词可点（音标点击后才由 API 下发；儿童默认不返回 IPA）
+  check("★ 练习句子的单词可点（word-token）", normal.html.includes('data-testid="word-token"'));
   console.log(`\n   ↳ 词条 DOM 片段：${wordRow.replace(/\s+/g, " ").slice(0, 300)}`);
   const radarSnippet =
     /<svg[^>]*data-testid="score-radar"[\s\S]{0,3000}?<\/svg>/.exec(normal.html)?.[0] ?? "";

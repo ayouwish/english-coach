@@ -1,0 +1,245 @@
+#!/usr/bin/env node
+/**
+ * task-87 验收：点单词显示音标（proxy API + WordText 组件 + 儿童策略）。
+ *
+ * 断言：
+ *  1. GET /api/words/think → 200 ipa；未知词 → 404 ipa:null；非法/超长 → 400
+ *  2. LRU 缓存：第二次同词不再调 voice；批量 ≤50、去重、缺失词 null
+ *  3. 儿童默认 ipa:null（零 IPA）；家长在设置打开后儿童可拿到 IPA（显式豁免 child-ipa）
+ *  4. voice 不可用 → 503 可读
+ *  5. 页面 SSR 含 word-token（练习/连读/对话/故事详情/对话详情/改写预览源码）
+ *  6. WordText：浮层结构、🔊 slow TTS、Esc/滚屏关闭、同一时刻只开一个
+ *
+ * 用法：node scripts/check-words.mjs（自起 stub voice + 独立 web 实例）
+ */
+import fs from "node:fs";
+import http from "node:http";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+import { spawn } from "node:child_process";
+import Database from "better-sqlite3";
+
+const WEB_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+const PORT = Number(process.env.WORDS_PORT ?? 3052);
+const BASE = `http://127.0.0.1:${PORT}`;
+const DB_PATH = process.env.DB_PATH ?? path.join(WEB_ROOT, "data/app.db");
+
+let failed = 0;
+const check = (name, cond, detail = "") => {
+  if (!cond) failed += 1;
+  console.log(`${cond ? "✅" : "❌"} ${name}${detail ? ` — ${detail}` : ""}`);
+};
+const IPA_CHARS = ["θ", "ð", "ɹ", "ŋ", "æ", "ʃ", "ɪ", "ʌ", "ɔ", "ɜ", "ə", "ʊ", "ʒ", "ɑ", "ɒ", "ɛ", "ˈ", "ˌ"];
+const leaks = (t) => IPA_CHARS.filter((c) => t.includes(c));
+
+async function login(email, password) {
+  const res = await fetch(`${BASE}/api/auth/login`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ email, password }),
+  });
+  const raw = typeof res.headers.getSetCookie === "function" ? res.headers.getSetCookie() : [];
+  return (raw.find((c) => c.startsWith("ec_session=")) ?? raw[0] ?? "").split(";")[0];
+}
+const getJson = async (pathname, cookie) => {
+  const res = await fetch(`${BASE}${pathname}`, { headers: cookie ? { cookie } : {} });
+  return { status: res.status, json: await res.json().catch(() => null) };
+};
+
+const created = [];
+function cleanup() {
+  const db = new Database(DB_PATH);
+  for (const id of created) db.prepare("DELETE FROM reading_materials WHERE id = ?").run(id);
+  db.prepare("UPDATE user_prefs SET show_word_ipa = NULL WHERE user_id IN ('u-girl','u-dad')").run();
+  db.close();
+}
+
+async function main() {
+  console.log(`=== 点词显示音标验收 @ ${BASE} ===`);
+  const dadCookie = await login("dad@example.com", "Dad12345!");
+  const girlCookie = await login("girl@example.com", "Girl12345!");
+  check("登录（成人 + 儿童）", Boolean(dadCookie) && Boolean(girlCookie));
+
+  // ① 单词 API（成人）
+  const think = await getJson("/api/words/think", dadCookie);
+  check("★ GET /api/words/think → 200 ipa=θɪŋk", think.status === 200 && think.json?.ipa === "θɪŋk", JSON.stringify(think.json).slice(0, 90));
+  const callsAfterFirst = stubWordCalls;
+  const again = await getJson("/api/words/think", dadCookie);
+  check("★ LRU 缓存命中（第二次不再调用 voice）", again.status === 200 && stubWordCalls === callsAfterFirst, `voice calls delta=${stubWordCalls - callsAfterFirst}`);
+
+  const unknown = await getJson("/api/words/zzzqqq", dadCookie);
+  check("★ 未收录词 → 404 且 ipa:null", unknown.status === 404 && unknown.json?.ipa === null, `status=${unknown.status}`);
+  const invalid = await getJson("/api/words/123", dadCookie);
+  check("非法单词 → 400", invalid.status === 400, `status=${invalid.status}`);
+  const tooLong = await getJson(`/api/words/${"a".repeat(60)}`, dadCookie);
+  check("超长单词 → 400", tooLong.status === 400, `status=${tooLong.status}`);
+
+  const batch = await getJson("/api/words?words=think,there,zzzqqq,think", dadCookie);
+  check("★ 批量接口：去重且缺失词 ipa:null", batch.status === 200 && (batch.json?.words ?? []).length === 3 && (batch.json?.words ?? []).some((w) => w.word === "zzzqqq" && w.ipa === null), JSON.stringify(batch.json).slice(0, 120));
+  const tooMany = await getJson(`/api/words?words=${Array.from({ length: 51 }, (_, i) => `w${i}`).join(",")}`, dadCookie);
+  check("批量 >50 → 400", tooMany.status === 400, `status=${tooMany.status}`);
+
+  // ② 儿童策略
+  const girlDefault = await getJson("/api/words/think", girlCookie);
+  check("★ 儿童默认 → ipa:null（零 IPA 规则）", girlDefault.status === 200 && girlDefault.json?.ipa === null && girlDefault.json?.ipa_disabled === true, JSON.stringify(girlDefault.json).slice(0, 80));
+  const batchGirl = await getJson("/api/words?words=think,there", girlCookie);
+  check("儿童批量同样不返回 IPA", batchGirl.status === 200 && (batchGirl.json?.words ?? []).every((w) => w.ipa === null));
+  const enable = await fetch(`${BASE}/api/settings`, {
+    method: "PATCH",
+    headers: { "content-type": "application/json", cookie: girlCookie },
+    body: JSON.stringify({ show_word_ipa: true }),
+  });
+  const girlOn = await getJson("/api/words/think", girlCookie);
+  check("★ 家长打开开关后儿童可拿到 IPA（child-ipa 显式豁免）", enable.status === 200 && girlOn.status === 200 && girlOn.json?.ipa === "θɪŋk", `ipa=${String(girlOn.json?.ipa)}`);
+  const girlPageOn = await (await fetch(`${BASE}/practice`, { headers: { cookie: girlCookie } })).text();
+  check("即使开关打开，儿童 HTML 仍零 IPA（音标只在点击后由 API 下发）", leaks(girlPageOn).length === 0, `leaked=${leaks(girlPageOn).join("")}`);
+  const reset = await fetch(`${BASE}/api/settings`, {
+    method: "PATCH",
+    headers: { "content-type": "application/json", cookie: girlCookie },
+    body: JSON.stringify({ show_word_ipa: null }),
+  });
+  const girlReset = await getJson("/api/words/think", girlCookie);
+  check("恢复默认后儿童又不返回 IPA", reset.status === 200 && girlReset.json?.ipa === null);
+
+  // ③ voice 不可用 → 503 可读
+  wordIpaMode = "503";
+  const unavailable = await getJson("/api/words/banana", dadCookie);
+  check("★ voice 不可用 → 503 可读提示", unavailable.status === 503 && /音标服务暂时不可用/.test(unavailable.json?.error?.message ?? ""), String(unavailable.json?.error?.message ?? "").slice(0, 60));
+  wordIpaMode = "ok";
+
+  // ④ 页面 SSR：word-token
+  const practiceHtml = await (await fetch(`${BASE}/practice`, { headers: { cookie: dadCookie } })).text();
+  check("★ /practice HTML 含 word-token", practiceHtml.includes('data-testid="word-token"'));
+  // /flow 的大字句、/chat 的消息都在「开始之后」才出现（client 阶段），SSR 里没有；
+  // 用源码级断言 + 对话详情页 SSR 已经覆盖真实渲染。
+  const flowSrcWords = fs.readFileSync(path.join(WEB_ROOT, "src/app/flow/FlowClient.tsx"), "utf8");
+  check("★ /flow 大字句用 WordText（客户端阶段）", /<WordText text=\{item\.text\}/.test(flowSrcWords));
+  const chatSrcWords = fs.readFileSync(path.join(WEB_ROOT, "src/app/chat/ChatClient.tsx"), "utf8");
+  check("★ /chat 消息用 WordText（客户端阶段）", /<WordText text=\{m\.text\}/.test(chatSrcWords));
+  const mk = await fetch(`${BASE}/api/materials`, {
+    method: "POST",
+    headers: { "content-type": "application/json", cookie: girlCookie },
+    body: JSON.stringify({ title: `Words Story ${Date.now()}`, text: "I think this is thin. The weather is good.", kind: "story", level: "A2", source: "text" }),
+  });
+  const mat = await mk.json().catch(() => null);
+  if (mat?.id) created.push(mat.id);
+  const storyDetail = await (await fetch(`${BASE}/story/${mat?.id}`, { headers: { cookie: dadCookie } })).text();
+  check("★ /story/[id] HTML 含 word-token", storyDetail.includes('data-testid="word-token"'));
+  const storySrc = fs.readFileSync(path.join(WEB_ROOT, "src/app/story/StoryClient.tsx"), "utf8");
+  check("故事页（改写预览组件在 client）源码含 story-preview-words", storySrc.includes('data-testid="story-preview-words"'));
+
+  // 对话详情（服务端渲染）也接入了 WordText
+  const sessionStart = await fetch(`${BASE}/api/chat/sessions`, {
+    method: "POST",
+    headers: { "content-type": "application/json", cookie: dadCookie },
+    body: JSON.stringify({ scenario_id: "adult_coffee_order" }),
+  });
+  const sess = await sessionStart.json().catch(() => null);
+  if (sess?.session_id) {
+    await fetch(`${BASE}/api/chat/sessions/${sess.session_id}/turn`, {
+      method: "POST",
+      headers: { "content-type": "application/json", cookie: dadCookie },
+      body: JSON.stringify({ text: "A flat white, please." }),
+    });
+    const detail = await (await fetch(`${BASE}/chat/sessions/${sess.session_id}`, { headers: { cookie: dadCookie } })).text();
+    check("★ 对话历史详情 HTML 含 word-token", detail.includes('data-testid="word-token"'));
+    const childDetail = await (await fetch(`${BASE}/chat/sessions/${sess.session_id}`, { headers: { cookie: girlCookie } })).text();
+    check("对话详情儿童/他人不泄漏（404 或零 IPA）", childDetail.includes("404") || leaks(childDetail).length === 0);
+  }
+
+  // ⑤ WordText 组件结构 / 关闭行为 / slow TTS（源码级）
+  const wt = fs.readFileSync(path.join(WEB_ROOT, "src/components/WordText.tsx"), "utf8");
+  check("★ WordText 渲染 word-token 按钮", wt.includes('data-testid="word-token"') && wt.includes("type=\"button\""));
+  check("★ 浮层含音标 + 🔊 + 关闭", wt.includes('data-testid="word-ipa-popover"') && wt.includes('data-testid="word-ipa-play"') && wt.includes('data-testid="word-ipa-close"'));
+  check("★ 缺少音标显示「暂无音标」（仍可 🔊）", wt.includes("暂无音标") && wt.includes("可以先点 🔊 听发音"));
+  check("★ Esc / 滚屏 / 点空白关闭，同一时刻只开一个", wt.includes('e.key === "Escape"') && wt.includes('window.addEventListener("scroll"') && wt.includes("activeCloser"));
+  check("★ 听发音用 slow 语速 TTS（/api/tts?text=word&rate=slow）", /rate:\s*"slow"/.test(wt) && wt.includes("/api/tts?"));
+  check("★ 保留标点空格（tokenize 只切单词）", wt.includes("isWord") && /slice\(last, match.index\)/.test(wt));
+
+  // ⑥ 设置页有开关
+  const settingsHtml = await (await fetch(`${BASE}/settings`, { headers: { cookie: dadCookie } })).text();
+  check("★ 设置页有「单词显示音标」开关", settingsHtml.includes('data-testid="word-ipa-toggle"') && /单词显示音标/.test(settingsHtml));
+  const girlSettings = await (await fetch(`${BASE}/settings`, { headers: { cookie: girlCookie } })).text();
+  check("儿童设置页也有开关（家长可为孩子打开）", girlSettings.includes('data-testid="word-ipa-toggle"'));
+}
+
+// ── stub voice ────────────────────────────────────────────────────────────────
+let stubWordCalls = 0;
+let wordIpaMode = "ok";
+const TINY_WAV = Buffer.from("UklGRiQAAABXQVZFZm10IBAAAAABAAEAQB8AAEAfAAABAAgAZGF0YQAAAAA=", "base64");
+const stub = http.createServer((req, res) => {
+  const url = new URL(String(req.url), "http://x");
+  const send = (status, obj) => {
+    res.statusCode = status;
+    res.setHeader("content-type", "application/json");
+    res.end(JSON.stringify(obj));
+  };
+  if (url.pathname === "/v1/health") {
+    send(200, { status: "ok", version: "stub", mode: "mock", providers: {}, capabilities: { phoneme_level: true, word_ipa: true } });
+    return;
+  }
+  if (url.pathname === "/v1/words/ipa") {
+    stubWordCalls += 1;
+    if (wordIpaMode === "503") {
+      send(503, { error: { code: "provider_unavailable", message: "stub 音标不可用" } });
+      return;
+    }
+    const word = (url.searchParams.get("word") ?? "").toLowerCase();
+    const dict = { think: "θɪŋk", there: "ðɛr", thin: "θɪn", weather: "ˈwɛðɚ", good: "ɡʊd", a: "ə", "flat": "flæt", white: "waɪt" };
+    if (dict[word]) {
+      send(200, { word, ipa: dict[word], variants: [], source: "cmudict", syllables: 1 });
+      return;
+    }
+    send(404, { error: { code: "not_found", message: "not in dictionary" } });
+    return;
+  }
+  if (url.pathname === "/v1/tts") {
+    res.statusCode = 200;
+    res.setHeader("content-type", "audio/wav");
+    res.end(TINY_WAV);
+    return;
+  }
+  send(404, { error: { code: "not_found", message: "stub: no route" } });
+});
+
+try {
+  await new Promise((r) => stub.listen(8141, "127.0.0.1", r));
+  const child = spawn("pnpm", ["exec", "next", "start", "-p", String(PORT)], {
+    detached: true,
+    cwd: WEB_ROOT,
+    env: { ...process.env, VOICE_SERVICE_URL: "http://127.0.0.1:8141" },
+    stdio: "ignore",
+  });
+  try {
+    let up = false;
+    for (let i = 0; i < 60; i++) {
+      await new Promise((r) => setTimeout(r, 500));
+      try {
+        const r = await fetch(`${BASE}/api/health`, { signal: AbortSignal.timeout(1500) });
+        if (r.ok) {
+          up = true;
+          break;
+        }
+      } catch {
+        /* retry */
+      }
+    }
+    check("stub-voice web 实例启动成功（3052）", up);
+    if (up) await main();
+    else failed += 1;
+  } finally {
+    try {
+      process.kill(-child.pid, "SIGTERM");
+    } catch {
+      /* ignore */
+    }
+  }
+} catch (err) {
+  failed += 1;
+  console.error("守卫崩溃：", err);
+} finally {
+  stub.close();
+  cleanup();
+  console.log(failed === 0 ? "结论：全部通过 ✅" : "结论：存在失败 ❌");
+  process.exit(failed > 0 ? 1 : 0);
+}
