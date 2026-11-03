@@ -31,8 +31,12 @@ export default async function FlowPage({
     .filter((r) => r.source !== "flow-custom")
     .map((r) => ({ id: r.id, text: r.text, level: r.level }));
 
+  const materialParam = (await searchParams)?.material ?? null;
   return (
     <FlowClient
+      // task-93：参数变化（?material=x → /flow）时强制重挂载，避免 mode/items/phase 残留
+      // 无参数进入 = 全新 corpus 状态；手动切 tab 不受影响（同一实例内切换）
+      key={materialParam ?? "corpus"}
       isChild={user.isChild}
       showWordIpa={effectiveShowWordIpa(await getPrefs(user.id, user.isChild))}
       userLevel={user.cefrLevel}
@@ -40,7 +44,7 @@ export default async function FlowPage({
       voiceReachable={caps.reachable}
       ocrAvailable={caps.capabilities.ocr === true}
       heicAvailable={caps.capabilities.heic === true}
-      initialMaterialId={(await searchParams)?.material ?? null}
+      initialMaterialId={materialParam}
     />
   );
 }

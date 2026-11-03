@@ -537,6 +537,38 @@ try {
     const pendingDiscard = /本轮还没评完的 pending 不等待、直接丢弃/.test(flowSrc);
     check("★ 说明 pending 处理策略（直接丢弃，不混入新一轮）", pendingDiscard);
     check("★ 从故事进入时新 attempts 仍带 material_id（两轮都入库）", /initialMaterialId[^\n]*material_id|form\.append\("material_id", initialMaterialId\)/.test(flowSrc));
+
+  // ── task-93：从「我的故事」返回后不残留材料状态（无参数进入 = 语料默认）──────
+  {
+    const pageSrc = fs.readFileSync(path.join(WEB_ROOT, "src/app/flow/page.tsx"), "utf8");
+    const flowSrcT93 = fs.readFileSync(path.join(WEB_ROOT, "src/app/flow/FlowClient.tsx"), "utf8");
+    check("★ 重置逻辑：page 给 FlowClient 传 key（参数变化强制重挂载）", /key=\{materialParam \?\? "corpus"\}/.test(pageSrc) && pageSrc.includes("initialMaterialId={materialParam}"));
+    check("★ 无参数进入默认 mode=corpus（源码）", /useState<"corpus" \| "materials" \| "custom">\(initialMaterialId \? "materials" : "corpus"\)/.test(flowSrcT93));
+    check("导航链接保持无参数 /flow（不加 reset 参数）", !/href="\/flow\?/.test(fs.readFileSync(path.join(WEB_ROOT, "src/components/NavBar.tsx"), "utf8")));
+
+    const plain = (await (await fetch(`${BASE}/flow`, { headers: { cookie: girl } })).text()).replace(/<!--[\s\S]*?-->/g, "");
+    check("★ 无参数 /flow → 语料 tab 选中（flow-mode-corpus aria-pressed=true）", /data-testid="flow-mode-corpus"[^>]*aria-pressed="true"|aria-pressed="true"[^>]*data-testid="flow-mode-corpus"/.test(plain));
+    check("无参数 /flow → 不显示「我的书页」面板", !plain.includes('data-testid="materials-panel"'));
+    check("无参数 /flow → 我的书页 tab 未选中", /data-testid="flow-mode-materials"[^>]*aria-pressed="false"/.test(plain) || !/data-testid="flow-mode-materials"[^>]*aria-pressed="true"/.test(plain));
+
+    // 建立一个故事材料，带 ?material= 进入 → 应自动载入「我的书页」面板（回归）
+    const mk = await fetch(`${BASE}/api/materials`, {
+      method: "POST",
+      headers: { "content-type": "application/json", cookie: girl },
+      body: JSON.stringify({ title: `Flow Material ${Date.now()}`, text: "Today I built a tower. Then it fell down.", kind: "story", level: "A2", source: "text" }),
+    });
+    const mat = await mk.json().catch(() => null);
+    const mid = mat?.id ?? null;
+    if (mid) created.push(mid);
+    const withMaterial = (await (await fetch(`${BASE}/flow?material=${encodeURIComponent(mid)}`, { headers: { cookie: girl } })).text()).replace(/<!--[\s\S]*?-->/g, "");
+    check("★ ?material= 进入 → 直接显示「我的书页」面板（回归）", withMaterial.includes('data-testid="materials-panel"'));
+    check("?material= 进入 → 语料 tab 未选中", /data-testid="flow-mode-corpus"[^>]*aria-pressed="false"/.test(withMaterial) || !/data-testid="flow-mode-corpus"[^>]*aria-pressed="true"/.test(withMaterial));
+
+    const corpusTab = fs.readFileSync(path.join(WEB_ROOT, "src/app/flow/FlowClient.tsx"), "utf8");
+    check("手动切 tab 逻辑不变（点击 setMode 保留）", /onClick=\{\(\) => setMode\("materials"\)\}/.test(corpusTab) && /onClick=\{\(\) => setMode\("corpus"\)\}/.test(corpusTab));
+  }
+
+
   }
 
 

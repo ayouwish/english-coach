@@ -77,7 +77,8 @@ export function FlowClient({
   const [round, setRound] = useState(1);
   /** 本次连读的句子来源（重读时复用同一批，不重新抽句） */
   const [runSentences, setRunSentences] = useState<{ text: string; sentenceId: string | null; source: "corpus" | "custom" }[]>([]);
-  const [mode, setMode] = useState<"corpus" | "materials" | "custom">("corpus");
+  // task-93：带 ?material= 进入时直接是「我的书页」面板；无参数进入默认语料
+  const [mode, setMode] = useState<"corpus" | "materials" | "custom">(initialMaterialId ? "materials" : "corpus");
   const [level, setLevel] = useState(userLevel || "A1");
   const [start, setStart] = useState(0);
   const [count, setCount] = useState(5);
@@ -904,6 +905,8 @@ export function FlowClient({
           <div className="mt-3 flex flex-wrap gap-2">
             <button
               type="button"
+              data-testid="flow-mode-corpus"
+              aria-pressed={mode === "corpus"}
               className={`ec-btn ${mode === "corpus" ? "ec-btn-primary" : "ec-btn-ghost"}`}
               onClick={() => setMode("corpus")}
             >
@@ -912,6 +915,7 @@ export function FlowClient({
             <button
               type="button"
               data-testid="flow-mode-materials"
+              aria-pressed={mode === "materials"}
               className={`ec-btn ${mode === "materials" ? "ec-btn-primary" : "ec-btn-ghost"}`}
               onClick={() => setMode("materials")}
             >
@@ -919,6 +923,8 @@ export function FlowClient({
             </button>
             <button
               type="button"
+              data-testid="flow-mode-custom"
+              aria-pressed={mode === "custom"}
               className={`ec-btn ${mode === "custom" ? "ec-btn-primary" : "ec-btn-ghost"}`}
               onClick={() => setMode("custom")}
             >
