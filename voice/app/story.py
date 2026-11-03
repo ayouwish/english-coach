@@ -278,6 +278,72 @@ def _tense(tokens: list[str]) -> str | None:
     return None
 
 
+_SUBJECT_PRONOUNS = frozenset({"i", "you", "we", "they", "he", "she", "it"})
+
+
+def _narrative_tense(tokens: list[str]) -> str | None:
+    """task-91：面向"叙事时态校验"的检测（比 _tense 更会抓原形一般现在时）。
+
+    - 过去：不规则过去式 / -ed 结尾
+    - 现在：is/are/has/... / 三单 -s / 主语代词 + 动词原形（"I build a tower"）
+    - 返回 past / present / mixed / None（无法判断）
+    """
+    past = present = 0
+    for index, token in enumerate(tokens):
+        lowered = token.lower()
+        if lowered in _PAST_IRREGULAR:
+            past += 1
+            continue
+        if lowered in _PRESENT_IRREGULAR:
+            present += 1
+            continue
+        stems = _verb_stems(lowered)
+        if not (stems & _VERB_BASES):
+            continue
+        if lowered.endswith("ed"):
+            past += 1
+        elif lowered.endswith("s") and lowered not in _PRESENT_EXCEPTIONS:
+            present += 1
+        elif (
+            lowered in _VERB_BASES
+            and index > 0
+            and tokens[index - 1].lower() in _SUBJECT_PRONOUNS
+        ):
+            present += 1  # 主语 + 原形 → 一般现在时（如 "I build a tower"）
+    if past and present:
+        return "mixed"
+    if past:
+        return "past"
+    if present:
+        return "present"
+    return None
+
+
+TENSE_MODES = ("auto", "past", "present")
+# task-91：中文里这些信号表示"已经发生的事" → 必须一般过去时
+_PAST_ZH_SIGNALS = (
+    "了", "过", "昨天", "前天", "那天", "上次", "刚才", "已经", "当时",
+    "后来", "最后", "结果", "被", "以前", "曾经", "那时",
+)
+# 这些信号表示习惯/一般事实/当前 → 现在时
+_PRESENT_ZH_SIGNALS = (
+    "每天", "常常", "总是", "通常", "一般", "平时", "现在", "正在",
+    "喜欢", "习惯", "有时候", "有时", "每周", "每年",
+)
+
+
+def detect_tense_from_zh(text_zh: str | None) -> str:
+    """auto 模式：按中文时间信号判断目标时态（叙事默认 past）。"""
+    text = str(text_zh or "")
+    past_hits = sum(1 for signal in _PAST_ZH_SIGNALS if signal in text)
+    present_hits = sum(1 for signal in _PRESENT_ZH_SIGNALS if signal in text)
+    if past_hits >= present_hits and past_hits > 0:
+        return "past"
+    if present_hits > 0 and past_hits == 0:
+        return "present"
+    return "past"  # 叙述已经发生的事是默认体裁
+
+
 LEVELS_WITH_VOCAB_CHECK: frozenset[str] = frozenset({"A1", "A2"})
 
 
@@ -288,6 +354,7 @@ def evaluate_readability(
     max_sentences: int,
     vocab: set[str],
     avoid_words: list[str] | None = None,
+    expected_tense: str | None = None,
 ) -> dict:
     counts = [len(sentence_words(sentence)) for sentence in sentences]
     sentence_count = len(sentences)
@@ -323,6 +390,11 @@ def evaluate_readability(
         violations.append("sentence_too_long")
     if _tense(tokens) == "mixed":
         violations.append("mixed_tense")
+    elif expected_tense in ("past", "present"):
+        detected_tense = _narrative_tense(tokens)
+        if detected_tense and detected_tense != expected_tense:
+            # task-91：叙事时态与目标不符（模型默认现在时的老问题）→ 触发重写
+            violations.append("tense_mismatch")
     if check_vocab and len(unknown) > MAX_UNKNOWN_WORDS:
         violations.append("unknown_words")
     declined = {word.lower() for word in avoid_words or []}
@@ -392,6 +464,24 @@ def _phoneme_hints(weak_phonemes: list[str], phoneme_examples: dict[str, list[st
     return "\n".join(lines)
 
 
+def _tense_prompt(tense: str) -> str:
+    """task-91：把叙事时态讲清楚（模型默认现在时 → 明确要求过去时 + 反例）。"""
+    if tense == "present":
+        return (
+            "NARRATIVE TENSE: PRESENT. This story describes general facts, habits or what is happening now — "
+            "write every sentence in the simple present and never switch to the past. Use ONLY one tense."
+        )
+    return (
+        "NARRATIVE TENSE: PAST (simple past). The story has already happened, so write EVERY sentence in the "
+        "simple past, not the present.\n"
+        "Chinese cues like 了 / 过 / 昨天 / 前天 / 那天 / 上次 / 刚才 / 已经 / 当时 / 后来 / 最后 / 结果 / 被 "
+        "mean PAST.\n"
+        "Example: 我今天去了公园 → \"Today I went to the park.\" (NOT \"Today I go to the park.\").\n"
+        "Keep auxiliaries consistent too: didn't / was / were (not don't / is / are). Use ONLY one tense; "
+        "never mix past and present."
+    )
+
+
 def build_prompts(
     text_zh: str,
     *,
@@ -402,6 +492,7 @@ def build_prompts(
     weak_phonemes: list[str],
     avoid_words: list[str],
     feedback: list[str] | None = None,
+    tense: str = "past",
 ) -> tuple[str, str]:
     limit = LEVEL_MAX_AVG_WORDS.get(level, 8)
     system = (
@@ -417,7 +508,7 @@ def build_prompts(
         f"Level: {level}. Write about {max_sentences} sentences (no more than {max_sentences}).",
         f"Level guidance: {guidance}.",
         f"Average sentence length must be <= {limit} words; every sentence must be <= {limit + MAX_EXTRA_WORDS} words.",
-        "Use ONLY ONE tense (past tense if the story already happened; present tense for routines). Do not mix tenses.",
+        _tense_prompt(tense),
         f"Prefer simple words from this list: {word_list}.",
     ]
     if max_sentences >= 8:
@@ -440,6 +531,7 @@ def build_prompts(
             "avg_words_too_high": "sentences too long on average",
             "sentence_too_long": "one or more sentences too long",
             "mixed_tense": "mixed tenses",
+            "tense_mismatch": "wrong narrative tense (the story must be in the simple past)",
             "unknown_words": "too many hard/unknown words",
             "avoid_words": "used words to avoid",
         }
@@ -487,6 +579,7 @@ def rewrite_story(
     max_sentences: int = DEFAULT_SENTENCES,
     weak_phonemes: list[str] | None = None,
     avoid_words: list[str] | None = None,
+    tense: str = "auto",
     settings: Settings | None = None,
 ) -> dict:
     """中文讲述 -> 分级英文故事。返回契约 JSON（失败抛 ProviderError/ProviderUnavailable）。"""
@@ -499,6 +592,10 @@ def rewrite_story(
         raise BadRequest("text_zh is required")
     if len(text_zh) > MAX_TEXT_ZH_CHARS:
         raise BadRequest(f"text_zh too long: {len(text_zh)} > {MAX_TEXT_ZH_CHARS} chars")
+    tense_value = str(tense or "auto").strip().lower()
+    if tense_value not in TENSE_MODES:
+        raise BadRequest(f"tense must be one of {list(TENSE_MODES)}, got {tense!r}")
+    expected_tense = detect_tense_from_zh(text_zh) if tense_value == "auto" else tense_value
     if not MIN_SENTENCES <= int(max_sentences) <= MAX_SENTENCES:
         raise BadRequest(
             f"max_sentences must be {MIN_SENTENCES}..{MAX_SENTENCES} (default {DEFAULT_SENTENCES})"
@@ -534,6 +631,7 @@ def rewrite_story(
             weak_phonemes=weak_phonemes,
             avoid_words=avoid_words,
             feedback=feedback,
+            tense=expected_tense,
         )
         outcome = _call_llm(client, system, user, max_tokens=STORY_MAX_TOKENS)
         if outcome.truncated:
@@ -573,6 +671,7 @@ def rewrite_story(
             max_sentences=int(max_sentences),
             vocab=vocab,
             avoid_words=avoid_words,
+            expected_tense=expected_tense,
         )
         last_eval = evaluated
         if evaluated["ok"]:
@@ -589,6 +688,8 @@ def rewrite_story(
         # task-80：句数超限时不截断内容（不静默丢内容），用 warning 显式告知前端
         if "too_many_sentences" in (last_eval.get("violations") or []):
             warnings.append("too_many_sentences")
+        if "tense_mismatch" in (last_eval.get("violations") or []):
+            warnings.append("tense_mismatch")
     achieved, missing = achieved_weak_phonemes(last_sentences, weak_phonemes)
     if missing:
         warnings.append("weak_phonemes_missing")
@@ -599,6 +700,7 @@ def rewrite_story(
         "sentences": last_sentences,
         "text_en": "\n".join(last_sentences),
         "level": level,
+        "tense": expected_tense,
         "readability": {
             "sentence_count": last_eval["sentence_count"],
             "avg_words": last_eval["avg_words"],

@@ -694,6 +694,7 @@ async def story_rewrite(payload: StoryRewriteRequest) -> dict:
         payload.text_zh,
         level=payload.level,
         max_sentences=payload.max_sentences,
+        tense=payload.tense,
         weak_phonemes=payload.weak_phonemes,
         avoid_words=payload.avoid_words,
         settings=settings,

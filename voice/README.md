@@ -928,6 +928,7 @@ mock/local 兜底产出 → 理论上会把 mock 音频写进 `<azure-key>.wav`�
 {"text_zh": "今天我和小明搭积木塔，被小华碰倒了，我很生气",
  "level": "A1",                    // A1 | A2 | B1 | B2
  "max_sentences": 6,               // 3..12（默认 6；家长可写更长故事）
+ "tense": "auto",                  // auto | past | present（task-91：叙事默认过去时）
  "weak_phonemes": ["th", "s"],     // 可选
  "avoid_words": []}                // 可选
 ```
@@ -944,6 +945,14 @@ mock/local 兜底产出 → 理论上会把 mock 音频写进 `<azure-key>.wav`�
 ```
 
 **服务端硬约束**（不靠模型自觉）：
+**叙事时态（task-91）**：
+- 请求可选 `tense`：`auto`（默认，按中文信号判断，**叙事默认过去时**）/ `past`（强制一般过去时）/ `present`（习惯/现状）。
+  中文信号 `了/过/昨天/前天/那天/上次/刚才/已经/当时/后来/最后/结果/被` → 必须过去时；`每天/常常/总是/平时/现在/正在/喜欢` → 现在时。
+- prompt 明确：过去时叙事（含反例 `我今天去了公园 → Today I went to the park.` 而非 `Today I go to the park.`）、助动词一致（didn't/was/were）、不混用时态。
+- **事后校验**：目标为 past 而结果是 present/mixed（或 present 目标却是 past）→ 用 "wrong narrative tense" 反馈**重写一次**；
+  仍不符 → 保留内容并 `warnings:["tense_mismatch"]`（`readability.ok=false`），不静默；响应的 `tense` 字段返回生效目标。
+- 实时态检测用增强版叙事检测（抓 "I build" 这类原形一般现在时），既有 `mixed_tense` 行为不变。
+
 - 句数 ≤ `max_sentences`（**3–12，默认 6**，task-80）；平均词数 ≤ **8 / 10 / 12 / 14 / 16**（A1/A2/B1/B2/**C1**）；最长句 ≤ 平均上限 + 4
   - 句数多（≥8）时 prompt 会额外要求"每句更短、避免长句"；
   - 超句数处理：先重写一次；仍超→**不截断、不丢内容**，保留全部句子并在 `warnings` 里标注 `too_hard` + `too_many_sentences`（`readability.ok=false`），由前端提示"故事偏长/偏难"。

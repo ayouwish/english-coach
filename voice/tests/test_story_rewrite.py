@@ -454,7 +454,9 @@ def test_story_max_sentences_range_accepted(client, llm_env, monkeypatch, tmp_pa
     monkeypatch.setenv("STORY_VOCAB_PATH", _vocab_file(tmp_path, " ".join(story["sentences"])))
     reset_story_cache()
     calls = _patch_llm(monkeypatch, [story])
-    response = client.post("/v1/story/rewrite", json=_story_body(max_sentences=max_sentences))
+    response = client.post(
+        "/v1/story/rewrite", json=_story_body(max_sentences=max_sentences, tense="present")
+    )
     assert response.status_code == 200, response.text
     body = response.json()
     assert body["readability"]["sentence_count"] == len(story["sentences"])
@@ -472,7 +474,7 @@ def test_story_max_sentences_twelve_full_story(client, llm_env, monkeypatch, tmp
     monkeypatch.setenv("STORY_VOCAB_PATH", _vocab_file(tmp_path, " ".join(story["sentences"])))
     reset_story_cache()
     calls = _patch_llm(monkeypatch, [story])
-    body = client.post("/v1/story/rewrite", json=_story_body(max_sentences=12)).json()
+    body = client.post("/v1/story/rewrite", json=_story_body(max_sentences=12, tense="present")).json()
     assert body["readability"]["sentence_count"] == 12
     assert body["readability"]["ok"] is True
     assert len(body["sentences"]) == 12
@@ -488,7 +490,7 @@ def test_story_too_many_sentences_rewrites_once_then_warns_without_truncating(
     monkeypatch.setenv("STORY_VOCAB_PATH", _vocab_file(tmp_path, " ".join(story["sentences"])))
     reset_story_cache()
     calls = _patch_llm(monkeypatch, [story, story])
-    body = client.post("/v1/story/rewrite", json=_story_body(max_sentences=12)).json()
+    body = client.post("/v1/story/rewrite", json=_story_body(max_sentences=12, tense="present")).json()
     assert len(calls) == 2, "超句数应重写一次"
     assert "too many sentences" in calls[1]["user"].lower(), "重写反馈应说明原因"
     assert body["readability"]["sentence_count"] == 13
@@ -503,6 +505,101 @@ def test_story_default_max_sentences_is_six(client, llm_env, monkeypatch, tmp_pa
     monkeypatch.setenv("STORY_VOCAB_PATH", _vocab_file(tmp_path, " ".join(story["sentences"])))
     reset_story_cache()
     calls = _patch_llm(monkeypatch, [story])
-    response = client.post("/v1/story/rewrite", json={"text_zh": "今天我很开心", "level": "A1"})
+    response = client.post(
+        "/v1/story/rewrite", json={"text_zh": "今天我很开心", "level": "A1", "tense": "present"}
+    )
     assert response.status_code == 200
     assert "about 6 sentences" in calls[0]["user"]
+
+
+# --------------------------------------------------------------------------------------
+# task-91：叙事时态（auto/past/present + 中文信号 + 事后校验 + warning）
+# --------------------------------------------------------------------------------------
+PRESENT_STORY = {
+    "title_en": "Present Story",
+    "sentences": ["Today I build a tall tower.", "Hua knocks it down.", "I am angry."],
+}
+PAST_STORY = {
+    "title_en": "Past Story",
+    "sentences": ["Today I built a tall tower.", "Hua knocked it down.", "I was angry."],
+}
+
+
+def test_detect_tense_from_chinese_signals():
+    from app.story import detect_tense_from_zh
+
+    assert detect_tense_from_zh("今天我和小明搭积木塔，被小华碰倒了，我很生气") == "past"
+    assert detect_tense_from_zh("我昨天去了公园") == "past"
+    assert detect_tense_from_zh("后来我们回家了") == "past"
+    assert detect_tense_from_zh("我每天走路去学校") == "present"
+    assert detect_tense_from_zh("我喜欢苹果") == "present"
+    assert detect_tense_from_zh("现在我在吃饭") == "present"
+    assert detect_tense_from_zh("我和小明搭积木塔，小华碰倒它") == "past", "叙事默认 past"
+
+
+def test_tense_past_prompt_and_past_output_passes(client, llm_env, monkeypatch):
+    calls = _patch_llm(monkeypatch, [PAST_STORY])
+    body = client.post(
+        "/v1/story/rewrite", json=_story_body(level="B1", tense="past")
+    ).json()
+    assert body["tense"] == "past"
+    assert body["warnings"] == []
+    assert len(calls) == 1
+    user = calls[0]["user"]
+    assert "NARRATIVE TENSE: PAST" in user
+    assert "must be in the simple past" not in user  # 这是重写反馈才出现的
+    assert "Today I went to the park" in user
+    assert "Today I go to the park" in user
+    assert "didn't / was / were" in user
+    assert "了 / 过 / 昨天" in user
+
+
+def test_auto_past_mismatch_rewrites_once_then_warns(client, llm_env, monkeypatch):
+    """auto + 中文"了/被" → 必须过去时；模型两次都给现在时 → 重写一次 + tense_mismatch。"""
+    calls = _patch_llm(monkeypatch, [PRESENT_STORY, PRESENT_STORY])
+    body = client.post("/v1/story/rewrite", json=_story_body(level="B1")).json()
+    assert body["tense"] == "past"
+    assert len(calls) == 2, "时态不符应触发一次重写"
+    assert "NARRATIVE TENSE: PAST" in calls[0]["user"]
+    assert "wrong narrative tense" in calls[1]["user"].lower(), "重写反馈要说清时态原因"
+    assert body["readability"]["ok"] is False
+    assert "tense_mismatch" in body["warnings"], "仍不符必须显式告警"
+    assert len(body["sentences"]) == 3, "不改内容，只告警"
+
+
+def test_tense_present_explicit_does_not_rewrite_present_story(client, llm_env, monkeypatch):
+    calls = _patch_llm(monkeypatch, [PRESENT_STORY])
+    body = client.post(
+        "/v1/story/rewrite", json=_story_body(level="B1", tense="present")
+    ).json()
+    assert body["tense"] == "present"
+    assert len(calls) == 1
+    assert "NARRATIVE TENSE: PRESENT" in calls[0]["user"]
+    assert "tense_mismatch" not in body["warnings"]
+
+
+def test_tense_present_with_past_output_triggers_rewrite_and_warning(client, llm_env, monkeypatch):
+    calls = _patch_llm(monkeypatch, [PAST_STORY, PAST_STORY])
+    body = client.post(
+        "/v1/story/rewrite", json=_story_body(level="B1", tense="present")
+    ).json()
+    assert body["tense"] == "present"
+    assert len(calls) == 2
+    assert "tense_mismatch" in body["warnings"]
+
+
+def test_tense_auto_routine_uses_present(client, llm_env, monkeypatch):
+    calls = _patch_llm(monkeypatch, [PRESENT_STORY])
+    body = client.post(
+        "/v1/story/rewrite",
+        json=_story_body(text_zh="我每天走路去学校，有时候跑步", level="B1"),
+    ).json()
+    assert body["tense"] == "present"
+    assert "NARRATIVE TENSE: PRESENT" in calls[0]["user"]
+    assert len(calls) == 1
+
+
+def test_tense_invalid_returns_400(client, llm_env):
+    response = client.post("/v1/story/rewrite", json=_story_body(tense="future"))
+    assert response.status_code == 400
+    assert "tense must be one of" in response.json()["error"]["message"]

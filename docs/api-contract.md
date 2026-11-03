@@ -1,4 +1,4 @@
-# 接口契约 v1.18（FROZEN · 2026-11-03）
+# 接口契约 v1.19（FROZEN · 2026-11-03）
 
 > **本文件是唯一事实来源（single source of truth）。**
 
@@ -25,6 +25,7 @@
 | 2026-11-02 | v1.16 | `/v1/story/rewrite` 的 `max_sentences` 范围 **1–6 → 3–12**（默认 6）；超句数不截断、`warnings` 增加 `too_many_sentences` | 向后兼容（旧值仍在范围内）|
 | 2026-11-02 | v1.17 | 新增 §23 **web 层扩展 API 汇总**（虚拟形象/故事录音/整段音频回放/音色/诊断分层），供原生客户端对接 | 新增端点，向后兼容 |
 | 2026-11-03 | v1.18 | 新增 §24 `GET /v1/words/ipa`（cmudict → IPA 音标）、错误码 `not_found`、`capabilities.word_ipa` | 新增端点，向后兼容 |
+| 2026-11-03 | v1.19 | `/v1/story/rewrite` 新增 `tense`（auto/past/present，默认 auto，叙事默认过去时）；响应回显 `tense`；新增 warning `tense_mismatch` | 向后兼容（不传按 auto）|
 > `web/` 与 `voice/` 两个模块并行开发，任何一方需要改本契约，必须先通知 Lead 并同步改本文件。
 > 冻结范围：路径、请求字段名、响应字段名、枚举值、错误码。
 > 未冻结范围：各 provider 内部实现、日志格式、额外字段（允许追加 `provider_meta` 等可选字段，不得删除或改名已有字段）。
@@ -676,6 +677,17 @@ blind_tests
 
 **错误语义**：参数非法 → 400；LLM 未配置 → **503 `provider_unavailable`**；JSON 解析两次失败 → **502 `provider_error`**。
 **不落盘、不缓存**（内容每次不同）。实现上用 `disable_thinking`（推理模型会把 token 耗在思考上）。
+
+**v1.19 补充：叙事时态**（`/v1/story/rewrite`）
+- 请求可选 `tense`：`"auto"`（默认）|`"past"`|`"present"`；非法 → 400
+- `auto` 规则：中文信号 `了/过/昨天/前天/那天/上次/刚才/已经/当时/后来/最后/结果/被` → **past**；
+  `每天/常常/总是/平时/现在/正在/喜欢` → present；无信号 → **past（叙事默认）**
+- 响应新增 `tense`（生效目标）
+- 服务端**事后校验**：目标时态不符 → 带反馈重写一次；仍不符 → 保留内容、`readability.ok=false`、
+  `warnings:["tense_mismatch"]`（不静默丢内容）
+- prompt 明确反例：`我今天去了公园` → ✅`Today I went to the park.` ❌`Today I go to the park.`；
+  助动词一致（didn't/was/were）
+- 其它硬约束不变（句数 3–12、平均词数、最长句、avoid_words、unknown_words）
 
 **v1.16 补充：句数与超限**（`max_sentences` 3–12，默认 6）
 - `≥8` 句时 prompt 会要求"每句更短、避免长句"

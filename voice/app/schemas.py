@@ -25,6 +25,7 @@ class StoryRewriteRequest(_Loose):
     text_zh: str = ""
     level: str = "A1"  # A1 | A2 | B1 | B2
     max_sentences: int = 6  # 3..12（task-80；默认 6）
+    tense: str = "auto"  # task-91：auto | past | present
     weak_phonemes: list[str] = []
     avoid_words: list[str] = []
 
