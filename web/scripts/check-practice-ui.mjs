@@ -157,6 +157,11 @@ if (!fs.existsSync(DB_PATH)) {
   check("儿童页不出现 IPA 字形", !/[θðɹŋæʃɪʌɔɜəʊʒɑɒɛ]/.test(normal.html));
   // task-87：单词可点（音标点击后才由 API 下发；儿童默认不返回 IPA）
   check("★ 练习句子的单词可点（word-token）", normal.html.includes('data-testid="word-token"'));
+  {
+    const tokenClasses = [...normal.html.matchAll(/data-testid="word-token"[^>]*class="([^"]*)"/g)].map((m) => m[1]);
+    check("★ 单词按钮只有 word-token class（无 underline/padding 装饰，task-94）", tokenClasses.length > 0 && tokenClasses.every((c) => c === "word-token"), tokenClasses.slice(0, 2).join(" | "));
+    check("练习页无 &nbsp;（词间是普通空格）", !normal.html.includes("&nbsp;"));
+  }
   console.log(`\n   ↳ 词条 DOM 片段：${wordRow.replace(/\s+/g, " ").slice(0, 300)}`);
   const radarSnippet =
     /<svg[^>]*data-testid="score-radar"[\s\S]{0,3000}?<\/svg>/.exec(normal.html)?.[0] ?? "";

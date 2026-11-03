@@ -133,3 +133,37 @@ body[data-child="true"] .ec-word {
   font-size: 1.15rem;
   padding: 0.4rem 0.7rem;
 }
+
+/* 可点单词（task-94 排版修复）
+ * 根因：`<button>` 不继承字体（浏览器默认 13.33px/system font），而词间空格由普通文本节点渲染，
+ * 继承父级字号 → 大字号句子里"空格很大、单词很小"，看起来像 justify。这里强制继承所有文字度量，
+ * 并清掉按钮默认 padding/border/background，让整句视觉与普通文本完全一致（只有交互差异）。 */
+.word-token {
+  display: inline;
+  padding: 0;
+  margin: 0;
+  border: 0;
+  background: transparent;
+  font: inherit;
+  font-size: inherit;
+  font-family: inherit;
+  font-weight: inherit;
+  line-height: inherit;
+  letter-spacing: inherit;
+  word-spacing: inherit;
+  text-align: inherit;
+  color: inherit;
+  vertical-align: baseline;
+  -webkit-appearance: none;
+  appearance: none;
+  cursor: inherit;
+}
+.word-token:hover {
+  background: var(--ec-primary-soft);
+  border-radius: 2px;
+}
+.word-token:focus-visible {
+  outline: 2px solid var(--ec-primary);
+  outline-offset: 1px;
+  border-radius: 2px;
+}

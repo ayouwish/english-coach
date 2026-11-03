@@ -547,6 +547,11 @@ try {
     check("导航链接保持无参数 /flow（不加 reset 参数）", !/href="\/flow\?/.test(fs.readFileSync(path.join(WEB_ROOT, "src/components/NavBar.tsx"), "utf8")));
 
     const plain = (await (await fetch(`${BASE}/flow`, { headers: { cookie: girl } })).text()).replace(/<!--[\s\S]*?-->/g, "");
+    check("★ 连读大字句走 WordText（task-94：长按看音标、排版继承）", /<WordText text=\{item\.text\}/.test(flowSrcT93));
+    check("WordText 不再有装饰类/✕/TTS（源码）", (() => {
+      const wt = fs.readFileSync(path.join(WEB_ROOT, "src/components/WordText.tsx"), "utf8");
+      return wt.includes('className="word-token"') && !/underline|decoration-dotted|px-0\.5|✕|🔊|\/api\/tts/.test(wt);
+    })());
     check("★ 无参数 /flow → 语料 tab 选中（flow-mode-corpus aria-pressed=true）", /data-testid="flow-mode-corpus"[^>]*aria-pressed="true"|aria-pressed="true"[^>]*data-testid="flow-mode-corpus"/.test(plain));
     check("无参数 /flow → 不显示「我的书页」面板", !plain.includes('data-testid="materials-panel"'));
     check("无参数 /flow → 我的书页 tab 未选中", /data-testid="flow-mode-materials"[^>]*aria-pressed="false"/.test(plain) || !/data-testid="flow-mode-materials"[^>]*aria-pressed="true"/.test(plain));

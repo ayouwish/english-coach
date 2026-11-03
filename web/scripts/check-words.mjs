@@ -112,6 +112,25 @@ async function main() {
   // ④ 页面 SSR：word-token
   const practiceHtml = await (await fetch(`${BASE}/practice`, { headers: { cookie: dadCookie } })).text();
   check("★ /practice HTML 含 word-token", practiceHtml.includes('data-testid="word-token"'));
+  {
+    // ______________________________________
+    const tokenClasses = [...practiceHtml.matchAll(/data-testid="word-token"[^>]*class="([^"]*)"/g)].map((m) => m[1]);
+    check("★ SSR：每个单词按钮 class 只有 word-token（无装饰类）", tokenClasses.length > 0 && tokenClasses.every((c) => c === "word-token"), tokenClasses.slice(0, 3).join(" | "));
+    check("SSR：无 &nbsp;（词间只用普通空格）", !practiceHtml.includes("&nbsp;"));
+    // 用练习页里的一句真实句子做"去标签后仍是单空格"断言（词间由原文本决定）
+    const dbw = new Database(DB_PATH, { readonly: true });
+    const row = dbw.prepare("SELECT text FROM sentences ORDER BY sort_order LIMIT 1").get();
+    dbw.close();
+    const sentence = String(row?.text ?? "");
+    const stripped = practiceHtml
+      .replace(/<script[\s\S]*?<\/script>/g, " ")
+      .replace(/<style[\s\S]*?<\/style>/g, " ")
+      .replace(/<[^>]+>/g, "")
+      .replace(/&amp;/g, "&")
+      .replace(/&quot;/g, '"')
+      .replace(/&#x27;/g, "'");
+    check("★ SSR：去标签后句子保持单空格（Hello! My name → 正常）", sentence.length > 0 && stripped.includes(sentence), sentence.slice(0, 40));
+  }
   // /flow 的大字句、/chat 的消息都在「开始之后」才出现（client 阶段），SSR 里没有；
   // 用源码级断言 + 对话详情页 SSR 已经覆盖真实渲染。
   const flowSrcWords = fs.readFileSync(path.join(WEB_ROOT, "src/app/flow/FlowClient.tsx"), "utf8");
@@ -149,16 +168,30 @@ async function main() {
     check("对话详情儿童/他人不泄漏（404 或零 IPA）", childDetail.includes("404") || leaks(childDetail).length === 0);
   }
 
-  // ⑤ WordText 组件结构 / 关闭行为 / slow TTS（源码级）
+  // ⑤ WordText 组件结构 / 长按交互 / 排版（task-94 源码级）
   const wt = fs.readFileSync(path.join(WEB_ROOT, "src/components/WordText.tsx"), "utf8");
-  check("★ WordText 渲染 word-token 按钮", wt.includes('data-testid="word-token"') && wt.includes("type=\"button\""));
-  check("★ 浮层只含音标 + ✕（无发音按钮）", wt.includes('data-testid="word-ipa-popover"') && wt.includes('data-testid="word-ipa-close"') && !wt.includes('data-testid="word-ipa-play"'));
-  check("★ 组件源码不含发音残留（🔊 / 听发音 / /api/tts / new Audio）", !/🔊|听发音|\/api\/tts|new Audio/.test(wt), (wt.match(/🔊|听发音|\/api\/tts|new Audio/) ?? [""])[0]);
-  check("★ 缺少音标显示「暂无音标」（不报错不弹窗）", wt.includes("暂无音标"));
-  check("★ 开关关闭显示「音标已关闭」", wt.includes("音标已关闭") && wt.includes('data-testid="word-ipa-off"'));
-  check("★ Esc / 滚屏 / 点空白关闭，同一时刻只开一个", wt.includes('e.key === "Escape"') && wt.includes('window.addEventListener("scroll"') && wt.includes("activeCloser"));
-  check("★ 键盘可用（Enter/Space 打开）", /e\.key === "Enter"/.test(wt) && /e\.key === " "/.test(wt));
-  check("★ 保留标点空格（tokenize 只切单词）", wt.includes("isWord") && /slice\(last, match.index\)/.test(wt));
+  const css = fs.readFileSync(path.join(WEB_ROOT, "src/app/globals.css"), "utf8");
+  check("★ WordText 渲染 word-token 按钮", wt.includes('data-testid="word-token"') && wt.includes('type="button"'));
+  check("★ 浮层只含音标（无关闭图标 / 无 🔊 / 无 TTS 残留）", wt.includes('data-testid="word-ipa-popover"') && !wt.includes('word-ipa-close') && !/✕|🔊|听发音|\/api\/tts|new Audio/.test(wt), (wt.match(/✕|🔊|听发音|\/api\/tts|new Audio/) ?? [""])[0]);
+  const popoverPart = wt.slice(wt.indexOf('data-testid="word-ipa-popover"'));
+  check("浮层里没有任何按钮（关闭靠再长按/点空白/Esc/滚轮）", !popoverPart.includes("<button"));
+  check("★ 单词按钮无装饰类（无 underline/decoration/px-/text-left）", wt.includes('className="word-token"') && !/underline|decoration-dotted|px-0\.5|text-left/.test(wt));
+  check(
+    "★ globals.css 强制继承文字度量（font/padding/letter-spacing/word-spacing）",
+    /\.word-token\s*\{[\s\S]{0,600}?font:\s*inherit;/.test(css) &&
+      /\.word-token\s*\{[\s\S]{0,600}?padding:\s*0;/.test(css) &&
+      /\.word-token\s*\{[\s\S]{0,900}?letter-spacing:\s*inherit;/.test(css) &&
+      /\.word-token\s*\{[\s\S]{0,900}?word-spacing:\s*inherit;/.test(css),
+  );
+  check("★ 长按 450ms 触发（普通点击不打开）", wt.includes("LONG_PRESS_MS = 450") && wt.includes("setTimeout(") && !/onClick=\{\(\) => void openFor/.test(wt) && wt.includes("onPointerDown"));
+  check("★ 位移 >8px / pointerup / pointercancel 取消长按", wt.includes("MOVE_CANCEL_PX = 8") && wt.includes("onPointerMove") && wt.includes("onPointerUp") && wt.includes("onPointerCancel"));
+  check("★ 浮层优先在单词正下方（rect.bottom + 6，下方不够翻上方）", wt.includes("rect.bottom + 6") && /fitsBelow/.test(wt) && /placement:\s*"above"/.test(wt));
+  check("窄屏（<480px）用底部 sheet", wt.includes("NARROW_SHEET_PX = 480") && wt.includes("sheet"));
+  check("★ 键盘可访问（Enter/Space 打开）", /e\.key === "Enter"/.test(wt) && /e\.key === " "/.test(wt));
+  check("★ 无音标显示「暂无音标」；开关关闭显示「音标已关闭」", wt.includes("暂无音标") && wt.includes("音标已关闭") && wt.includes('data-testid="word-ipa-off"'));
+  check("★ 再长按同词关闭（openFor 里 toggle）", /openWord === word[\s\S]{0,80}close\(\)/.test(wt));
+  check("关闭方式：点空白 / Esc / 滚轮 / 滚屏", wt.includes('e.key === "Escape"') && wt.includes('"wheel"') && wt.includes('"scroll"') && wt.includes('"pointerdown"'));
+  check("保留标点空格（tokenize 只切单词）", wt.includes("isWord") && /slice\(last, match.index\)/.test(wt));
 
   // ⑥ 设置页有开关
   const settingsHtml = await (await fetch(`${BASE}/settings`, { headers: { cookie: dadCookie } })).text();
