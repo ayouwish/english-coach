@@ -12,6 +12,7 @@ export async function GET(_req: NextRequest, ctx: { params: Promise<{ id: string
     await ensureBootstrap();
     const user = await requireUser();
     const { id } = await ctx.params;
+    // task-95 rev2：原始录音仅本人可回放
     const row = await getRecording(user.id, id);
     if (!row) throw new HttpError(404, "not_found", "录音不存在");
     const abs = resolveRecordingPath(row.audioPath);

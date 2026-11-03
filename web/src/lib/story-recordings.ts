@@ -180,7 +180,7 @@ export async function listRecordings(userId: string, limit = MAX_LIST): Promise<
     .where(eq(storyRecordings.userId, userId))
     .orderBy(desc(storyRecordings.createdAt))
     .limit(Math.min(Math.max(limit, 1), MAX_LIST));
-  return rows.map(toView);
+  return rows.map((row) => toView(row));
 }
 
 export async function getRecording(userId: string, recordingId: string): Promise<typeof storyRecordings.$inferSelect | null> {

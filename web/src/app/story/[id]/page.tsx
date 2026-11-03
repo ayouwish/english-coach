@@ -10,6 +10,7 @@ import { StoryAudioReplay } from "@/components/StoryAudioReplay";
 import { SuggestButton } from "@/components/SuggestButton";
 import { RetellPanel } from "@/components/RetellPanel";
 import { splitSentences } from "@/lib/sentence-split";
+import { isStoryOwner } from "@/lib/story-owner";
 import { WordText } from "@/components/WordText";
 import { getPrefs, effectiveShowWordIpa } from "@/lib/prefs";
 
@@ -42,8 +43,9 @@ export default async function StoryDetailPage({ params }: { params: Promise<{ id
   }
 
   const db = getDb();
-  // 谁读的：孩子 = 自己；家长看孩子的故事 = 故事创建者（分数只给家长看）
-  const ownerId = user.isChild ? user.id : (material.createdBy ?? user.id);
+  // task-95 rev2：**按查看者本人隔离** —— 朗读/复述/原声/中文原文都只看自己的
+  const isOwner = isStoryOwner(user, material);
+  const ownerId = user.id;
   const reads = await db
     .select({ id: attempts.id, scoresJson: attempts.scoresJson, audioPath: attempts.audioPath, createdAt: attempts.createdAt })
     .from(attempts)
@@ -51,13 +53,15 @@ export default async function StoryDetailPage({ params }: { params: Promise<{ id
     .orderBy(desc(attempts.createdAt))
     .limit(20);
   const lastWithAudio = reads.find((r) => r.audioPath) ?? null;
-  // task-83：当时讲这个故事用的原始录音（story_recordings.material_id 反查；仅本人）
-  const [sourceRecording] = await getDb()
-    .select()
-    .from(storyRecordings)
-    .where(and(eq(storyRecordings.materialId, material.id), eq(storyRecordings.userId, user.id)))
-    .orderBy(desc(storyRecordings.createdAt))
-    .limit(1);
+  // task-83/95：原始输入（中文原文 + 原声）**仅创建者本人可见**
+  const [sourceRecording] = isOwner
+    ? await getDb()
+        .select()
+        .from(storyRecordings)
+        .where(and(eq(storyRecordings.materialId, material.id), eq(storyRecordings.userId, user.id)))
+        .orderBy(desc(storyRecordings.createdAt))
+        .limit(1)
+    : [];
   const retells = await db
     .select()
     .from(storyRetells)
@@ -125,8 +129,8 @@ export default async function StoryDetailPage({ params }: { params: Promise<{ id
           </Link>
           <span className="text-xs text-[var(--ec-muted)]">整页练习纸 / A5 卡片（可剪下）</span>
         </div>
-        {/* task-83：原始输入留存 —— 当时讲的原话 + 原声播放器（只有它按条件显示） */}
-        {material.sourceZh || sourceRecording ? (
+        {/* task-83/95 rev2：原始输入留存 —— 只有**故事创建者**能看到中文原文与原声 */}
+        {isOwner && (material.sourceZh || sourceRecording) ? (
           <div className="mt-3 rounded-xl bg-[#f8f9ff] p-3" data-testid="detail-source">
             <h3 className="text-sm font-extrabold">🗣️ 我当时讲的原话</h3>
             {material.sourceZh ? (

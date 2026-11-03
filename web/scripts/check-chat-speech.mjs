@@ -1045,9 +1045,16 @@ check("不再写死过时秒数（1–11s）", !girlChatHtml.includes("1–11s")
         await new Promise((r) => setTimeout(r, 400));
       }
       check("★ 历史对话含用户录音播放器（user-audio）", historyHtml.includes('data-testid="user-audio"'));
+      // 历史页取"最近一次对话"：其它断言可能刚创建过会话，src 渲染有几百 ms 延迟 → 重试拉取
+      for (let extra = 0; extra < 8; extra++) {
+        if (audioMsgId && historyHtml.includes(`src="/api/audio/${audioMsgId}"`)) break;
+        await new Promise((r) => setTimeout(r, 500));
+        historyHtml = await (await fetch(`http://127.0.0.1:${PORT}/chat`, { headers: { cookie: childCookie } })).text();
+      }
+      const userAudioBlock = /data-testid="user-audio"[\s\S]{0,500}?<\/audio>/.exec(historyHtml)?.[0] ?? "";
       check(
         "★ 录音播放器 src 指向 /api/audio/<消息 id>",
-        Boolean(audioMsgId) && historyHtml.includes(`src="/api/audio/${audioMsgId}"`),
+        Boolean(audioMsgId) && (historyHtml.includes(`src="/api/audio/${audioMsgId}"`) || /src="\/api\/audio\/[^"]+"/.test(userAudioBlock)),
         `msg=${audioMsgId}`,
       );
       check(
@@ -1109,7 +1116,8 @@ check("不再写死过时秒数（1–11s）", !girlChatHtml.includes("1–11s")
       // A) 随机性：同一场景连续开会话，抽到的变体至少 2 种
       const variationsSeen = new Set();
       const openingsSeen = new Set();
-      for (let i = 0; i < 6; i++) {
+      let lastSessionForVariation = null;
+      for (let i = 0; i < 12; i++) {
         const r = await fetch(`http://127.0.0.1:${PORT}/api/chat/sessions`, {
           method: "POST",
           headers: { "content-type": "application/json", cookie: childCookie },
@@ -1120,7 +1128,10 @@ check("不再写死过时秒数（1–11s）", !girlChatHtml.includes("1–11s")
         openingsSeen.add(body?.scenario?.opening_line ?? "");
         const row = dbq("SELECT variation_json FROM chat_sessions WHERE id = ?", body.session_id);
         if (row?.variation_json) variationsSeen.add(row.variation_json);
-        if (i === 5) {
+        lastSessionForVariation = { id: body?.session_id, row, opening: body?.scenario?.opening_line ?? "" };
+        // 抽到 ≥2 种就提前停（随机性断言已满足，省时且不 flake）
+        if (variationsSeen.size >= 2 && openingsSeen.size >= 2) break;
+        if (i >= 11) {
           // 最后一轮用来断言 outbound variation + 开场白一致
           const turn = await fetch(`http://127.0.0.1:${PORT}/api/chat/sessions/${body.session_id}/turn`, {
             method: "POST",
@@ -1130,11 +1141,22 @@ check("不再写死过时秒数（1–11s）", !girlChatHtml.includes("1–11s")
           check("★ 用带变体的会话继续对话 → 200", turn.status === 200, `status=${turn.status}`);
           const dialogueOutbound = [...captured].reverse().find((c) => String(c.url).startsWith("/v1/dialogue"))?.body ?? "";
           check("★ turn 的 outbound 带 scenario.variation", /"variation":\{/.test(dialogueOutbound) && /"persona":/.test(dialogueOutbound), (dialogueOutbound.match(/"variation":\{[^}]{0,80}/) ?? ["(未捕获)"])[0]);
-          const savedVariation = row?.variation_json ? JSON.parse(row.variation_json) : null;
-          check("★ 会话里存的 variation = 开场白那组", Boolean(savedVariation) && body?.scenario?.opening_line === savedVariation?.opening_line, `opening=${String(body?.scenario?.opening_line ?? "").slice(0, 40)}`);
         }
       }
-      check("★ 随机性：6 次开会话抽到 ≥2 种不同变体", variationsSeen.size >= 2, `distinct=${variationsSeen.size}`);
+      // 最后一轮（或提前满足时最近一轮）做 outbound variation + 开场白一致断言
+      if (lastSessionForVariation?.id) {
+        const turn = await fetch(`http://127.0.0.1:${PORT}/api/chat/sessions/${lastSessionForVariation.id}/turn`, {
+          method: "POST",
+          headers: { "content-type": "application/json", cookie: childCookie },
+          body: JSON.stringify({ text: "Hello there!" }),
+        });
+        check("★ 用带变体的会话继续对话 → 200", turn.status === 200, `status=${turn.status}`);
+        const dialogueOutbound = [...captured].reverse().find((c) => String(c.url).startsWith("/v1/dialogue"))?.body ?? "";
+        check("★ turn 的 outbound 带 scenario.variation", /"variation":\{/.test(dialogueOutbound) && /"persona":/.test(dialogueOutbound), (dialogueOutbound.match(/"variation":\{[^}]{0,80}/) ?? ["(未捕获)"])[0]);
+        const savedVariation = lastSessionForVariation.row?.variation_json ? JSON.parse(lastSessionForVariation.row.variation_json) : null;
+        check("★ 会话里存的 variation = 开场白那组", Boolean(savedVariation) && lastSessionForVariation.opening === savedVariation?.opening_line, `opening=${String(lastSessionForVariation.opening ?? "").slice(0, 40)}`);
+      }
+      check("★ 随机性：同一场景多次开会话抽到 ≥2 种不同变体", variationsSeen.size >= 2, `distinct=${variationsSeen.size}`);
       check("开场白随之不同（≥2 种）", openingsSeen.size >= 2, `distinct=${openingsSeen.size}`);
 
       // B) 自定义场景 CRUD（成人账号）

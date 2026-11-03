@@ -16,12 +16,13 @@ export const dynamic = "force-dynamic";
 /** GET /api/materials —— 家庭共享：所有登录用户都能看到全部书页。 */
 export const GET = route(async (req: NextRequest) => {
   await ensureBootstrap();
-  await requireUser();
+  const user = await requireUser();
   const sp = req.nextUrl.searchParams;
   const items = await listMaterials({
     limit: Number(sp.get("limit") ?? 50),
     offset: Number(sp.get("offset") ?? 0),
     kind: sp.get("kind"),
+    viewerId: user.id,
   });
   return jsonOk({ items, count: items.length });
 });

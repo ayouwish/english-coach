@@ -12,6 +12,7 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
     const user = await requireUser();
     const { id } = await ctx.params;
     const body = (await req.json().catch(() => null)) as { provider?: string } | null;
+    // task-95 rev2：只能重试转录**自己的**录音
     const row = await transcribeRecording(user.id, id, { provider: typeof body?.provider === "string" ? body.provider : null });
     return NextResponse.json({ ok: row.status === "transcribed", ...toView(row) }, { status: 200 });
   } catch (err) {

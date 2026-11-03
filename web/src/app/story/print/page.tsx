@@ -3,6 +3,7 @@ import { redirect } from "next/navigation";
 import { ensureBootstrap } from "@/db";
 import { getCurrentUser } from "@/lib/auth";
 import { getMaterial } from "@/lib/materials";
+import { isStoryOwner } from "@/lib/story-owner";
 import { StoryPrintBody, type PrintStory } from "@/components/StoryPrintBody";
 import { PrintToolbar } from "@/components/PrintToolbar";
 
@@ -34,6 +35,8 @@ export default async function StoryCollectionPrintPage({
     .filter(Boolean);
 
   const stories: PrintStory[] = [];
+  /** 每篇是否由当前查看者创建（中文原文仅 owner 可见） */
+  const ownerByStory = new Map<string, boolean>();
   const missing: string[] = [];
   let tooMany = rawIds.length > MAX_PRINT_STORIES;
   const ids = tooMany ? rawIds.slice(0, MAX_PRINT_STORIES) : rawIds;
@@ -43,6 +46,7 @@ export default async function StoryCollectionPrintPage({
       missing.push(id);
       continue;
     }
+    ownerByStory.set(material.id, isStoryOwner(user, material));
     stories.push({
       id: material.id,
       title: material.title,
@@ -134,7 +138,7 @@ export default async function StoryCollectionPrintPage({
 
           {stories.map((s, i) => (
             <div key={s.id} className="print-story mt-6" data-testid="collection-story">
-              <StoryPrintBody story={s} zh={zh} lines={lines} pageLabel={`第 ${i + 1} / ${stories.length} 篇`} />
+              <StoryPrintBody story={s} zh={zh && (ownerByStory.get(s.id) ?? false)} lines={lines} pageLabel={`第 ${i + 1} / ${stories.length} 篇`} />
             </div>
           ))}
         </>

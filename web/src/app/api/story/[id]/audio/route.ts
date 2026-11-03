@@ -29,9 +29,10 @@ export const GET = route(async (req: NextRequest, ctx: { params: Promise<{ id: s
 
   const material = await getMaterial(id);
   if (!material) throw new HttpError(404, "not_found", "故事不存在");
+  // task-95 rev2：拼接/回放按**查看者本人**（缓存也按用户隔离，见 story-audio）
 
-  const { audioFile } = storyAudioPaths(id);
-  const meta = readStoryAudioMeta(id);
+  const { audioFile } = storyAudioPaths(id, user.id);
+  const meta = readStoryAudioMeta(id, user.id);
   const state = await getStoryAudioState(id, user.id);
 
   if (!force && state.status === "ready" && fs.existsSync(audioFile)) {

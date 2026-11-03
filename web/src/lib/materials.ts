@@ -12,7 +12,7 @@
  */
 import fs from "node:fs";
 import path from "node:path";
-import { desc, eq, inArray } from "drizzle-orm";
+import { and, desc, eq, inArray } from "drizzle-orm";
 import { DATA_DIR, getDb } from "@/db";
 import { readingMaterials, storyRecordings, users } from "@/db/schema";
 import type { SessionUser } from "./auth";
@@ -214,7 +214,7 @@ export async function createMaterial(
 }
 
 export async function listMaterials(
-  opts: { limit?: number; offset?: number; kind?: string | null } = {},
+  opts: { limit?: number; offset?: number; kind?: string | null; viewerId?: string | null } = {},
 ): Promise<MaterialSummary[]> {
   const db = getDb();
   const limit = Math.min(Math.max(1, opts.limit ?? 50), 200);
@@ -231,10 +231,13 @@ export async function listMaterials(
   const materialIds = rows.map((r) => r.id);
   const recordingByMaterial = new Map<string, string>();
   if (materialIds.length > 0) {
-    const recRows = await db
-      .select({ id: storyRecordings.id, materialId: storyRecordings.materialId })
-      .from(storyRecordings)
-      .where(inArray(storyRecordings.materialId, materialIds));
+    // task-95 rev2：🎙️ 标记只看**当前查看者自己**是否有录音
+    const recRows = opts.viewerId
+      ? await db
+          .select({ id: storyRecordings.id, materialId: storyRecordings.materialId })
+          .from(storyRecordings)
+          .where(and(inArray(storyRecordings.materialId, materialIds), eq(storyRecordings.userId, opts.viewerId)))
+      : [];
     for (const rec of recRows) {
       if (rec.materialId) recordingByMaterial.set(rec.materialId, rec.id);
     }

@@ -56,26 +56,29 @@ function safeId(materialId: string): string {
   return materialId.replace(/[^A-Za-z0-9_-]/g, "");
 }
 
-export function storyAudioPaths(materialId: string): { audioFile: string; metaFile: string } {
-  const safe = safeId(materialId);
+export function storyAudioPaths(materialId: string, userId: string): { audioFile: string; metaFile: string } {
+  const safeMat = safeId(materialId);
+  const safeUser = userId.replace(/[^A-Za-z0-9_-]/g, "");
+  // task-95 rev2：**按用户隔离**（同一故事两个家庭成员各自缓存，互不串音/覆盖）
+  const dir = path.join(STORY_AUDIO_DIR, safeUser);
   return {
-    audioFile: path.join(STORY_AUDIO_DIR, `${safe}.wav`),
-    metaFile: path.join(STORY_AUDIO_DIR, `${safe}.json`),
+    audioFile: path.join(dir, `${safeMat}.wav`),
+    metaFile: path.join(dir, `${safeMat}.json`),
   };
 }
 
-export function readStoryAudioMeta(materialId: string): StoryAudioMeta | null {
+export function readStoryAudioMeta(materialId: string, userId: string): StoryAudioMeta | null {
   try {
-    const parsed = JSON.parse(fs.readFileSync(storyAudioPaths(materialId).metaFile, "utf8")) as StoryAudioMeta;
+    const parsed = JSON.parse(fs.readFileSync(storyAudioPaths(materialId, userId).metaFile, "utf8")) as StoryAudioMeta;
     return parsed && typeof parsed === "object" && parsed.status ? parsed : null;
   } catch {
     return null;
   }
 }
 
-function writeStoryAudioMeta(materialId: string, meta: StoryAudioMeta): void {
-  fs.mkdirSync(STORY_AUDIO_DIR, { recursive: true });
-  const { metaFile } = storyAudioPaths(materialId);
+function writeStoryAudioMeta(materialId: string, userId: string, meta: StoryAudioMeta): void {
+  const { metaFile } = storyAudioPaths(materialId, userId);
+  fs.mkdirSync(path.dirname(metaFile), { recursive: true });
   const tmp = `${metaFile}.tmp-${process.pid}-${Date.now()}`;
   fs.writeFileSync(tmp, JSON.stringify(meta));
   fs.renameSync(tmp, metaFile);
@@ -160,21 +163,21 @@ async function doBuild(materialId: string, userId: string, force: boolean): Prom
   const list = await listStoryAudioAttempts(materialId, userId);
   const withAudio = list.filter((a): a is StoryAttempt & { audioPath: string } => Boolean(a.audioPath));
   const signature = signatureOf(list);
-  const { audioFile } = storyAudioPaths(materialId);
+  const { audioFile } = storyAudioPaths(materialId, userId);
 
   if (!force) {
-    const cached = readStoryAudioMeta(materialId);
+    const cached = readStoryAudioMeta(materialId, userId);
     if (cached?.status === "ready" && cached.signature === signature && fs.existsSync(audioFile)) return cached;
   }
 
   const startedAt = new Date().toISOString();
   if (withAudio.length === 0) {
     const meta: StoryAudioMeta = { status: "failed", signature, attempt_count: 0, error: NO_AUDIO_ERROR, started_at: startedAt, ready_at: null };
-    writeStoryAudioMeta(materialId, meta);
+    writeStoryAudioMeta(materialId, userId, meta);
     return meta;
   }
 
-  writeStoryAudioMeta(materialId, { status: "building", signature, attempt_count: withAudio.length, started_at: startedAt, ready_at: null });
+  writeStoryAudioMeta(materialId, userId, { status: "building", signature, attempt_count: withAudio.length, started_at: startedAt, ready_at: null });
 
   try {
     let bytes: Uint8Array;
@@ -185,7 +188,7 @@ async function doBuild(materialId: string, userId: string, force: boolean): Prom
       if (!abs || !fs.existsSync(abs)) throw new StoryAudioBuildError("录音文件不见了，重新读一遍试试");
       bytes = new Uint8Array(fs.readFileSync(abs));
       durationMs = wavDurationMs(Buffer.from(bytes));
-      fs.mkdirSync(STORY_AUDIO_DIR, { recursive: true });
+      fs.mkdirSync(path.dirname(audioFile), { recursive: true });
       fs.writeFileSync(audioFile, bytes);
     } else {
       const parts: ConcatPart[] = [];
@@ -197,7 +200,7 @@ async function doBuild(materialId: string, userId: string, force: boolean): Prom
       }
       if (parts.length === 0) throw new StoryAudioBuildError("录音文件都不见了，重新读一遍试试");
       const merged = await callAudioConcat(parts, GAP_MS);
-      fs.mkdirSync(STORY_AUDIO_DIR, { recursive: true });
+      fs.mkdirSync(path.dirname(audioFile), { recursive: true });
       const tmp = `${audioFile}.tmp-${process.pid}-${Date.now()}`;
       fs.writeFileSync(tmp, merged.bytes);
       fs.renameSync(tmp, audioFile);
@@ -214,13 +217,13 @@ async function doBuild(materialId: string, userId: string, force: boolean): Prom
       started_at: startedAt,
       ready_at: readyAt,
     };
-    writeStoryAudioMeta(materialId, meta);
+    writeStoryAudioMeta(materialId, userId, meta);
     return meta;
   } catch (err) {
     const error = readableError(err);
     console.warn(`[story-audio] 构建失败（${safeId(materialId)}）：${error}`);
     const meta: StoryAudioMeta = { status: "failed", signature, attempt_count: withAudio.length, error, started_at: startedAt, ready_at: null };
-    writeStoryAudioMeta(materialId, meta);
+    writeStoryAudioMeta(materialId, userId, meta);
     return meta;
   }
 }
@@ -230,7 +233,7 @@ export async function getStoryAudioState(materialId: string, userId: string): Pr
   const list = await listStoryAudioAttempts(materialId, userId);
   const withAudio = list.filter((a): a is StoryAttempt & { audioPath: string } => Boolean(a.audioPath));
   const signature = signatureOf(list);
-  const meta = readStoryAudioMeta(materialId);
+  const meta = readStoryAudioMeta(materialId, userId);
   const building = isStoryAudioBuilding(materialId);
 
   if (withAudio.length === 0) {
@@ -240,7 +243,7 @@ export async function getStoryAudioState(materialId: string, userId: string): Pr
   if (!meta) return { status: "building", attempt_count: withAudio.length };
   if (meta.status === "building") return { status: "failed", attempt_count: meta.attempt_count ?? withAudio.length, error: STALE_ERROR };
   if (meta.status === "failed") return { status: "failed", attempt_count: meta.attempt_count ?? withAudio.length, error: meta.error ?? "拼装朗读音频出错了" };
-  if (meta.signature !== signature || !fs.existsSync(storyAudioPaths(materialId).audioFile)) {
+  if (meta.signature !== signature || !fs.existsSync(storyAudioPaths(materialId, userId).audioFile)) {
     return { status: "building", attempt_count: withAudio.length };
   }
   return {

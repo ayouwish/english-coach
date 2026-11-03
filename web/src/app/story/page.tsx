@@ -22,6 +22,7 @@ export default async function StoryPage() {
   const user = await getCurrentUser();
   if (!user) redirect("/login");
 
+  // task-95 rev2：🎙️ 我的录音仅本人可见
   const recordings = await listRecordings(user.id);
   const defaultLevel = isCefrLevel(user.cefrLevel)
     ? user.cefrLevel

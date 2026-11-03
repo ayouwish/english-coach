@@ -3,6 +3,7 @@ import { notFound, redirect } from "next/navigation";
 import { ensureBootstrap } from "@/db";
 import { getCurrentUser } from "@/lib/auth";
 import { getMaterial } from "@/lib/materials";
+import { isStoryOwner } from "@/lib/story-owner";
 import { StoryPrintBody } from "@/components/StoryPrintBody";
 import { StoryPrintCard } from "@/components/StoryPrintCard";
 import { PrintToolbar } from "@/components/PrintToolbar";
@@ -34,6 +35,9 @@ export default async function StoryPrintPage({
   const isCard = sp.layout === "card";
   const material = await getMaterial(id);
   if (!material) notFound();
+  // task-95 rev2：中文原文仅故事创建者可见（英文正文家庭可见）
+  const isOwner = isStoryOwner(user, material);
+  const zhForViewer = zh && isOwner;
 
   const qs = (next: { zh?: boolean; lines?: boolean; card?: boolean }) => {
     const q = new URLSearchParams();
@@ -108,11 +112,11 @@ export default async function StoryPrintPage({
 
       {isCard ? (
         <div className="print-card-wrap flex justify-center" data-testid="print-card-wrap">
-          <StoryPrintCard story={story} zh={zh} lines={lines} />
+          <StoryPrintCard story={story} zh={zhForViewer} lines={lines} />
         </div>
       ) : (
         <div data-testid="print-full">
-          <StoryPrintBody story={story} zh={zh} lines={lines} />
+          <StoryPrintBody story={story} zh={zhForViewer} lines={lines} />
         </div>
       )}
 

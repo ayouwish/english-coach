@@ -12,6 +12,7 @@ export async function GET(req: NextRequest) {
     const user = await requireUser();
     const limit = Number(req.nextUrl.searchParams.get("limit") ?? 20);
     const materialId = req.nextUrl.searchParams.get("material_id");
+    // task-95 rev2：「我的录音」**仅本人**（英文明细家庭可见，但录音/原文不共享）
     const items = (await listRecordings(user.id, Number.isFinite(limit) ? limit : 20)).filter(
       (x) => !materialId || x.material_id === materialId,
     );

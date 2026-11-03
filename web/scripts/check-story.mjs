@@ -603,6 +603,123 @@ try {
         check("设置页含费用说明（每张约 ¥0.1）", /每张约\s*¥?0\.1|每张约/.test(settingsHtml));
       }
 
+      // ── task-95 rev2：按查看者本人隔离（家长看孩子故事不展示孩子的原文/原声/朗读）──
+      {
+        const DB_PATH_95 = process.env.DB_PATH ?? path.join(WEB_ROOT, "data/app.db");
+        const TINY_WAV_95 = Buffer.from("UklGRiQAAABXQVZFZm10IBAAAAABAAEAQB8AAEAfAAABAAgAZGF0YQAAAAA=", "base64");
+        const girlLogin = async () => {
+          const res = await fetch(`http://127.0.0.1:${port}/api/auth/login`, {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({ email: "girl@example.com", password: "Girl12345!" }),
+          });
+          const raw = typeof res.headers.getSetCookie === "function" ? res.headers.getSetCookie() : [];
+          return (raw.find((c) => c.startsWith("ec_session=")) ?? raw[0] ?? "").split(";")[0];
+        };
+        const girlCookie = await girlLogin();
+        const recIds = [];
+        try {
+          // 女孩：录中文 → 存成故事（关联录音）→ 自己读两次
+          const rf = new FormData();
+          rf.append("audio", new Blob([TINY_WAV_95], { type: "audio/wav" }), "g.wav");
+          const recRes = await fetch(`http://127.0.0.1:${port}/api/story/recordings`, { method: "POST", headers: { cookie: girlCookie }, body: rf });
+          const rec = await recRes.json().catch(() => null);
+          const recId = rec?.id ?? null;
+          if (recId) recIds.push(recId);
+          const mk = await fetch(`http://127.0.0.1:${port}/api/materials`, {
+            method: "POST",
+            headers: { "content-type": "application/json", cookie: girlCookie },
+            body: JSON.stringify({
+              title: `Girl Private Story ${Date.now()}`,
+              text: "Today I played with my friend. We built a sandcastle.",
+              kind: "story",
+              level: "A2",
+              source: "text",
+              source_zh: "今天我和朋友玩了沙子。",
+              recording_id: recId,
+            }),
+          });
+          const mat = await mk.json().catch(() => null);
+          const girlStoryId = mat?.id ?? null;
+          if (girlStoryId) created.push(girlStoryId);
+          const submit = async (cookie, materialId) => {
+            const form = new FormData();
+            form.append("audio", new Blob([TINY_WAV_95], { type: "audio/wav" }), "a.wav");
+            form.append("reference_text", "Today I played with my friend.");
+            form.append("mode", "scripted");
+            form.append("material_id", materialId);
+            const r = await fetch(`http://127.0.0.1:${port}/api/attempts/async`, { method: "POST", headers: { cookie }, body: form });
+            return (await r.json().catch(() => null))?.id ?? null;
+          };
+          const a1 = await submit(girlCookie, girlStoryId);
+          const a2 = await submit(girlCookie, girlStoryId);
+          for (let i = 0; i < 20; i++) {
+            const st = await (await fetch(`http://127.0.0.1:${port}/api/attempts/status?ids=${encodeURIComponent(`${a1},${a2}`)}`, { headers: { cookie: girlCookie } })).json();
+            if ((st?.items ?? []).every((x) => x.status === "done" || x.status === "failed")) break;
+            await new Promise((r) => setTimeout(r, 500));
+          }
+
+          // ① 家长（dad）看孩子故事：朗读/原声/原文都不出现（按观众本人 0 次）
+          const dadStatus = await (await fetch(`http://127.0.0.1:${port}/api/story/${girlStoryId}/audio/status`, { headers: { cookie: dad } })).json();
+          check("★ 家长看孩子故事：audio/status 按观众本人（attempt_count=0）", Number(dadStatus?.attempt_count) === 0, JSON.stringify(dadStatus ?? null));
+          const dadDetail = (await (await fetch(`http://127.0.0.1:${port}/story/${girlStoryId}`, { headers: { cookie: dad } })).text()).replace(/<!--[\s\S]*?-->/g, "");
+          check("★ 家长看不到孩子的原声区块（无 detail-source / source-zh / source-audio）", !dadDetail.includes('data-testid="detail-source"') && !dadDetail.includes('data-testid="detail-source-zh"') && !dadDetail.includes('data-testid="detail-source-audio"'));
+          check("★ 家长朗读记录按自己算（0 次空态）", /朗读记录\s*0\s*次|读过这个故事\s*0\s*次/.test(dadDetail), (dadDetail.match(/朗读记录\s*\d+\s*次|读过这个故事\s*\d+\s*次/) ?? [""])[0]);
+          check("英文正文家庭可见（家长仍能看到句子 + 打印入口）", dadDetail.includes('data-testid="detail-text"') && dadDetail.includes('data-testid="detail-print-link"'));
+          const girlRecAudioByDad = await fetch(`http://127.0.0.1:${port}/api/story/recordings/${recId}/audio`, { headers: { cookie: dad } });
+          check("★ 孩子的原始录音家长不能听（404）", girlRecAudioByDad.status === 404, `status=${girlRecAudioByDad.status}`);
+
+          // ② 打印页：非 owner 即使 ?zh=1 也不渲染中文；英文句子保留
+          const dadPrint = (await (await fetch(`http://127.0.0.1:${port}/story/${girlStoryId}/print?zh=1&layout=card`, { headers: { cookie: dad } })).text()).replace(/<!--[\s\S]*?-->/g, "");
+          check("★ 家长打印孩子故事（?zh=1）不含中文原文", dadPrint.includes('data-testid="print-card"') && !dadPrint.includes('data-testid="print-card-source-zh"') && !/今天我和朋友玩了沙子/.test(dadPrint));
+          check("打印页英文句子家庭可见（保留编号句子）", (dadPrint.match(/data-testid="print-sentence"/g) ?? []).length >= 2);
+          const girlPrint = (await (await fetch(`http://127.0.0.1:${port}/story/${girlStoryId}/print?zh=1`, { headers: { cookie: girlCookie } })).text()).replace(/<!--[\s\S]*?-->/g, "");
+          check("★ owner 自己打印仍可见中文（回归）", girlPrint.includes('data-testid="print-source-zh"') && /今天我和朋友玩了沙子/.test(girlPrint));
+
+          // ③ 列表 🎙️ 标记仅看自己
+          const girlList = await (await fetch(`http://127.0.0.1:${port}/api/materials?kind=story&limit=50`, { headers: { cookie: girlCookie } })).json();
+          const dadList = await (await fetch(`http://127.0.0.1:${port}/api/materials?kind=story&limit=50`, { headers: { cookie: dad } })).json();
+          check("★ 列表标记：女孩自己的故事 has_recording=true", (girlList?.items ?? []).find((x) => x.id === girlStoryId)?.has_recording === true);
+          check("★ 列表标记：家长看同一故事 has_recording=false（不显示孩子的录音标记）", (dadList?.items ?? []).find((x) => x.id === girlStoryId)?.has_recording === false);
+
+          // ④ /story「🎙️ 我的录音」仅本人：家长页不出现孩子的录音/所属人
+          const dadStoryPage = (await (await fetch(`http://127.0.0.1:${port}/story`, { headers: { cookie: dad } })).text()).replace(/<!--[\s\S]*?-->/g, "");
+          check("★ /story 家长页面不展示孩子的录音（仅本人）", !dadStoryPage.includes(recId));
+          const girlStoryPage = (await (await fetch(`http://127.0.0.1:${port}/story`, { headers: { cookie: girlCookie } })).text()).replace(/<!--[\s\S]*?-->/g, "");
+          check("女孩 /story 能看到自己的录音", girlStoryPage.includes(recId));
+
+          // ⑤ 音频缓存按用户隔离（story-audio/<userId>/<materialId>.wav）
+          const girlAudio = await fetch(`http://127.0.0.1:${port}/api/story/${girlStoryId}/audio`, { headers: { cookie: girlCookie } });
+          for (let i = 0; i < 30; i++) {
+            const st = await (await fetch(`http://127.0.0.1:${port}/api/story/${girlStoryId}/audio/status`, { headers: { cookie: girlCookie } })).json();
+            if (st?.status === "ready") break;
+            await new Promise((r) => setTimeout(r, 500));
+          }
+          check("女孩自己的整段回放可用（200 audio/wav，回归）", girlAudio.status === 200 || girlAudio.status === 202, `status=${girlAudio.status}`);
+          const fileFor = (userId) => path.join(WEB_ROOT, "data", "story-audio", userId, `${girlStoryId}.wav`);
+          check("★ 缓存按用户隔离：文件在 story-audio/<userId>/<materialId>.wav", fs.existsSync(fileFor("u-girl")), fileFor("u-girl").replace(WEB_ROOT, "…"));
+          check("家长没有该故事的缓存文件（不串音/不共享）", !fs.existsSync(fileFor("u-dad")));
+
+          // ⑥ 儿童看自己故事：原始输入/原声/朗读记录正常（回归）
+          const girlDetail = (await (await fetch(`http://127.0.0.1:${port}/story/${girlStoryId}`, { headers: { cookie: girlCookie } })).text()).replace(/<!--[\s\S]*?-->/g, "");
+          check("★ 儿童看自己故事：原声/原文/朗读记录都在（回归）", girlDetail.includes('data-testid="detail-source"') && girlDetail.includes('data-testid="detail-source-zh"') && girlDetail.includes('data-testid="detail-source-audio"') && /朗读记录\s*2\s*次|读过这个故事\s*2\s*次/.test(girlDetail));
+          const girlStatus = await (await fetch(`http://127.0.0.1:${port}/api/story/${girlStoryId}/audio/status`, { headers: { cookie: girlCookie } })).json();
+          check("儿童自己 audio/status attempt_count=2（回归）", Number(girlStatus?.attempt_count) === 2, JSON.stringify(girlStatus ?? null));
+        } finally {
+          const d = new Database(DB_PATH_95);
+          for (const id of recIds) {
+            const r = d.prepare("SELECT audio_path FROM story_recordings WHERE id = ?").get(id);
+            if (r?.audio_path) {
+              const abs = path.join(WEB_ROOT, "data", r.audio_path);
+              if (fs.existsSync(abs)) fs.rmSync(abs);
+            }
+            d.prepare("DELETE FROM story_recordings WHERE id = ?").run(id);
+          }
+          d.close();
+        }
+      }
+
+
       // ── task-92：打印入口始终渲染（无 source_zh/录音的故事也要有）────────────
       {
         const mkStory = async (title, body) => {
@@ -806,7 +923,7 @@ try {
           const recAudio = await fetch(`http://127.0.0.1:${port}/api/story/recordings/${recId}/audio`, { headers: { cookie: cookie2 } });
           check("原声可播放（200 audio/*）", recAudio.status === 200 && (recAudio.headers.get("content-type") ?? "").startsWith("audio/"), `status=${recAudio.status}`);
           const otherAudio = await fetch(`http://127.0.0.1:${port}/api/story/recordings/${recId}/audio`, { headers: { cookie: dad } });
-          check("★ 越权：别人听我的原声 → 404", otherAudio.status === 404, `status=${otherAudio.status}`);
+          check("★ 原始录音仅本人（别人听 → 404，不泄漏）", otherAudio.status === 404, `status=${otherAudio.status}`);
 
           // ④ 无录音的故事：只有中文原文，没有坏播放器
           const mk2 = await fetch(`http://127.0.0.1:${port}/api/materials`, {
@@ -1135,7 +1252,8 @@ try {
           const emptyAudio = await audioOf(emptyId);
           check("★ 没有录音的故事 → 404 可读提示", emptyAudio.status === 404, `status=${emptyAudio.status}`);
           const dadAudio = await audioOf(multiId, dad);
-          check("★ 别人看同一故事（无自己录音）→ 404，不泄漏她的录音", dadAudio.status === 404, `status=${dadAudio.status}`);
+          // task-95 rev2：按查看者本人 —— 家长看孩子故事时，自己 0 次朗读 → 无可回放（404，不展示孩子的）
+          check("★ 家长看孩子故事：拼接回放按观众本人（无自己的朗读 → 404，不泄漏孩子的）", dadAudio.status === 404, `status=${dadAudio.status}`);
 
           const detailReplay = await (await fetch(`http://127.0.0.1:${port}/story/${multiId}`, { headers: { cookie: cookie2 } })).text();
           check("★ 故事详情页含整段回放区块（story-audio）", detailReplay.includes('data-testid="story-audio"') && /回放整段朗读|听一听我读的故事/.test(detailReplay));
@@ -1244,7 +1362,8 @@ try {
 
     const dadDetail = await fetch(`${BASE}/story/${detailId}`, { headers: { cookie: dad } });
     const dadHtml = await dadDetail.text();
-    check("★ P1 家长详情页能看到分数（detail-scores）", dadHtml.includes('data-testid="detail-scores"'), `status=${dadDetail.status}`);
+    // task-95 rev2：朗读记录/分数按**查看者本人** —— 家长看孩子的故事不再展示孩子的分数
+    check("★ 家长看孩子故事：不展示孩子的朗读分数（按观众本人）", !dadHtml.includes('data-testid="detail-scores"'), `status=${dadDetail.status}`);
 
     // P3 降级：真实 voice 没有 /v1/story/retell → 可读中文提示
     const retellReal = await fetch(`${BASE}/api/story/retell`, {

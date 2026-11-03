@@ -22,6 +22,7 @@ export function StoryRecordingsSection({ items, isChild }: { items: RecordingVie
             <li key={r.id} className="rounded-lg bg-[#f8f9ff] p-2 text-sm" data-testid="story-recording-item">
               <div className="flex flex-wrap items-center gap-2">
                 <span className="text-xs text-[var(--ec-muted)]">{new Date(r.created_at).toLocaleString("zh-CN")}</span>
+
                 {r.status === "transcribed" ? (
                   <span className="rounded-full bg-[#e8f7ee] px-2 py-0.5 text-xs text-[#166534]">已转录</span>
                 ) : r.status === "failed" ? (
