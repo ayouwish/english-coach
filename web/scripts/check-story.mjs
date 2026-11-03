@@ -603,6 +603,35 @@ try {
         check("设置页含费用说明（每张约 ¥0.1）", /每张约\s*¥?0\.1|每张约/.test(settingsHtml));
       }
 
+      // ── task-92：打印入口始终渲染（无 source_zh/录音的故事也要有）────────────
+      {
+        const mkStory = async (title, body) => {
+          const r = await fetch(`http://127.0.0.1:${port}/api/materials`, {
+            method: "POST",
+            headers: { "content-type": "application/json", cookie: cookie2 },
+            body: JSON.stringify({ title, text: "I went to the park. The weather was nice.", kind: "story", level: "A2", source: "text", ...body }),
+          });
+          const j = await r.json().catch(() => null);
+          if (j?.id) created.push(j.id);
+          return j?.id ?? null;
+        };
+        // ① 无 source_zh、无录音
+        const bareId = await mkStory(`Bare Story ${Date.now()}`, {});
+        const bareDetail = (await (await fetch(`http://127.0.0.1:${port}/story/${bareId}`, { headers: { cookie: cookie2 } })).text()).replace(/<!--[\s\S]*?-->/g, "");
+        check("★ 无 source_zh/录音的故事：仍有整页打印入口", bareDetail.includes('data-testid="detail-print-link"') && bareDetail.includes(`/story/${bareId}/print`));
+        check("★ 无 source_zh/录音的故事：仍有卡片打印入口（href 带 layout=card）", bareDetail.includes('data-testid="detail-print-card-link"') && bareDetail.includes(`/story/${bareId}/print?layout=card`));
+        check("无 source 时原始输入区块不显示（只有条件块按条件）", !bareDetail.includes('data-testid="detail-source"'));
+        // ② 有 source_zh 的故事：回归两个入口 + 原始输入区块
+        const withId = await mkStory(`Sourced Story ${Date.now()}`, { source_zh: "我去公园了，天气很好。" });
+        const withDetail = (await (await fetch(`http://127.0.0.1:${port}/story/${withId}`, { headers: { cookie: cookie2 } })).text()).replace(/<!--[\s\S]*?-->/g, "");
+        check("★ 有 source 的故事：两个打印入口仍在（回归）", withDetail.includes('data-testid="detail-print-link"') && withDetail.includes('data-testid="detail-print-card-link"') && withDetail.includes(`/story/${withId}/print?layout=card`));
+        check("有 source 的故事：原始输入区块仍显示", withDetail.includes('data-testid="detail-source"') && /我去公园了/.test(withDetail));
+        // ③ 打印入口不在条件块内（源码级：Link 不在 detail-source 的条件 JSX 里）
+        const detailSrc = fs.readFileSync(path.join(WEB_ROOT, "src/app/story/[id]/page.tsx"), "utf8");
+        check("源码里打印入口独立于 detail-source 条件块", detailSrc.includes('data-testid="detail-print-actions"') && detailSrc.indexOf('data-testid="detail-print-actions"') < detailSrc.indexOf('data-testid="detail-source"'));
+      }
+
+
       // ── task-89：故事详情页「打印卡片」（A5 卡片版式）──────────────────────
       {
         const mk = await fetch(`http://127.0.0.1:${port}/api/materials`, {

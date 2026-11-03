@@ -107,7 +107,25 @@ export default async function StoryDetailPage({ params }: { params: Promise<{ id
             </li>
           ))}
         </ol>
-        {/* task-83：原始输入留存 —— 当时讲的原话 + 原声播放器 */}
+        {/* task-92：打印入口必须**始终渲染**（不依赖 source_zh/录音），否则无原始输入的故事没有打印按钮 */}
+        <div className="mt-3 flex flex-wrap items-center gap-2" data-testid="detail-print-actions">
+          <Link
+            href={`/story/${material.id}/print`}
+            className="ec-btn ec-btn-ghost !px-2 !py-0.5 text-xs"
+            data-testid="detail-print-link"
+          >
+            🖨️ {user.isChild ? "打印出来读" : "打印 / 另存为 PDF"}
+          </Link>
+          <Link
+            href={`/story/${material.id}/print?layout=card`}
+            className="ec-btn ec-btn-ghost !px-2 !py-0.5 text-xs"
+            data-testid="detail-print-card-link"
+          >
+            🖨️ {user.isChild ? "打印卡片出来读" : "打印卡片"}
+          </Link>
+          <span className="text-xs text-[var(--ec-muted)]">整页练习纸 / A5 卡片（可剪下）</span>
+        </div>
+        {/* task-83：原始输入留存 —— 当时讲的原话 + 原声播放器（只有它按条件显示） */}
         {material.sourceZh || sourceRecording ? (
           <div className="mt-3 rounded-xl bg-[#f8f9ff] p-3" data-testid="detail-source">
             <h3 className="text-sm font-extrabold">🗣️ 我当时讲的原话</h3>
@@ -142,20 +160,6 @@ export default async function StoryDetailPage({ params }: { params: Promise<{ id
             ) : (
               <p className="mt-1 text-xs text-[var(--ec-muted)]">这个故事是打字输入的，没有原声录音。</p>
             )}
-            <Link
-              href={`/story/${material.id}/print`}
-              className="ec-btn ec-btn-ghost mt-2 !px-2 !py-0.5 text-xs"
-              data-testid="detail-print-link"
-            >
-              🖨️ {user.isChild ? "打印出来读" : "打印 / 另存为 PDF"}
-            </Link>
-            <Link
-              href={`/story/${material.id}/print?layout=card`}
-              className="ec-btn ec-btn-ghost mt-2 !px-2 !py-0.5 text-xs"
-              data-testid="detail-print-card-link"
-            >
-              🖨️ {user.isChild ? "打印卡片出来读" : "打印卡片"}
-            </Link>
           </div>
         ) : null}
       </section>
