@@ -1,4 +1,4 @@
-import { splitSentences } from "@/lib/sentence-split";
+import { StorySentenceList, sentenceCountOf } from "./StorySentenceList";
 
 export interface PrintStory {
   id: string;
@@ -25,13 +25,13 @@ export function StoryPrintBody({
   /** 合集里显示「第 X / N 篇」 */
   pageLabel?: string;
 }) {
-  const sentences = splitSentences(story.text);
+  const sentenceCount = sentenceCountOf(story.text);
   return (
-    <article className="print-sheet rounded-2xl border border-[#e6e8f5] bg-white p-6 text-[15pt] leading-[1.9] text-black shadow-sm print:text-[14pt] print:leading-[2]">
-      <header className="border-b border-[#cfd3e6] pb-3">
+    <article data-testid="print-sheet" className="print-sheet rounded-2xl border border-[#e6e8f5] bg-white p-6 text-[15pt] leading-[1.9] text-black shadow-sm print:text-[14pt] print:leading-[2]">
+      <header className="print-story-heading border-b border-[#cfd3e6] pb-3">
         <h1 className="text-[20pt] font-extrabold leading-snug">{story.title}</h1>
         <p className="mt-1 text-[10pt] text-[#555] print:text-black">
-          等级 {story.level ?? "—"} · {sentences.length} 句 · {new Date(story.createdAt).toLocaleDateString("zh-CN")}
+          等级 {story.level ?? "—"} · {sentenceCount} 句 · {new Date(story.createdAt).toLocaleDateString("zh-CN")}
           {pageLabel ? ` · ${pageLabel}` : ""}
         </p>
       </header>
@@ -45,14 +45,7 @@ export function StoryPrintBody({
 
       <section className="mt-5" data-testid="print-sentences">
         <h2 className="text-[13pt] font-bold">Read aloud · 朗读练习</h2>
-        <ol className="mt-2 list-decimal space-y-3 pl-6">
-          {sentences.map((s, i) => (
-            <li key={i} data-testid="print-sentence" className="pl-1">
-              <span>{s}</span>
-              {lines ? <div className="print-line mt-2 h-6 border-b border-dashed border-[#bbb]" aria-hidden /> : null}
-            </li>
-          ))}
-        </ol>
+        <StorySentenceList text={story.text} lines={lines} />
       </section>
 
       <footer className="mt-8 flex flex-wrap items-end gap-6 border-t border-[#cfd3e6] pt-4 text-[10pt] print:text-black">

@@ -149,6 +149,13 @@ export default async function StoryDetailPage({ params }: { params: Promise<{ id
             >
               🖨️ {user.isChild ? "打印出来读" : "打印 / 另存为 PDF"}
             </Link>
+            <Link
+              href={`/story/${material.id}/print?layout=card`}
+              className="ec-btn ec-btn-ghost mt-2 !px-2 !py-0.5 text-xs"
+              data-testid="detail-print-card-link"
+            >
+              🖨️ {user.isChild ? "打印卡片出来读" : "打印卡片"}
+            </Link>
           </div>
         ) : null}
       </section>

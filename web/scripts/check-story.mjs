@@ -603,6 +603,62 @@ try {
         check("设置页含费用说明（每张约 ¥0.1）", /每张约\s*¥?0\.1|每张约/.test(settingsHtml));
       }
 
+      // ── task-89：故事详情页「打印卡片」（A5 卡片版式）──────────────────────
+      {
+        const mk = await fetch(`http://127.0.0.1:${port}/api/materials`, {
+          method: "POST",
+          headers: { "content-type": "application/json", cookie: cookie2 },
+          body: JSON.stringify({
+            title: `Card Story ${Date.now()}`,
+            text: "Today I built a tall block tower. Then my friend knocked it down. I was a little angry.",
+            kind: "story",
+            level: "A2",
+            source: "text",
+            source_zh: "今天我搭了一座很高的积木塔，然后朋友把它推倒了，我有点生气。",
+          }),
+        });
+        const mat = await mk.json().catch(() => null);
+        const mid = mat?.id ?? null;
+        if (mid) created.push(mid);
+        check("task-89：创建测试故事", Boolean(mid), String(mid));
+
+        const pageHtml = async (qs = "") => {
+          const res = await fetch(`http://127.0.0.1:${port}/story/${mid}/print${qs}`, { headers: { cookie: cookie2 } });
+          const html = (await res.text()).replace(/<!--[\s\S]*?-->/g, "");
+          return { status: res.status, html };
+        };
+
+        // ① 卡片版式
+        const card = await pageHtml("?layout=card");
+        check("★ 卡片页 200", card.status === 200, `status=${card.status}`);
+        check("★ 含 print-card 容器 + 标题/级别/编号句子", card.html.includes('data-testid="print-card"') && card.html.includes('data-testid="print-card-title"') && (card.html.match(/data-testid="print-sentence"/g) ?? []).length >= 2);
+        check("★ A5 尺寸 + 虚线裁切框（148×210mm / dashed）", /148mm/.test(card.html) && /210mm/.test(card.html) && /1\.5px dashed/.test(card.html));
+        check("★ 打印 CSS：@page A4 + 10mm 边距 + break-inside avoid", /@page\s*\{\s*size:\s*A4;\s*margin:\s*10mm;?\s*\}/.test(card.html) && /break-inside/.test(card.html));
+        check("★ 卡片有姓名/日期手写栏 + 品牌落款", /姓名 Name/.test(card.html) && /日期 Date/.test(card.html) && /我的故事卡/.test(card.html));
+        check("卡片默认不显示中文原文", !card.html.includes('data-testid="print-card-source-zh"'));
+        const cardZh = await pageHtml("?layout=card&zh=1&lines=1");
+        check("★ 卡片 ?zh=1 显示中文原文", cardZh.html.includes('data-testid="print-card-source-zh"') && /今天我搭了一座很高的积木塔/.test(cardZh.html));
+        check("★ 卡片 ?lines=1 加书写留白行", cardZh.html.includes("print-line"));
+        check("卡片页零 IPA、无字面 **", leaks(cardZh.html).length === 0 && !cardZh.html.includes("**"));
+
+        // ② 默认仍是整页练习纸（回归）
+        const full = await pageHtml();
+        check("★ 默认（无 layout）仍为整页练习纸", full.status === 200 && full.html.includes('data-testid="print-full"') && full.html.includes('data-testid="print-sheet"') && !full.html.includes('data-testid="print-card"'), `status=${full.status}`);
+        check("整页版式仍有编号句子 + 名字/日期", full.html.includes('data-testid="print-sentence"') && /名字 Name/.test(full.html));
+
+        // ③ 工具栏版式切换
+        check("★ 工具栏有版式切换（整页练习纸 / A5 卡片）", card.html.includes('data-testid="print-layout-switch"') && card.html.includes('data-testid="print-layout-full"') && card.html.includes('data-testid="print-layout-card"'));
+        check("卡片版式选中态（aria-pressed=true）", /data-testid="print-layout-card"[^>]*aria-pressed="true"|aria-pressed="true"[^>]*data-testid="print-layout-card"/.test(card.html));
+        check("整页版式里卡片链接带 layout=card、整页链接不带 card", /href="\/story\/[^"]+\/print\?layout=card"/.test(full.html) && /href="\/story\/[^"]+\/print"/.test(full.html));
+
+        // ④ 详情页两个入口
+        const detail = (await (await fetch(`http://127.0.0.1:${port}/story/${mid}`, { headers: { cookie: cookie2 } })).text()).replace(/<!--[\s\S]*?-->/g, "");
+        check("★ 详情页有「打印卡片」入口（href 带 layout=card）", detail.includes('data-testid="detail-print-card-link"') && /href="\/story\/[^"]+\/print\?layout=card"/.test(detail));
+        check("详情页原有整页打印入口保留", detail.includes('data-testid="detail-print-link"'));
+        check("儿童文案「打印卡片出来读」存在于源码", fs.readFileSync(path.join(WEB_ROOT, "src/app/story/[id]/page.tsx"), "utf8").includes("打印卡片出来读"));
+      }
+
+
       // ── task-85：多选故事 → 故事集打印（封面 + 每篇分页）────────────────────
       {
         const makeStory = async (n) => {
@@ -632,7 +688,12 @@ try {
         check("★ 封面显示篇数「共 3 篇」", /共\s*3\s*篇/.test(coll));
         check("★ 3 篇都渲染（collection-story ×3）", (coll.match(/data-testid="collection-story"/g) ?? []).length === 3);
         check("★ 每篇有编号句子", (coll.match(/data-testid="print-sentence"/g) ?? []).length >= 3);
-        check("★ 每篇另起一页（break-before: page）", /break-before:\s*page/.test(coll));
+        // task-90：封面独占第一页；故事内容自然拼接（不再强制每篇分页）
+        check("★ 封面独占第一页（.print-cover break-after: page）", /\.print-cover\s*\{[^}]*break-after:\s*page/.test(coll) && coll.includes('print-cover'));
+        check("★ 已无「每个故事强制分页」规则（.print-story + .print-story）", !/\.print-story\s*\+\s*\.print-story/.test(coll));
+        check("★ 防难看分割：标题 break-after:avoid / 句子与书写线 break-inside:avoid", /\.print-story-heading\s*\{[^}]*break-after:\s*avoid/.test(coll) && /\.print-sentence\s*\{[^}]*break-inside:\s*avoid/.test(coll) && /\.print-line\s*\{[^}]*break-inside:\s*avoid/.test(coll));
+        check("★ 故事块允许跨页拼接（.print-story break-inside:auto）", /\.print-story\s*\{[^}]*break-inside:\s*auto/.test(coll));
+        check("3 篇仍全部渲染（回归）", (coll.match(/data-testid="collection-story"/g) ?? []).length === 3);
         check("★ 页脚「第 X / N 篇」", /第\s*1\s*\/\s*3\s*篇/.test(coll) && /第\s*3\s*\/\s*3\s*篇/.test(coll));
         check("★ 合集有打印按钮 + @media print", coll.includes('data-testid="collection-print-button"') && /@media print/.test(coll));
         check("合集默认不显示中文", !coll.includes('data-testid="print-source-zh"'));

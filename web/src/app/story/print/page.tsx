@@ -69,7 +69,12 @@ export default async function StoryCollectionPrintPage({
           .print-sheet { box-shadow: none !important; border: none !important; }
           .print-line { border-bottom: 1px solid #999 !important; }
           .print-origin { color: #000 !important; }
-          .print-story + .print-story { break-before: page; page-break-before: always; }
+          /* task-90：封面独占第一页；故事内容自然流式拼接（可一页多篇，长故事自然跨页） */
+          .print-cover { break-after: page; page-break-after: always; }
+          .print-story { break-inside: auto; page-break-inside: auto; }
+          .print-story-heading { break-after: avoid; page-break-after: avoid; }
+          .print-sentence { break-inside: avoid; page-break-inside: avoid; }
+          .print-line { break-inside: avoid; page-break-inside: avoid; }
           * { print-color-adjust: exact; -webkit-print-color-adjust: exact; }
         }
       `}</style>
@@ -106,7 +111,10 @@ export default async function StoryCollectionPrintPage({
       ) : (
         <>
           {/* 封面页 */}
-          <section className="print-sheet rounded-2xl border border-[#e6e8f5] bg-white p-8 text-black shadow-sm" data-testid="collection-cover">
+          <section
+            className="print-sheet print-cover mb-6 rounded-2xl border border-[#e6e8f5] bg-white p-8 text-black shadow-sm"
+            data-testid="collection-cover"
+          >
             <h1 className="text-[24pt] font-extrabold">我的故事集</h1>
             <p className="mt-2 text-[11pt] text-[#555] print:text-black">
               共 {stories.length} 篇 · {new Date().toLocaleDateString("zh-CN")}
