@@ -16,7 +16,7 @@ export async function GET(req: NextRequest) {
     await ensureBootstrap();
     const user = await requireUser();
     const prefs = await getPrefs(user.id, user.isChild);
-    const showIpa = effectiveShowWordIpa(prefs, user.isChild);
+    const showIpa = effectiveShowWordIpa(prefs);
     const raw = (req.nextUrl.searchParams.get("words") ?? "").split(",");
     const words = [...new Set(raw.map((w) => w.trim()).filter(Boolean))];
     if (words.length === 0) throw new HttpError(400, "bad_request", "缺少 words 参数");
@@ -44,7 +44,7 @@ export async function GET(req: NextRequest) {
     if (err instanceof VoiceError) {
       const unavailable = err.code === "voice_unreachable" || err.status === 404 || err.status === 503 || err.status === 504;
       return NextResponse.json(
-        { error: { code: unavailable ? "word_ipa_unavailable" : "provider_error", message: unavailable ? "音标服务暂时不可用；可以先点 🔊 听发音。" : `查询音标失败：${err.message}`, detail: {} } },
+        { error: { code: unavailable ? "word_ipa_unavailable" : "provider_error", message: unavailable ? "音标服务暂时不可用，请稍后再试。" : `查询音标失败：${err.message}`, detail: {} } },
         { status: unavailable ? 503 : 502 },
       );
     }

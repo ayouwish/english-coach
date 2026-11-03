@@ -79,27 +79,29 @@ async function main() {
   const tooMany = await getJson(`/api/words?words=${Array.from({ length: 51 }, (_, i) => `w${i}`).join(",")}`, dadCookie);
   check("批量 >50 → 400", tooMany.status === 400, `status=${tooMany.status}`);
 
-  // ② 儿童策略
+  // ② 儿童：task-88 起和成人一样能看到音标（去掉 ipa_disabled 门控）
   const girlDefault = await getJson("/api/words/think", girlCookie);
-  check("★ 儿童默认 → ipa:null（零 IPA 规则）", girlDefault.status === 200 && girlDefault.json?.ipa === null && girlDefault.json?.ipa_disabled === true, JSON.stringify(girlDefault.json).slice(0, 80));
+  check("★ 儿童默认也能拿到 IPA（不再门控）", girlDefault.status === 200 && girlDefault.json?.ipa === "θɪŋk" && !girlDefault.json?.ipa_disabled, JSON.stringify(girlDefault.json).slice(0, 90));
   const batchGirl = await getJson("/api/words?words=think,there", girlCookie);
-  check("儿童批量同样不返回 IPA", batchGirl.status === 200 && (batchGirl.json?.words ?? []).every((w) => w.ipa === null));
-  const enable = await fetch(`${BASE}/api/settings`, {
-    method: "PATCH",
-    headers: { "content-type": "application/json", cookie: girlCookie },
-    body: JSON.stringify({ show_word_ipa: true }),
-  });
-  const girlOn = await getJson("/api/words/think", girlCookie);
-  check("★ 家长打开开关后儿童可拿到 IPA（child-ipa 显式豁免）", enable.status === 200 && girlOn.status === 200 && girlOn.json?.ipa === "θɪŋk", `ipa=${String(girlOn.json?.ipa)}`);
+  check("儿童批量同样返回 IPA", batchGirl.status === 200 && (batchGirl.json?.words ?? []).every((w) => typeof w.ipa === "string" && w.ipa.length > 0));
   const girlPageOn = await (await fetch(`${BASE}/practice`, { headers: { cookie: girlCookie } })).text();
-  check("即使开关打开，儿童 HTML 仍零 IPA（音标只在点击后由 API 下发）", leaks(girlPageOn).length === 0, `leaked=${leaks(girlPageOn).join("")}`);
+  check("★ 儿童页面 SSR 仍零 IPA（音标只在点击后由 API 下发）", leaks(girlPageOn).length === 0, `leaked=${leaks(girlPageOn).join("")}`);
+
+  // 开关关闭（所有人）：API 返回 ipa_disabled，浮层提示「音标已关闭」
+  const off = await fetch(`${BASE}/api/settings`, {
+    method: "PATCH",
+    headers: { "content-type": "application/json", cookie: dadCookie },
+    body: JSON.stringify({ show_word_ipa: false }),
+  });
+  const offWord = await getJson("/api/words/think", dadCookie);
+  check("★ 关闭开关 → ipa:null + ipa_disabled（浮层显示「音标已关闭」）", off.status === 200 && offWord.status === 200 && offWord.json?.ipa === null && offWord.json?.ipa_disabled === true, JSON.stringify(offWord.json).slice(0, 80));
   const reset = await fetch(`${BASE}/api/settings`, {
     method: "PATCH",
-    headers: { "content-type": "application/json", cookie: girlCookie },
+    headers: { "content-type": "application/json", cookie: dadCookie },
     body: JSON.stringify({ show_word_ipa: null }),
   });
-  const girlReset = await getJson("/api/words/think", girlCookie);
-  check("恢复默认后儿童又不返回 IPA", reset.status === 200 && girlReset.json?.ipa === null);
+  const onAgain = await getJson("/api/words/think", dadCookie);
+  check("恢复默认（开）后又能拿到 IPA", reset.status === 200 && onAgain.json?.ipa === "θɪŋk");
 
   // ③ voice 不可用 → 503 可读
   wordIpaMode = "503";
@@ -150,10 +152,12 @@ async function main() {
   // ⑤ WordText 组件结构 / 关闭行为 / slow TTS（源码级）
   const wt = fs.readFileSync(path.join(WEB_ROOT, "src/components/WordText.tsx"), "utf8");
   check("★ WordText 渲染 word-token 按钮", wt.includes('data-testid="word-token"') && wt.includes("type=\"button\""));
-  check("★ 浮层含音标 + 🔊 + 关闭", wt.includes('data-testid="word-ipa-popover"') && wt.includes('data-testid="word-ipa-play"') && wt.includes('data-testid="word-ipa-close"'));
-  check("★ 缺少音标显示「暂无音标」（仍可 🔊）", wt.includes("暂无音标") && wt.includes("可以先点 🔊 听发音"));
+  check("★ 浮层只含音标 + ✕（无发音按钮）", wt.includes('data-testid="word-ipa-popover"') && wt.includes('data-testid="word-ipa-close"') && !wt.includes('data-testid="word-ipa-play"'));
+  check("★ 组件源码不含发音残留（🔊 / 听发音 / /api/tts / new Audio）", !/🔊|听发音|\/api\/tts|new Audio/.test(wt), (wt.match(/🔊|听发音|\/api\/tts|new Audio/) ?? [""])[0]);
+  check("★ 缺少音标显示「暂无音标」（不报错不弹窗）", wt.includes("暂无音标"));
+  check("★ 开关关闭显示「音标已关闭」", wt.includes("音标已关闭") && wt.includes('data-testid="word-ipa-off"'));
   check("★ Esc / 滚屏 / 点空白关闭，同一时刻只开一个", wt.includes('e.key === "Escape"') && wt.includes('window.addEventListener("scroll"') && wt.includes("activeCloser"));
-  check("★ 听发音用 slow 语速 TTS（/api/tts?text=word&rate=slow）", /rate:\s*"slow"/.test(wt) && wt.includes("/api/tts?"));
+  check("★ 键盘可用（Enter/Space 打开）", /e\.key === "Enter"/.test(wt) && /e\.key === " "/.test(wt));
   check("★ 保留标点空格（tokenize 只切单词）", wt.includes("isWord") && /slice\(last, match.index\)/.test(wt));
 
   // ⑥ 设置页有开关

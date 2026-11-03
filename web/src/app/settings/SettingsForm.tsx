@@ -45,7 +45,7 @@ export function SettingsForm({
   const roleDefault = user.isChild ? 5 : 8;
   const [storySentences, setStorySentences] = useState<number | null>(user.storySentences ?? null);
   const [showWordIpa, setShowWordIpa] = useState<boolean | null>(user.showWordIpa ?? null);
-  const wordIpaDefault = !user.isChild;
+  const wordIpaDefault = true;
   const wordIpaOn = showWordIpa ?? wordIpaDefault;
   const [previewBusy, setPreviewBusy] = useState(false);
   const [previewError, setPreviewError] = useState<string | null>(null);
@@ -213,11 +213,11 @@ export function SettingsForm({
               checked={wordIpaOn}
               onChange={(e) => setShowWordIpa(e.target.checked)}
             />
-            🔤 单词显示音标（{user.isChild ? "孩子" : "我"}当前{wordIpaOn ? "显示" : "不显示"}）
+            🔤 单词显示音标（当前{wordIpaOn ? "显示" : "不显示"}）
           </label>
           <p className="mt-1 text-xs text-[var(--ec-muted)]">
-            开着时点句子里的单词会显示音标（例如 think）；关掉后仍可点 🔊 听发音。
-            {user.isChild ? "孩子默认关闭，家长可以在这里打开。" : "成人默认打开。"}
+            开着时点句子里的单词会显示音标（例如 think）；关掉后点词会提示「音标已关闭」。
+            默认打开（含儿童）。
           </p>
           <button
             type="button"

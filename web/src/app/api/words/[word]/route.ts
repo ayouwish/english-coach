@@ -17,10 +17,10 @@ export async function GET(_req: NextRequest, ctx: { params: Promise<{ word: stri
     const user = await requireUser();
     const { word } = await ctx.params;
     const prefs = await getPrefs(user.id, user.isChild);
-    const showIpa = effectiveShowWordIpa(prefs, user.isChild);
+    const showIpa = effectiveShowWordIpa(prefs);
     const result = await lookupWordIpa(word);
     if (!showIpa) {
-      // 儿童（或关闭开关）：不给 IPA，但仍告知"这是哪个词"（前端只显示 🔊）
+      // 开关关闭（所有人）：不给 IPA，前端浮层显示「音标已关闭」
       return NextResponse.json({ word: result.word, ipa: null, ipa_disabled: true, variants: [], source: null, syllables: null }, { status: 200 });
     }
     if (!result.ipa) {
@@ -41,7 +41,7 @@ export async function GET(_req: NextRequest, ctx: { params: Promise<{ word: stri
         {
           error: {
             code: unavailable ? "word_ipa_unavailable" : "provider_error",
-            message: unavailable ? "音标服务暂时不可用；可以先点 🔊 听发音。" : `查询音标失败：${err.message}`,
+            message: unavailable ? "音标服务暂时不可用，请稍后再试。" : `查询音标失败：${err.message}`,
             detail: {},
           },
         },

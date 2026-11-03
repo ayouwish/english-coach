@@ -12,9 +12,12 @@ export interface UserPrefs {
   showWordIpa: boolean | null;
 }
 
-/** 单词是否显示 IPA（task-87）：设置优先；未设置时成人开、儿童关（零 IPA 规则） */
-export function effectiveShowWordIpa(prefs: Pick<UserPrefs, "showWordIpa">, isChild: boolean): boolean {
-  if (prefs.showWordIpa === null || prefs.showWordIpa === undefined) return !isChild;
+/**
+ * 单词是否显示 IPA（task-88）：设置优先；**未设置时默认开（所有人，含儿童）**。
+ * 儿童不再被单独关掉——用户明确"点词就是看音标"；关掉时才隐藏（浮层提示去设置打开）。
+ */
+export function effectiveShowWordIpa(prefs: Pick<UserPrefs, "showWordIpa">): boolean {
+  if (prefs.showWordIpa === null || prefs.showWordIpa === undefined) return true;
   return prefs.showWordIpa;
 }
 

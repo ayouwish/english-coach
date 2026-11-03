@@ -123,7 +123,7 @@ export default async function PracticePage({
   return (
     <div className="flex flex-col gap-5">
       <PracticeClient
-      showWordIpa={effectiveShowWordIpa(await getPrefs(user.id, user.isChild), user.isChild)}
+      showWordIpa={effectiveShowWordIpa(await getPrefs(user.id, user.isChild))}
       initialCursor={initialCursor}
         sentences={items}
         isChild={user.isChild}

@@ -34,7 +34,7 @@ export default async function FlowPage({
   return (
     <FlowClient
       isChild={user.isChild}
-      showWordIpa={effectiveShowWordIpa(await getPrefs(user.id, user.isChild), user.isChild)}
+      showWordIpa={effectiveShowWordIpa(await getPrefs(user.id, user.isChild))}
       userLevel={user.cefrLevel}
       corpus={corpus}
       voiceReachable={caps.reachable}

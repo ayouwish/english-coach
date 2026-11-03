@@ -119,7 +119,7 @@ export default async function ChatPage() {
       usage={usage}
       ttsRate={speechRate}
       voiceReachable={caps.reachable}
-      showWordIpa={effectiveShowWordIpa(await getPrefs(user.id, user.isChild), user.isChild)}
+      showWordIpa={effectiveShowWordIpa(await getPrefs(user.id, user.isChild))}
     />
 
       {lastMessages.length > 0 ? (

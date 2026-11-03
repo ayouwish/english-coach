@@ -24,7 +24,7 @@ export default async function StoryDetailPage({ params }: { params: Promise<{ id
   await ensureBootstrap();
   const user = await getCurrentUser();
   if (!user) redirect("/login");
-  const showWordIpa = effectiveShowWordIpa(await getPrefs(user.id, user.isChild), user.isChild);
+  const showWordIpa = effectiveShowWordIpa(await getPrefs(user.id, user.isChild));
   const { id } = await params;
   const material = await getMaterial(id);
   if (!material || material.kind !== "story") {

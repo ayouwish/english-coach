@@ -50,7 +50,7 @@ export default async function ChatSessionDetailPage({ params }: { params: Promis
   const summary = parseSessionSummary(session.summaryJson);
   const prefs = await getPrefs(user.id, user.isChild);
   const speechRate = effectiveTtsRate(user, prefs);
-  const showWordIpa = effectiveShowWordIpa(prefs, user.isChild);
+  const showWordIpa = effectiveShowWordIpa(prefs);
   const [owner] = await db.select({ displayName: users.displayName }).from(users).where(eq(users.id, user.id)).limit(1);
 
   return (

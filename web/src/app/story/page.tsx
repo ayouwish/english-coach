@@ -71,7 +71,7 @@ export default async function StoryPage() {
       <StoryClient
         viewerId={user.id}
         defaultSentences={effectiveStorySentences(user)}
-        showWordIpa={effectiveShowWordIpa(await getPrefs(user.id, user.isChild), user.isChild)}
+        showWordIpa={effectiveShowWordIpa(await getPrefs(user.id, user.isChild))}
         isChild={user.isChild}
         defaultLevel={defaultLevel}
         levels={[...CEFR_LEVELS]}

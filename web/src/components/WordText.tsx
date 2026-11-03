@@ -35,12 +35,14 @@ export function tokenizeWords(text: string): Token[] {
 let activeCloser: (() => void) | null = null;
 
 /**
- * 可点单词正文（task-87）：点一下显示音标 + 听发音。
+ * 可点单词正文（task-87 / task-88）：点一下**只显示音标**（不提供发音按钮）。
  *
  * - 保留标点空格；单词是 `<button>`（键盘可聚焦/Enter 可开）
  * - 浮层：移动端底部 sheet；桌面靠近单词（自动避让视口）
- * - 儿童/关闭开关 → 只显示 🔊（不渲染 IPA）
- * - 未有音标 → 「暂无音标」+ 🔊 仍可用；关闭：再点同词 / 点空白 / Esc / 滚屏
+ * - 浮层内容只有：单词 + `/ipa/`（多变体小字「其它读音」）+ ✕
+ * - 无音标 → 「暂无音标」（不报错、无按钮）
+ * - 开关关闭（showIpa=false）→ 浮层显示「音标已关闭」并提示去设置里打开（仍可点，不渲染 IPA）
+ * - 关闭：再点同词 / 点空白 / Esc / 滚屏；同一时刻只开一个
  */
 export function WordText({
   text,
@@ -49,7 +51,7 @@ export function WordText({
   className = "",
 }: {
   text: string;
-  /** 是否渲染 IPA（儿童默认 false）；false 时只显示 🔊 */
+  /** 是否渲染 IPA（设置开关；关闭时浮层显示「音标已关闭」） */
   showIpa?: boolean;
   as?: "span" | "p" | "div";
   className?: string;
@@ -118,16 +120,7 @@ export function WordText({
     }
   }
 
-  function playWord(word: string) {
-    try {
-      const audio = new Audio(`/api/tts?${new URLSearchParams({ text: word, rate: "slow", format: "mp3" }).toString()}`);
-      void audio.play().catch(() => {
-        /* 浏览器拦截：用户可再点一次 */
-      });
-    } catch {
-      /* 静默：播放在极少数环境不可用 */
-    }
-  }
+
 
   return (
     <Tag className={className} data-wordtext={idRef.current}>
@@ -190,20 +183,21 @@ export function WordText({
           {showIpa && ipa?.variants && ipa.variants.length > 1 ? (
             <p className="mt-1 text-xs text-[var(--ec-muted)]">其它读音：{ipa.variants.slice(1).map((v) => `/${v}/`).join(" ")}</p>
           ) : null}
-          <div className="mt-2 flex items-center gap-2">
+          {!showIpa ? (
+            <p className="mt-1 text-xs text-[var(--ec-muted)]" data-testid="word-ipa-off">
+              音标已关闭；可在「设置 → 单词显示音标」里打开。
+            </p>
+          ) : null}
+          <div className="mt-2 flex items-center justify-end gap-2">
             <button
               type="button"
-              data-testid="word-ipa-play"
-              className="ec-btn ec-btn-primary !px-2 !py-0.5 text-xs"
-              onClick={() => playWord(openWord)}
+              aria-label="关闭"
+              title="关闭"
+              className="ec-btn ec-btn-ghost !px-2 !py-0.5 text-xs"
+              onClick={close}
+              data-testid="word-ipa-close"
             >
-              🔊 听发音
-            </button>
-            {!showIpa || (!loading && ipa && !ipa.ipa) ? (
-              <span className="text-xs text-[var(--ec-muted)]">{showIpa ? "可以先点 🔊 听发音" : "点 🔊 听一听"}</span>
-            ) : null}
-            <button type="button" className="ec-btn ec-btn-ghost !px-2 !py-0.5 text-xs ml-auto" onClick={close} data-testid="word-ipa-close">
-              关闭
+              ✕
             </button>
           </div>
         </div>

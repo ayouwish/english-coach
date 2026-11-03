@@ -40,7 +40,7 @@ export default async function ReportPage({
 
   const isChild = user.isChild;
   // task-87：单词是否显示音标（成人默认开、儿童默认关；设置可覆盖）
-  const showWordIpa = effectiveShowWordIpa(await getPrefs(user.id, user.isChild), user.isChild);
+  const showWordIpa = effectiveShowWordIpa(await getPrefs(user.id, user.isChild));
   // task-71：默认「最近 7 天」，可切「全部累计」(?scope=all)
   const params = await searchParams;
   const scope = params.scope === "all" ? "all" : "recent";
