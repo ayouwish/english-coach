@@ -116,6 +116,9 @@ async function main() {
     // ______________________________________
     const tokenClasses = [...practiceHtml.matchAll(/data-testid="word-token"[^>]*class="([^"]*)"/g)].map((m) => m[1]);
     check("★ SSR：每个单词按钮 class 只有 word-token（无装饰类）", tokenClasses.length > 0 && tokenClasses.every((c) => c === "word-token"), tokenClasses.slice(0, 3).join(" | "));
+    const tokenTags = [...practiceHtml.matchAll(/<span[^>]*data-testid="word-token"[^>]*>/g)].map((m) => m[0]);
+    check("★ SSR：单词是 span[role=button]（不是 <button>）", tokenTags.length > 0 && tokenTags.every((t) => /role="button"/.test(t) && /tabindex="0"/.test(t)), tokenTags[0]?.slice(0, 120));
+    check("SSR：页面里没有 data-testid=word-token 的 <button>", !/<button[^>]*data-testid="word-token"/.test(practiceHtml));
     check("SSR：无 &nbsp;（词间只用普通空格）", !practiceHtml.includes("&nbsp;"));
     // 用练习页里的一句真实句子做"去标签后仍是单空格"断言（词间由原文本决定）
     const dbw = new Database(DB_PATH, { readonly: true });
@@ -171,17 +174,19 @@ async function main() {
   // ⑤ WordText 组件结构 / 长按交互 / 排版（task-94 源码级）
   const wt = fs.readFileSync(path.join(WEB_ROOT, "src/components/WordText.tsx"), "utf8");
   const css = fs.readFileSync(path.join(WEB_ROOT, "src/app/globals.css"), "utf8");
-  check("★ WordText 渲染 word-token 按钮", wt.includes('data-testid="word-token"') && wt.includes('type="button"'));
+  check("★ WordText 词元是 span[role=button]（不是 <button>，免疫扩展注入）", /<span[\s\S]{0,400}?role="button"[\s\S]{0,400}?data-testid="word-token"/.test(wt) && !/<button[\s\S]{0,200}?data-testid="word-token"/.test(wt));
   check("★ 浮层只含音标（无关闭图标 / 无 🔊 / 无 TTS 残留）", wt.includes('data-testid="word-ipa-popover"') && !wt.includes('word-ipa-close') && !/✕|🔊|听发音|\/api\/tts|new Audio/.test(wt), (wt.match(/✕|🔊|听发音|\/api\/tts|new Audio/) ?? [""])[0]);
   const popoverPart = wt.slice(wt.indexOf('data-testid="word-ipa-popover"'));
   check("浮层里没有任何按钮（关闭靠再长按/点空白/Esc/滚轮）", !popoverPart.includes("<button"));
   check("★ 单词按钮无装饰类（无 underline/decoration/px-/text-left）", wt.includes('className="word-token"') && !/underline|decoration-dotted|px-0\.5|text-left/.test(wt));
   check(
-    "★ globals.css 强制继承文字度量（font/padding/letter-spacing/word-spacing）",
-    /\.word-token\s*\{[\s\S]{0,600}?font:\s*inherit;/.test(css) &&
-      /\.word-token\s*\{[\s\S]{0,600}?padding:\s*0;/.test(css) &&
-      /\.word-token\s*\{[\s\S]{0,900}?letter-spacing:\s*inherit;/.test(css) &&
-      /\.word-token\s*\{[\s\S]{0,900}?word-spacing:\s*inherit;/.test(css),
+    "★ globals.css !important 归零（padding/margin/border/background/display）+ 继承文字度量",
+    /\.word-token\s*\{[\s\S]{0,900}?padding:\s*0\s*!important;/.test(css) &&
+      /\.word-token\s*\{[\s\S]{0,900}?margin:\s*0\s*!important;/.test(css) &&
+      /\.word-token\s*\{[\s\S]{0,900}?border:\s*0\s*!important;/.test(css) &&
+      /\.word-token\s*\{[\s\S]{0,900}?background:\s*transparent\s*!important;/.test(css) &&
+      /\.word-token\s*\{[\s\S]{0,900}?display:\s*inline\s*!important;/.test(css) &&
+      /\.word-token\s*\{[\s\S]{0,900}?letter-spacing:\s*inherit;/.test(css),
   );
   check("★ 长按 450ms 触发（普通点击不打开）", wt.includes("LONG_PRESS_MS = 450") && wt.includes("setTimeout(") && !/onClick=\{\(\) => void openFor/.test(wt) && wt.includes("onPointerDown"));
   check("★ 位移 >8px / pointerup / pointercancel 取消长按", wt.includes("MOVE_CANCEL_PX = 8") && wt.includes("onPointerMove") && wt.includes("onPointerUp") && wt.includes("onPointerCancel"));

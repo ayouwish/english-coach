@@ -642,7 +642,7 @@ export function ChatClient({
           <div className="mb-3 grid gap-2 sm:grid-cols-2" data-testid="custom-scenario-list">
             {customScenarios.map((s) => (
               <div key={s.id} className="rounded-xl border border-[#e6e8f5] bg-white p-3" data-testid="custom-scenario-card">
-                <button type="button" disabled={busy} onClick={() => start(s)} className="block w-full text-left">
+                <button type="button" disabled={busy} onClick={() => start(s)} className="block w-full !p-0 text-left">
                   <span className="block font-semibold">
                     {s.title}
                     <span className="ml-2 text-xs text-[var(--ec-muted)]">{s.title_zh}</span>

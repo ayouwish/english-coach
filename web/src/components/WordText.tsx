@@ -51,7 +51,9 @@ interface Anchor {
 /**
  * 可点单词正文（task-87 / 88 / 94）：**长按**单词在**下方**显示音标（不发音）。
  *
- * 排版（task-94 bug 修复）：按钮强制 `font: inherit` 等全部文字度量（见 globals.css `.word-token`），
+ * 元素（task-96）：`<span role="button" tabIndex={0}>` 而不是 `<button>` —— 用户浏览器扩展会注入全局
+ * `button { padding: 0 24px }`，把每个词撑开 48px；span 不会命中该选择器（CSS 另有 !important 归零兜底）。
+ * 排版（task-94 bug 修复）：强制 `font: inherit` 等全部文字度量（见 globals.css `.word-token`），
  * 不加任何 padding/下划线/圆角等装饰类 → 整句与普通文本完全一致，词间只有一个空格。
  * 交互：pointerdown 起 450ms 计时；位移 >8px / pointerup / pointercancel 取消；普通点击不打开。
  * 浮层：优先单词正下方（rect.bottom + 6，水平居中），下方不够才翻上方；窄屏底部 sheet。
@@ -124,7 +126,7 @@ export function WordText({
   useEffect(() => () => clearTimer(), [clearTimer]);
 
   /** 计算浮层位置：优先单词正下方，放不下翻上方；窄屏底部 sheet */
-  function placementFor(el: HTMLButtonElement): Anchor {
+  function placementFor(el: HTMLElement): Anchor {
     const rect = el.getBoundingClientRect();
     if (typeof window !== "undefined" && window.innerWidth < NARROW_SHEET_PX) {
       return { left: 12, top: 0, placement: "sheet" };
@@ -139,7 +141,7 @@ export function WordText({
     return { left, top: below, placement: "below" };
   }
 
-  async function openFor(word: string, el: HTMLButtonElement) {
+  async function openFor(word: string, el: HTMLElement) {
     if (openWord === word) {
       close();
       return;
@@ -166,7 +168,7 @@ export function WordText({
   }
 
   /** pointerdown：开始计时长按（普通点击不会打开） */
-  function onPointerDown(word: string, e: React.PointerEvent<HTMLButtonElement>) {
+  function onPointerDown(word: string, e: React.PointerEvent<HTMLSpanElement>) {
     if (e.pointerType === "mouse" && e.button !== 0) return;
     const el = e.currentTarget;
     clearTimer();
@@ -178,7 +180,7 @@ export function WordText({
     }, LONG_PRESS_MS);
   }
 
-  function onPointerMove(e: React.PointerEvent<HTMLButtonElement>) {
+  function onPointerMove(e: React.PointerEvent<HTMLSpanElement>) {
     const start = startRef.current;
     if (!start) return;
     if (Math.abs(e.clientX - start.x) > MOVE_CANCEL_PX || Math.abs(e.clientY - start.y) > MOVE_CANCEL_PX) {
@@ -190,9 +192,10 @@ export function WordText({
     <Tag className={className} data-wordtext="1">
       {tokens.map((t, i) =>
         t.isWord ? (
-          <button
+          <span
             key={i}
-            type="button"
+            role="button"
+            tabIndex={0}
             data-testid="word-token"
             data-word={t.text}
             data-word-ipa-anchor="1"
@@ -214,7 +217,7 @@ export function WordText({
             }}
           >
             {t.text}
-          </button>
+          </span>
         ) : (
           <span key={i}>{t.text}</span>
         ),

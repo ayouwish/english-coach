@@ -139,11 +139,15 @@ body[data-child="true"] .ec-word {
  * 继承父级字号 → 大字号句子里"空格很大、单词很小"，看起来像 justify。这里强制继承所有文字度量，
  * 并清掉按钮默认 padding/border/background，让整句视觉与普通文本完全一致（只有交互差异）。 */
 .word-token {
-  display: inline;
-  padding: 0;
-  margin: 0;
-  border: 0;
-  background: transparent;
+  /* task-96：用 !important 归零，免疫浏览器扩展注入的全局 `button/span { padding: … }` */
+  display: inline !important;
+  padding: 0 !important;
+  margin: 0 !important;
+  border: 0 !important;
+  border-radius: 0;
+  background: transparent !important;
+  box-shadow: none !important;
+  box-sizing: border-box;
   font: inherit;
   font-size: inherit;
   font-family: inherit;

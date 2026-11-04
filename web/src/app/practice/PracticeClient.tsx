@@ -488,7 +488,7 @@ export function PracticeClient({
               <button
                 type="button"
                 data-testid="sentence-history-button"
-                className="mt-1 text-xs text-[var(--ec-muted)] underline"
+                className="mt-1 !p-0 text-xs text-[var(--ec-muted)] underline"
                 onClick={() => setHistoryId(s.id)}
               >
                 📈 历史
@@ -504,7 +504,7 @@ export function PracticeClient({
         <section className="ec-card" data-testid="sentence-history-panel">
           <button
             type="button"
-            className="text-xs text-[var(--ec-muted)] underline"
+            className="!p-0 text-xs text-[var(--ec-muted)] underline"
             onClick={() => setHistoryId(null)}
           >
             收起历史

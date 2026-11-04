@@ -970,7 +970,7 @@ export function FlowClient({
                       )}
                       <button
                         type="button"
-                        className="min-w-0 flex-1 text-left"
+                        className="min-w-0 flex-1 !p-0 text-left"
                         data-testid="material-open"
                         disabled={materialBusy === m.id}
                         onClick={() => void startMaterial(m.id)}
@@ -1441,7 +1441,7 @@ function FlowRow({
       data-testid="flow-item"
       data-status={item.status}
     >
-      <button type="button" className="flex w-full items-center justify-between gap-2 text-left" onClick={onToggle}>
+      <button type="button" className="flex w-full items-center justify-between gap-2 !p-0 text-left" onClick={onToggle}>
         <span className="min-w-0 flex-1 truncate text-sm">
           {item.index + 1}. {item.text}
         </span>
