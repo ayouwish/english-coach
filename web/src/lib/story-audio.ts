@@ -22,6 +22,9 @@ const GAP_MS = 250;
 
 const STALE_ERROR = "上次生成被中断了，点「重新生成」再试一次";
 const NO_AUDIO_ERROR = "这个故事还没有可回放的朗读录音，先读一遍再来听吧";
+/** 构建卡死（超过这个时长仍未结束）→ 不再报 building，允许用户重试 */
+const BUILD_STALL_MS = 180_000;
+const STALL_ERROR = "上次生成卡住了，点「重新生成」再试一次";
 
 export type StoryAudioStatus = "building" | "ready" | "failed";
 
@@ -108,10 +111,20 @@ function signatureOf(list: StoryAttempt[]): string {
 
 const inflight = new Map<string, Promise<StoryAudioMeta>>();
 const pending = new Set<string>();
+/** 构建开始时间戳：用于识别「卡死但未结束」的构建（进程内任务可能因底层 IO/网络挂住） */
+const buildStartedAt = new Map<string, number>();
+/** 构建失败且 sidecar 都写不进去时的进程内兜底（让前端立刻看到可读错误，而不是无限转圈） */
+const buildFailureFallback = new Map<string, { error: string; at: number }>();
 
 export function isStoryAudioBuilding(materialId: string): boolean {
   const key = safeId(materialId);
   return inflight.has(key) || pending.has(key);
+}
+
+/** 该构建是否已远超正常耗时（视为卡死） */
+function isBuildStalled(materialId: string): boolean {
+  const startedAt = buildStartedAt.get(safeId(materialId));
+  return startedAt != null && Date.now() - startedAt > BUILD_STALL_MS;
 }
 
 function mimeFor(rel: string | null): string {
@@ -138,12 +151,21 @@ function readableError(err: unknown): string {
 export function buildStoryAudio(materialId: string, userId: string, opts: { force?: boolean } = {}): Promise<StoryAudioMeta> {
   const key = safeId(materialId);
   const running = inflight.get(key);
-  if (running) return running;
+  if (running) {
+    // 卡死的构建不能一直占位，否则重新生成也拿不到新任务 → 放弃它，开一个新的
+    if (!isBuildStalled(materialId)) return running;
+    inflight.delete(key);
+    buildStartedAt.delete(key);
+  }
+  buildStartedAt.set(key, Date.now());
   const promise = doBuild(materialId, userId, opts.force === true);
   inflight.set(key, promise);
   void promise
     .finally(() => {
-      if (inflight.get(key) === promise) inflight.delete(key);
+      if (inflight.get(key) === promise) {
+        inflight.delete(key);
+        buildStartedAt.delete(key);
+      }
     })
     .catch(() => {
       /* 失败信息已写进 sidecar */
@@ -159,7 +181,50 @@ export function triggerStoryAudioBuild(materialId: string, userId: string, opts:
     .finally(() => pending.delete(key));
 }
 
+/**
+ * 构建入口：保证**任何**异常都会落一个 failed sidecar。
+ *
+ * 之前的状态机会在 `doBuild` 早期抛异常（DB 查询失败、sidecar 目录不可写、磁盘满…）时
+ * 静默失败：既没写 building 也没写 failed，于是 `getStoryAudioState` 对「没有 sidecar」
+ * 永远返回 building，前端就永远停在「正在生成整段朗读…」。这里兜底。
+ */
 async function doBuild(materialId: string, userId: string, force: boolean): Promise<StoryAudioMeta> {
+  const startedAt = new Date().toISOString();
+  const key = safeId(materialId);
+  buildFailureFallback.delete(key);
+  try {
+    return await doBuildInner(materialId, userId, force);
+  } catch (err) {
+    const error = readableError(err);
+    console.warn(`[story-audio] 构建异常（${safeId(materialId)}）：${error}`);
+    let signature = "";
+    let attemptCount = 0;
+    try {
+      const list = await listStoryAudioAttempts(materialId, userId).catch(() => [] as StoryAttempt[]);
+      signature = signatureOf(list);
+      attemptCount = list.filter((a) => Boolean(a.audioPath)).length;
+    } catch {
+      /* 查询也失败：保持空签名，只求写出一条可读的失败状态 */
+    }
+    const meta: StoryAudioMeta = {
+      status: "failed",
+      signature,
+      attempt_count: attemptCount,
+      error,
+      started_at: startedAt,
+      ready_at: null,
+    };
+    try {
+      writeStoryAudioMeta(materialId, userId, meta);
+    } catch {
+      // 连 sidecar 都写不进去（目录不可写/磁盘满）→ 进程内兜底，避免状态永远是 building
+      buildFailureFallback.set(key, { error, at: Date.now() });
+    }
+    return meta;
+  }
+}
+
+async function doBuildInner(materialId: string, userId: string, force: boolean): Promise<StoryAudioMeta> {
   const list = await listStoryAudioAttempts(materialId, userId);
   const withAudio = list.filter((a): a is StoryAttempt & { audioPath: string } => Boolean(a.audioPath));
   const signature = signatureOf(list);
@@ -239,8 +304,18 @@ export async function getStoryAudioState(materialId: string, userId: string): Pr
   if (withAudio.length === 0) {
     return { status: "failed", attempt_count: 0, error: NO_AUDIO_ERROR };
   }
+  // 构建挂住（底层 IO/网络不返回）→ 不能永远报 building
+  if (isBuildStalled(materialId)) {
+    return { status: "failed", attempt_count: withAudio.length, error: STALL_ERROR };
+  }
   if (building) return { status: "building", attempt_count: withAudio.length };
-  if (!meta) return { status: "building", attempt_count: withAudio.length };
+  if (!meta) {
+    // 没有任何 sidecar：首次打开会由 GET /audio 触发构建，此时仍应是 building；
+    // 但如果上一次构建连 sidecar 都写不进去，就立刻给出可读错误。
+    const fallback = buildFailureFallback.get(safeId(materialId));
+    if (fallback) return { status: "failed", attempt_count: withAudio.length, error: fallback.error };
+    return { status: "building", attempt_count: withAudio.length };
+  }
   if (meta.status === "building") return { status: "failed", attempt_count: meta.attempt_count ?? withAudio.length, error: STALE_ERROR };
   if (meta.status === "failed") return { status: "failed", attempt_count: meta.attempt_count ?? withAudio.length, error: meta.error ?? "拼装朗读音频出错了" };
   if (meta.signature !== signature || !fs.existsSync(storyAudioPaths(materialId, userId).audioFile)) {

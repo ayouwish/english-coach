@@ -4,6 +4,12 @@ import { useCallback, useEffect, useState } from "react";
 
 type Phase = "loading" | "building" | "ready" | "failed";
 const POLL_MS = 2000;
+/**
+ * 轮询总时长上限。后端构建偶尔会「既不成功也不失败」（sidecar 目录不可写、底层 IO 挂住…
+ * 旧实现下状态会永远是 building），前端必须有兜底，否则就永远停在「正在生成整段朗读…」。
+ * 取 200s：略大于服务端 stall 判定（180s），让服务端先给出更准确的错误。
+ */
+const MAX_WAIT_MS = 200_000;
 
 /**
  * 故事整段朗读回放（task-74 ①）。
@@ -24,6 +30,12 @@ export function StoryAudioReplay({ materialId, isChild = false }: { materialId: 
     let disposed = false;
     let timer: ReturnType<typeof setTimeout> | null = null;
     let objectUrl: string | null = null;
+    const deadline = Date.now() + MAX_WAIT_MS;
+    const expired = () => Date.now() > deadline;
+    const giveUp = () => {
+      setError("生成整段朗读超时了，服务可能卡住了，请点「重新生成」再试一次");
+      setPhase("failed");
+    };
     // retryNonce>0 时首次请求带 force=1（用户点了「重新生成」）
     const forceFirst = retryNonce > 0;
     const endpoint = `/api/story/${encodeURIComponent(materialId)}/audio${forceFirst ? "?force=1" : ""}`;
@@ -51,6 +63,10 @@ export function StoryAudioReplay({ materialId, isChild = false }: { materialId: 
         return true;
       }
       if (res.status === 202) {
+        if (expired()) {
+          giveUp();
+          return true;
+        }
         setPhase("building");
         schedule();
         return true;
@@ -76,6 +92,10 @@ export function StoryAudioReplay({ materialId, isChild = false }: { materialId: 
           setError(body?.error ?? "拼装朗读音频出错了");
           setPhase("failed");
         } else {
+          if (expired()) {
+            giveUp();
+            return;
+          }
           setPhase("building");
           // 状态是 building 但没有构建在进行（首次打开）→ 触发一次
           await fetchAudio();
