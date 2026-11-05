@@ -7,6 +7,7 @@ import { Recorder } from "@/components/Recorder";
 import { WordText } from "@/components/WordText";
 import { harderLevel, simplerLevel } from "@/lib/levels";
 import { consecutiveDays, groupStoriesByDay, streakMessage } from "@/lib/story-stats";
+import { SwipeToDelete } from "@/components/SwipeToDelete";
 
 interface StorySentence {
   zh: string;
@@ -690,8 +691,15 @@ export function StoryClient({
                     <h3 className="text-xs font-semibold text-[var(--ec-muted)]">{sec.label}</h3>
                     <ul className="mt-1 flex flex-col gap-2">
                       {sec.items.map((s) => (
-                        <li key={s.id} className="rounded-xl border border-[#e6e8f5] p-3" data-testid="story-item">
-                          <div className="flex flex-wrap items-center gap-3">
+                        <li key={s.id} data-testid="story-item">
+                          <SwipeToDelete
+                            className="rounded-xl border border-[#e6e8f5]"
+                            testId="story-delete"
+                            label="删除"
+                            disabled={storyBusy === s.id}
+                            onDelete={() => removeStory(s.id)}
+                          >
+                          <div className="flex flex-wrap items-center gap-3 bg-white p-3">
                             {selectMode ? (
                               <input
                                 type="checkbox"
@@ -761,16 +769,8 @@ export function StoryClient({
                             >
                               ▶ 读这篇
                             </Link>
-                            <button
-                              type="button"
-                              className="ec-btn ec-btn-ghost !px-2 !py-0.5 text-xs"
-                              data-testid="story-delete"
-                              disabled={storyBusy === s.id}
-                              onClick={() => void removeStory(s.id)}
-                            >
-                              删除
-                            </button>
                           </div>
+                          </SwipeToDelete>
                         </li>
                       ))}
                     </ul>

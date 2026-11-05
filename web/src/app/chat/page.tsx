@@ -1,4 +1,3 @@
-import Link from "next/link";
 import { redirect } from "next/navigation";
 import { asc, desc, eq } from "drizzle-orm";
 import { ensureBootstrap, getDb } from "@/db";
@@ -17,6 +16,7 @@ import { getPrefs, effectiveShowWordIpa } from "@/lib/prefs";
 import { effectiveTtsRate } from "@/lib/tts-rate";
 import { getDailyUsage } from "@/lib/usage";
 import { ChatClient } from "./ChatClient";
+import { ChatHistoryList } from "./ChatHistoryList";
 
 export const dynamic = "force-dynamic";
 
@@ -172,37 +172,21 @@ export default async function ChatPage() {
         </details>
       ) : null}
 
-      {/* task-74 ④：历史对话列表（可点进详情页看完整消息 + 校正 + 评价 + 整段回放） */}
-      {historySessions.length > 0 ? (
-        <section className="ec-card" data-testid="chat-history-list">
-          <h2 className="font-bold">📚 历史对话（{historySessions.length} 次）</h2>
-          <ul className="mt-2 flex flex-col gap-1">
-            {historySessions.map((sess) => {
-              const summary = parseSessionSummary(sess.summaryJson);
-              const audioReady = readChatAudioMeta(sess.id)?.status === "ready";
-              return (
-                <li key={sess.id}>
-                  <Link
-                    href={`/chat/sessions/${sess.id}`}
-                    data-testid="chat-history-item"
-                    className="flex flex-wrap items-center gap-2 rounded-lg px-2 py-1.5 text-sm hover:bg-[var(--ec-primary-soft)]"
-                  >
-                    <span className="text-xs text-[var(--ec-muted)]">{new Date(sess.startedAt).toLocaleString("zh-CN")}</span>
-                    <span className="font-medium">{scenarioTitleById.get(sess.scenarioId) ?? sess.scenarioId}</span>
-                    <span className="text-xs text-[var(--ec-muted)]">{sess.turnCount} 轮</span>
-                    {user.isChild ? (
-                      <span className="text-xs text-[var(--ec-muted)]">聊完了</span>
-                    ) : summary?.avg_pron !== null && summary?.avg_pron !== undefined ? (
-                      <span className="rounded-full bg-[#eef0f8] px-2 py-0.5 text-xs">平均发音 {summary.avg_pron}</span>
-                    ) : null}
-                    {audioReady ? <span className="text-xs">🎧 有回放</span> : null}
-                  </Link>
-                </li>
-              );
-            })}
-          </ul>
-        </section>
-      ) : null}
+      {/* task-74 ④：历史对话列表（左划可删除） */}
+      <ChatHistoryList
+        isChild={user.isChild}
+        items={historySessions.map((sess) => {
+          const summary = parseSessionSummary(sess.summaryJson);
+          return {
+            id: sess.id,
+            startedAt: sess.startedAt,
+            scenarioTitle: scenarioTitleById.get(sess.scenarioId) ?? sess.scenarioId,
+            turnCount: sess.turnCount,
+            avgPron: summary?.avg_pron ?? null,
+            hasAudio: readChatAudioMeta(sess.id)?.status === "ready",
+          };
+        })}
+      />
     </div>
   );
 }

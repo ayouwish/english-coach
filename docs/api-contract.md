@@ -1046,6 +1046,7 @@ POST /api/chat/scenarios                    → 创建自定义场景（owner=�
 PATCH/DELETE /api/chat/scenarios/:id        → 仅 owner；他人 404
 GET  /api/chat/sessions                     → 历史列表（含轮数/场景/平均发音）
 GET  /api/chat/sessions/:id                 → 会话详情
+DELETE /api/chat/sessions/:id               → 删除自己的这次历史对话（消息 + 逐句录音 + 整段回放缓存）
 GET  /api/chat/sessions/:id/messages        → 消息（含 correction（更自然提示）与 pron（家长可见分数））
 ```
 - 每次开会话随机抽 `variation`（人设/地点/细节/目标/开场白），存入会话 `variation_json`
@@ -1083,3 +1084,25 @@ GET /v1/words/ipa?word=think
 `world→wɜrld`、`rhythm→ˈrɪðəm`、`comfortable→ˈkʌmfərtəbəl`、`don't→dəʊnt`、`well-known→ˈwelˈnəʊn`
 
 客户端用法：句子按 `/[\w'-]+/` 切词 → 点击时调此接口（或批量预取）；404 时提示"可以听发音"（配 TTS 单词发音）。
+
+---
+
+## §24 历史对话删除：`DELETE /api/chat/sessions/:id`（web 层扩展 API）
+
+用户需求：历史对话列表里左划露出「删除」，能真正删掉不想保留的记录。
+
+```
+DELETE /api/chat/sessions/:id
+200 {"deleted":true,"session_id":"sess_xxx"}
+```
+
+- **权限**：只能删自己的；他人的会话一律 **404 `not_found`**（不泄露存在性）；未登录 401
+- **级联清理**：`chat_messages` 行、会话行、逐句录音文件（`data/audio/...`）、
+  整段回放缓存（`data/chat-audio/<sessionId>.{json,wav}`）一并删除
+- 音频文件删除是**尽力而为**：文件已不存在也返回 200（DB 删除是事实）
+- 重复删除 → 404
+- **UI**：`/chat` 历史列表每条包一层 `SwipeToDelete`（`components/SwipeToDelete.tsx`），
+  向左拖动超过约 1/3 宽度吸附露出删除按钮；打开状态下点内容区先收起、不误跳详情；
+  删除前 `window.confirm` 二次确认，成功后本地移除并 `router.refresh()`
+- 故事列表（`/api/materials/:id` DELETE）同样复用该左划容器，行为不变
+- 回归用例：`node scripts/check-delete-swipe.mjs`（14 项断言：列表结构/401/404/200/级联/重复删除）
