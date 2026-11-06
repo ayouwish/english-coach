@@ -1576,3 +1576,13 @@ docker compose -f deploy/docker-compose.yml cp caddy:/data/caddy/pki/authorities
 | 一键备份 | ⚠️ 备份 `web/data/` | ✅ 备份项目根 `data/` |
 | 依赖 | **本机已实测具备**：uv 0.8.12 + pnpm 11.28.5 + node v24.15.0 | docker + 能拉镜像的网络 |
 | 适合 | 开发、验证功能、docker 修不好时的兜底 | 家庭正式使用 |
+
+---
+
+## 多家庭与注册开关
+
+- 每个家庭独立：账号、故事、材料、对话、统计、成本全部按家庭隔离（跨家庭一律 404）
+- `ALLOW_SELF_SIGNUP=1`（默认）：朋友可在登录页「🆕 创建家庭」自助注册
+- `ALLOW_SELF_SIGNUP=0`：关闭自助注册（只能凭邀请码加入已有家庭）
+- 邀请码：家长面板生成；**一次性**；每家庭最多 **3 个家长账号**（创建者 + 受邀 2）
+- 成本：家长面板「💰 本月成本」按家庭统计 LLM/图片/TTS/ASR；单价见 `deploy/.env.example` 的 `COST_*`
