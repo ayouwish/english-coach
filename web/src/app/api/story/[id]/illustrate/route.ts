@@ -2,6 +2,8 @@ import { NextRequest, NextResponse } from "next/server";
 import { ensureBootstrap } from "@/db";
 import { HttpError, requireUser } from "@/lib/auth";
 import { generateStoryIllustration } from "@/lib/illustrate-story";
+import { illustrationAllowed } from "@/lib/illustration";
+import { getMaterialForViewer } from "@/lib/materials";
 import { VoiceError } from "@/lib/voice";
 
 export const dynamic = "force-dynamic";
@@ -18,6 +20,13 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
   try {
     await ensureBootstrap();
     const user = await requireUser();
+    // task-98：跨家庭先 404（不泄漏存在性）；再判断总开关
+    const material = await getMaterialForViewer(user, id);
+    if (!material) throw new HttpError(404, "not_found", "找不到这个故事");
+    // task-102：插画总开关关闭 → 手动也不可用（统一门控）
+    if (!illustrationAllowed(user)) {
+      throw new HttpError(403, "policy_disabled", "插画功能已关闭，可在设置里打开");
+    }
     const body = (await req.json().catch(() => ({}))) as { force?: unknown; style?: unknown };
     const force = req.nextUrl.searchParams.get("force") === "1" || body?.force === true;
     const style = typeof body?.style === "string" ? body.style : "watercolor";

@@ -16,6 +16,8 @@ export function IllustrateBox({
   isChild = false,
   autoTrigger = true,
   characterUsedInitial = false,
+  allowed = true,
+  imageCapable = true,
 }: {
   materialId: string;
   hasImage: boolean;
@@ -23,6 +25,10 @@ export function IllustrateBox({
   autoTrigger?: boolean;
   /** 上次生成是否参考了虚拟形象（task-62） */
   characterUsedInitial?: boolean;
+  /** task-102：插画总开关（关闭时手动也不可用） */
+  allowed?: boolean;
+  /** 图像服务是否配置（voice capabilities.image；未配置时按钮禁用） */
+  imageCapable?: boolean;
 }) {
   const [phase, setPhase] = useState<"idle" | "loading" | "done" | "error">(hasImage ? "done" : "idle");
   const [imageUrl, setImageUrl] = useState<string | null>(hasImage ? `/api/materials/${materialId}/image` : null);
@@ -82,11 +88,26 @@ export function IllustrateBox({
   );
 
   useEffect(() => {
+    if (!allowed || !imageCapable) return;
     if (!autoTrigger || hasImage || startedRef.current) return;
     startedRef.current = true;
     void generate(false);
-  }, [autoTrigger, hasImage, generate]);
+  }, [autoTrigger, hasImage, generate, allowed, imageCapable]);
 
+  // task-102：总开关关闭 → 不渲染任何生成按钮，只显示说明 + 去设置
+  if (!allowed) {
+    return (
+      <div data-testid="illustration-box">
+        <div className="rounded-xl bg-[#f8f9ff] p-3 text-sm" data-testid="illustration-disabled">
+          🖼️ 插画功能已关闭。可在{" "}
+          <a href="/settings" className="underline">
+            设置
+          </a>{" "}
+          里打开「卡通插画功能」。
+        </div>
+      </div>
+    );
+  }
   return (
     <div className="mt-2" data-testid="illustration-box">
       {phase === "loading" || (phase === "done" && !imageUrl) ? (
@@ -120,12 +141,18 @@ export function IllustrateBox({
         {!imageUrl && phase !== "loading" ? (
           <button
             type="button"
-            className="ec-btn ec-btn-primary"
+            className="ec-btn ec-btn-primary disabled:opacity-50"
             data-testid="illustration-generate"
+            disabled={!imageCapable}
             onClick={() => void generate(false)}
           >
             🖼️ {isChild ? "给我画一张画" : "生成插画"}
           </button>
+        ) : null}
+        {!imageCapable ? (
+          <span className="text-xs text-[#7a4d00]" data-testid="illustration-unavailable">
+            图片服务未配置，暂不能生成
+          </span>
         ) : null}
         {imageUrl ? (
           <>

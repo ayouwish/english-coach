@@ -12,7 +12,7 @@ interface SettingsUser {
   dailyLimitMinutes: number;
   allowFreeChat: boolean;
   isChild: boolean;
-  /** task-76：卡通插画自动生成（默认关） */
+  /** task-102：卡通插画功能总开关（默认关；关闭后手动/自动全部不可用） */
   autoIllustrate: boolean;
   /** task-76：性别（插画提示词用） */
   gender: string | null;
@@ -166,7 +166,7 @@ export function SettingsForm({
           </>
         )}
 
-        {/* task-76 ①：卡通插画自动生成开关（默认关，避免自动花钱） */}
+        {/* task-102：卡通插画功能总开关（默认关；关闭后手动/自动全部不可用，节省成本） */}
         <div className="rounded-xl bg-[#f8f9ff] p-3" data-testid="auto-illustrate-section">
           <label className="flex items-center gap-2 text-sm font-semibold">
             <input
@@ -175,10 +175,11 @@ export function SettingsForm({
               checked={autoIllustrate}
               onChange={(e) => setAutoIllustrate(e.target.checked)}
             />
-            🎨 {user.isChild ? "要不要自动画一张画？" : "卡通插画自动生成"}
+            🖼️ {user.isChild ? "要不要玩画图？" : "卡通插画功能"}
           </label>
           <p className="mt-1 text-xs text-[var(--ec-muted)]">
-            每张约 ¥0.1；关闭后保存故事不会自动画，仍可在故事页手动点「生成插画」。
+            每张约 ¥0.1。关闭后<strong>插画功能完全不可用</strong>（保存不自动画、故事页也没有「生成插画」按钮），
+            用来控制成本；打开后可在故事页手动生成，保存故事时也会自动画一张。
             当前图像服务：<strong>{imageConfigured ? "已配置" : "未配置（生成会给出可读提示）"}</strong>
           </p>
         </div>

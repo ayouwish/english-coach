@@ -13,6 +13,14 @@ import { MATERIALS_DIR, resolveMaterialPath } from "./materials";
 
 export const MAX_ILLUSTRATION_BYTES = 5 * 1024 * 1024;
 
+/**
+ * 插画功能**总开关**（task-102）：`users.auto_illustrate` 现在是"卡通插画功能"开关，
+ * 关闭后**手动/自动全部不可用**（API 403 policy_disabled + UI 不渲染按钮 + after 跳过）。
+ */
+export function illustrationAllowed(user: { autoIllustrate: boolean }): boolean {
+  return user.autoIllustrate === true;
+}
+
 export type ImageMime = "image/png" | "image/jpeg" | "image/webp";
 
 /** 只看 magic bytes 判断真实图片类型（不信 voice 声明的 mime） */

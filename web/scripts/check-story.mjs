@@ -443,6 +443,12 @@ try {
         const mat = await mk.json().catch(() => null);
         const illusId = mat?.id ?? null;
         if (illusId) created.push(illusId);
+        // task-102：手动插画也受"总开关"控制 → 先打开，测完再关闭
+        await fetch(`http://127.0.0.1:${port}/api/settings`, {
+          method: "PATCH",
+          headers: { "content-type": "application/json", cookie: cookie2 },
+          body: JSON.stringify({ auto_illustrate: true }),
+        });
         const illustrate = async (force) => {
           const r = await fetch(`http://127.0.0.1:${port}/api/story/${illusId}/illustrate${force ? "?force=1" : ""}`, {
             method: "POST",
@@ -503,6 +509,12 @@ try {
           "故事列表卡片有缩略图（has_image 时渲染 story-thumb）",
           storySrc.includes('data-testid="story-thumb"') && /s\.has_image/.test(storySrc),
         );
+        // 还原总开关（后续 task-76 默认关断言）
+        await fetch(`http://127.0.0.1:${port}/api/settings`, {
+          method: "PATCH",
+          headers: { "content-type": "application/json", cookie: cookie2 },
+          body: JSON.stringify({ auto_illustrate: false }),
+        });
       }
 
       // ── task-76：自动插画开关 + 性别提示词 + 音色 ───────────────────────────
@@ -552,8 +564,7 @@ try {
         const onId = await saveStory(`Auto Illustrate ${Date.now()}`);
         const gotImage = await waitForImage(onId, 8000);
         check("★ 开关打开：保存后自动生成插画（服务端 after()）", gotImage, `image_path=${readImg(onId)}`);
-        await patchSettings({ auto_illustrate: false });
-
+        // task-102：手动插画也受总开关控制 → ③ 的性别测试需要保持开关打开
         // ③ 性别进提示词：girl / boy / 未设置
         const illustrateAndCapture = async (title) => {
           const mid = await saveStory(title);
@@ -575,6 +586,7 @@ try {
         await patchSettings({ gender: null });
         const neutralIll = await illustrateAndCapture(`Gender Neutral ${Date.now()}`);
         check('★ 未设性别 → 中性 "a child"', /a child/.test(neutralIll.desc) && !/a girl|a boy/.test(neutralIll.desc), neutralIll.desc.slice(0, 80));
+        await patchSettings({ auto_illustrate: false });
 
         // ④ 音色：列表 / 试听 / 保存生效（/api/tts 不带 voice 时回落账号偏好）
         const voicesRes = await fetch(`http://127.0.0.1:${port}/api/tts/voices`);
@@ -601,6 +613,68 @@ try {
         check("★ 设置页含性别选择（gender-select）", settingsHtml.includes('data-testid="gender-select"'));
         check("★ 设置页含音色下拉 + 试听（tts-voice-select / tts-voice-preview）", settingsHtml.includes('data-testid="tts-voice-select"') && settingsHtml.includes('data-testid="tts-voice-preview"'));
         check("设置页含费用说明（每张约 ¥0.1）", /每张约\s*¥?0\.1|每张约/.test(settingsHtml));
+      }
+
+      // ── task-102：插画总开关（off 时手动/自动全部不可用）──────────────────
+      {
+        const patch = async (on) =>
+          fetch(`http://127.0.0.1:${port}/api/settings`, {
+            method: "PATCH",
+            headers: { "content-type": "application/json", cookie: cookie2 },
+            body: JSON.stringify({ auto_illustrate: on }),
+          });
+        const mkStory = async (title) => {
+          const r = await fetch(`http://127.0.0.1:${port}/api/materials`, {
+            method: "POST",
+            headers: { "content-type": "application/json", cookie: cookie2 },
+            body: JSON.stringify({ title, text: "I like drawing. I draw a cat.", kind: "story", level: "A2", source: "text" }),
+          });
+          const j = await r.json().catch(() => null);
+          if (j?.id) created.push(j.id);
+          return j?.id ?? null;
+        };
+
+        // ① 关闭（默认）：详情页不渲染生成按钮 + 手动 API 403 policy_disabled
+        await patch(false);
+        const offId = await mkStory(`Master Switch Off ${Date.now()}`);
+        const offDetail = (await (await fetch(`http://127.0.0.1:${port}/story/${offId}`, { headers: { cookie: cookie2 } })).text()).replace(/<!--[\s\S]*?-->/g, "");
+        check("★ 开关关闭：详情页无任何「生成插画」按钮", !offDetail.includes('data-testid="illustration-generate"') && !offDetail.includes('data-testid="illustration-regenerate"') && !offDetail.includes('data-testid="illustration-retry"'));
+        check("★ 开关关闭：详情页显示「插画功能已关闭」+ 去设置", offDetail.includes('data-testid="illustration-disabled"') && /插画功能已关闭/.test(offDetail));
+        const offApi = await fetch(`http://127.0.0.1:${port}/api/story/${offId}/illustrate`, {
+          method: "POST",
+          headers: { "content-type": "application/json", cookie: cookie2 },
+          body: "{}",
+        });
+        const offBody = await offApi.json().catch(() => null);
+        check("★ 开关关闭：手动调 API → 403 policy_disabled", offApi.status === 403 && offBody?.error?.code === "policy_disabled", `status=${offApi.status} code=${offBody?.error?.code}`);
+
+        // ② 关闭时自动也不触发（保存故事不调 illustrate + 不写图）
+        illustrateMode = "ok";
+        const autoCallsBefore = captured.filter((c) => String(c.url).startsWith("/v1/image/illustrate")).length;
+        await mkStory(`Master Switch Auto Off ${Date.now()}`);
+        await new Promise((r) => setTimeout(r, 1200));
+        const autoCallsAfter = captured.filter((c) => String(c.url).startsWith("/v1/image/illustrate")).length;
+        check("★ 开关关闭：保存故事不触发自动插画", autoCallsAfter === autoCallsBefore, `calls=${autoCallsAfter - autoCallsBefore}`);
+
+        // ③ 打开：按钮出现、手动 API 可用（stub 成功）
+        await patch(true);
+        const onId = await mkStory(`Master Switch On ${Date.now()}`);
+        const onDetail = (await (await fetch(`http://127.0.0.1:${port}/story/${onId}`, { headers: { cookie: cookie2 } })).text()).replace(/<!--[\s\S]*?-->/g, "");
+        check("★ 开关打开：详情页出现「生成插画」按钮", onDetail.includes('data-testid="illustration-generate"'));
+        const onApi = await fetch(`http://127.0.0.1:${port}/api/story/${onId}/illustrate`, {
+          method: "POST",
+          headers: { "content-type": "application/json", cookie: cookie2 },
+          body: "{}",
+        });
+        check("★ 开关打开：手动 API 恢复可用（200 或图片服务 503，不再是 403 policy_disabled）", onApi.status !== 403, `status=${onApi.status}`);
+        await patch(false);
+
+        // ④ 源码门控：统一 helper + after 跳过
+        const materialsSrc = fs.readFileSync(path.join(WEB_ROOT, "src/app/api/materials/route.ts"), "utf8");
+        const illustrateSrc = fs.readFileSync(path.join(WEB_ROOT, "src/app/api/story/[id]/illustrate/route.ts"), "utf8");
+        check("★ 门控统一：materials 自动 after() 用 illustrationAllowed", materialsSrc.includes("illustrationAllowed(user)"));
+        check("★ 手动路由：403 policy_disabled", illustrateSrc.includes('"policy_disabled"'));
+        check("图像服务未配置时按钮禁用 + 提示（imageCapable / illustration-unavailable）", fs.readFileSync(path.join(WEB_ROOT, "src/components/IllustrateBox.tsx"), "utf8").includes('data-testid="illustration-unavailable"'));
       }
 
       // ── task-95 rev2：按查看者本人隔离（家长看孩子故事不展示孩子的原文/原声/朗读）──

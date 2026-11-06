@@ -1,6 +1,7 @@
 import { NextRequest, after } from "next/server";
 import { ensureBootstrap } from "@/db";
 import { HttpError, requireUser } from "@/lib/auth";
+import { illustrationAllowed } from "@/lib/illustration";
 import { jsonOk, route } from "@/lib/http";
 import {
   createMaterial,
@@ -73,7 +74,8 @@ export const POST = route(async (req: NextRequest) => {
     // task-76 ①：**服务端**尊重「卡通插画自动生成」开关（默认关）。
     // 开启时才在响应之后异步画一张（不阻塞保存）；关闭则用户可在故事页手动生成。
     const isStory = (material as { kind?: string }).kind === "story";
-    if (isStory && user.autoIllustrate) {
+    // task-102：插画总开关（auto_illustrate）关闭时 auto 也不触发
+    if (isStory && illustrationAllowed(user)) {
       after(async () => {
         try {
           const { generateStoryIllustration } = await import("@/lib/illustrate-story");

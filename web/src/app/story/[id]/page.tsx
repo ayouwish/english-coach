@@ -6,6 +6,7 @@ import { attempts, storyRecordings, storyRetells } from "@/db/schema";
 import { getCurrentUser } from "@/lib/auth";
 import { getMaterialForViewer } from "@/lib/materials";
 import { IllustrateBox } from "@/components/IllustrateBox";
+import { illustrationAllowed } from "@/lib/illustration";
 import { StoryAudioReplay } from "@/components/StoryAudioReplay";
 import { SuggestButton } from "@/components/SuggestButton";
 import { RetellPanel } from "@/components/RetellPanel";
@@ -13,6 +14,7 @@ import { splitSentences } from "@/lib/sentence-split";
 import { isStoryOwner } from "@/lib/story-owner";
 import { WordText } from "@/components/WordText";
 import { getPrefs, effectiveShowWordIpa } from "@/lib/prefs";
+import { getCapabilities } from "@/lib/voice";
 
 export const dynamic = "force-dynamic";
 
@@ -26,6 +28,7 @@ export default async function StoryDetailPage({ params }: { params: Promise<{ id
   const user = await getCurrentUser();
   if (!user) redirect("/login");
   const showWordIpa = effectiveShowWordIpa(await getPrefs(user.id, user.isChild));
+  const caps = await getCapabilities();
   const { id } = await params;
   const material = await getMaterialForViewer(user, id);
   if (!material || material.kind !== "story") {
@@ -178,6 +181,8 @@ export default async function StoryDetailPage({ params }: { params: Promise<{ id
           hasImage={Boolean(material.imagePath)}
           isChild={user.isChild}
           characterUsedInitial={material.imageCharacterUsed}
+          allowed={illustrationAllowed(user)}
+          imageCapable={caps.capabilities.image !== false}
         />
         {material.imagePrompt ? (
           <div className="mt-3" data-testid="image-prompt-block">

@@ -254,6 +254,12 @@ async function main() {
     const mat = await mk.json().catch(() => null);
     const sid = mat?.id ?? null;
     if (sid) createdStories.push(sid);
+    // task-102：插画总开关（默认关）→ 测试前打开
+    await fetch(`${BASE}/api/settings`, {
+      method: "PATCH",
+      headers: { "content-type": "application/json", cookie: girlCookie },
+      body: JSON.stringify({ auto_illustrate: true }),
+    });
     const illus = await fetch(`${BASE}/api/story/${sid}/illustrate`, {
       method: "POST",
       headers: { "content-type": "application/json", cookie: girlCookie },
@@ -268,6 +274,12 @@ async function main() {
     check("★ illustrate outbound 带 avatar_style（character_style=cartoon）", /"character_style":"cartoon"/.test(body), (body.match(/"character_style":"[^"]*"/) ?? ["(未捕获)"])[0]);
     const detail = await (await fetch(`${BASE}/story/${sid}`, { headers: { cookie: girlCookie } })).text();
     check("故事详情页提示词块 + 反馈按钮仍在", detail.includes('data-testid="image-prompt-block"') && detail.includes('data-testid="prompt-feedback"'));
+    // 还原插画总开关（默认关）
+    await fetch(`${BASE}/api/settings`, {
+      method: "PATCH",
+      headers: { "content-type": "application/json", cookie: girlCookie },
+      body: JSON.stringify({ auto_illustrate: false }),
+    });
   }
 
   // ── 7) PATCH 描述 + DELETE 清空（不删预置静态图）───────────────────────
