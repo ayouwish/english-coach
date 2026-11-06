@@ -1219,3 +1219,24 @@ UH→ʊ  UW→u  V→v  W→w  Y→j  Z→z  ZH→ʒ
 依赖：`pyproject.toml` 新增 `cmudict`（纯 python），`requirements.txt` 由
 `uv export --frozen --no-dev --extra azure …` 重新生成（**azure extra 保留**，Dockerfile 无需改）。
 
+## 23. 用量上报 usage（task-100，供 web 按家庭记账）
+
+voice 只返回 **provider 原始用量**，**不写死单价/金额**（价格与成本由 web 计算）；provider 不返回 usage 时给 **`usage: null`**，绝不编造。
+LLM 端点的 usage 是**本次请求内所有 LLM 调用（含 JSON 重试/截断重试）之和**，即实际发生的成本。
+
+| 端点 | 字段 | 说明 |
+|---|---|---|
+| `POST /v1/dialogue` | `usage:{llm_prompt_tokens, llm_completion_tokens, llm_total_tokens}` | DeepSeek usage 透传；无 LLM（模板降级）→ null |
+| `POST /v1/story/rewrite` | 同上 | 含重写/截断重试的累计 |
+| `POST /v1/story/retell` | 同上 | 含反馈重试的累计 |
+| `POST /v1/ocr` | 同上 | 视觉多模态 token（含空结果/截断重试累计）；本地 OCR → null |
+| `POST /v1/image/illustrate` | `usage:{images:1, size, model}` | 含 avatar；mock 出图也按 1 张计（provider 字段标明 mock） |
+| `POST /v1/image/avatar` | 同上 | 照片分析本身是 LLM（token 不计入图片 usage）|
+| `POST /v1/tts` | 响应头 **`x-usage-tts-chars: <n>`** | 二进制音频响应，用量放头里；缓存命中也有该头 |
+| `POST /v1/asr` | `usage:{asr_seconds: float}` | 实际音频秒数（16k 解码后时长，保留 2 位小数）|
+
+`/v1/health` 的 `capabilities.usage_reporting: true`。
+示例（真实 DeepSeek）：`dialogue → {"llm_prompt_tokens":1428,"llm_completion_tokens":303,"llm_total_tokens":1731}`；
+`story/rewrite → 588/72/660`；`retell → 786/230/1016`；`ocr → 299/4/303`；
+`image → {"images":1,"size":"1280x1280","model":"glm-image"}`；`asr → {"asr_seconds":1.0}`；`tts → x-usage-tts-chars: 11`。
+

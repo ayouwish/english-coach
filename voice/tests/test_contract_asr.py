@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from tests.conftest import audio_files
 
-ASR_KEYS = {"text", "language", "duration_ms", "words", "provider"}
+ASR_KEYS = {"text", "language", "duration_ms", "words", "provider", "usage"}  # usage: task-100
 WORD_KEYS = {"word", "start_ms", "end_ms", "probability"}
 
 

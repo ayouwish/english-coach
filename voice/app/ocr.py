@@ -26,6 +26,7 @@ from dataclasses import dataclass, field
 from .config import Settings, get_settings
 from .errors import BadRequest, PayloadTooLarge, VoiceError
 from .llm import LLMClient
+from .usage import llm_usage
 
 logger = logging.getLogger("voice.ocr")
 
@@ -105,6 +106,7 @@ class OcrResult:
     warnings: list[str] = field(default_factory=list)
     provider: str = LOCAL_PROVIDER_NAME
     image_jpeg_b64: str | None = None  # task-28：仅 return_image 请求时出现（缺失=未请求，不是 null）
+    usage: dict | None = None  # task-100：LLM token 用量（本地 OCR 没有 → null）
 
     def to_contract(self) -> dict:
         payload = {
@@ -115,6 +117,7 @@ class OcrResult:
             "height": self.height,
             "elapsed_ms": self.elapsed_ms,
             "warnings": self.warnings,
+            "usage": self.usage,
         }
         if self.image_jpeg_b64 is not None:
             payload["image_jpeg_b64"] = self.image_jpeg_b64
@@ -464,7 +467,9 @@ def _recognize_with_llm(
     started = time.perf_counter()
     max_tokens = max(1, int(settings.ocr_max_tokens))
     disable_thinking = bool(settings.ocr_disable_thinking)
+    outcomes: list = []
     outcome = _call_llm(client, data_url, OCR_PROMPT, settings, max_tokens, disable_thinking)
+    outcomes.append(outcome)
     if not outcome.ok:
         raise _LlmVisionFailed(outcome.error or "unknown_error")
 
@@ -474,6 +479,7 @@ def _recognize_with_llm(
         _log_truncation("LLM vision OCR truncated (root cause: reasoning tokens ate max_tokens)", outcome, max_tokens)
         bumped = min(max_tokens * TRUNCATION_RETRY_FACTOR, TRUNCATION_MAX_TOKENS_CAP)
         retried = _call_llm(client, data_url, OCR_PROMPT, settings, bumped, True)
+        outcomes.append(retried)
         if retried.ok:
             logger.info(
                 "LLM vision OCR truncation retry: max_tokens %d -> %d, thinking_disabled=%s, finish_reason=%s",
@@ -503,6 +509,7 @@ def _recognize_with_llm(
             (outcome.text or "")[:200],
         )
         retry = _call_llm(client, data_url, OCR_PROMPT_RETRY, settings, max_tokens, True)
+        outcomes.append(retry)
         if not retry.ok:
             raise _LlmVisionFailed(retry.error or "unknown_error")
         retry_raw = _normalize_llm_text(retry.text)
@@ -531,6 +538,7 @@ def _recognize_with_llm(
         elapsed_ms=elapsed_ms,
         warnings=warnings,
         image_jpeg_b64=encoded if return_image else None,
+        usage=llm_usage(*outcomes),
     )
 
 

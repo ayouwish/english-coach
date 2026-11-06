@@ -20,6 +20,7 @@ import re
 from pathlib import Path
 
 from .config import Settings, get_settings
+from .usage import llm_usage
 from .errors import BadRequest, ProviderError, ProviderUnavailable
 from .llm import LLMClient, LLMOutcome
 from .phonemes import CANONICAL_PHONEMES, canonicalize_phoneme
@@ -620,6 +621,7 @@ def rewrite_story(
     last_data: dict | None = None
     last_sentences: list[str] = []
     last_provider = client.provider_name
+    llm_outcomes: list = []
 
     for attempt in range(2):
         system, user = build_prompts(
@@ -634,6 +636,7 @@ def rewrite_story(
             tense=expected_tense,
         )
         outcome = _call_llm(client, system, user, max_tokens=STORY_MAX_TOKENS)
+        llm_outcomes.append(outcome)
         if outcome.truncated:
             logger.warning(
                 "story rewrite truncated (completion=%s thinking_disabled=%s) — retrying with bigger max_tokens",
@@ -641,6 +644,7 @@ def rewrite_story(
                 outcome.thinking_disabled,
             )
             outcome = _call_llm(client, system, user, max_tokens=STORY_TRUNCATION_MAX_TOKENS)
+            llm_outcomes.append(outcome)
             if outcome.truncated:
                 raise ProviderError(
                     f"LLM 输出被 max_tokens 截断（重试后仍截断，completion={outcome.completion_tokens}）",
@@ -710,6 +714,7 @@ def rewrite_story(
         },
         "warnings": warnings,
         "provider": last_provider,
+        "usage": llm_usage(*llm_outcomes),
     }
     if weak_phonemes:
         result["provider_meta"] = {"weak_phonemes_achieved": achieved, "weak_phonemes_missing": missing}
@@ -902,6 +907,7 @@ def retell_story(
     last_payload: dict | None = None
     last_issues: list[str] = []
     last_provider = client.provider_name
+    llm_outcomes: list = []
 
     for attempt in range(2):
         user_prompt = prompt_user
@@ -915,9 +921,11 @@ def retell_story(
             user_prompt += f"\n\nPrevious attempt was rejected: {notes}. Fix it."
 
         outcome = _call_llm(client, RETELL_SYSTEM_PROMPT, user_prompt, max_tokens=RETELL_MAX_TOKENS)
+        llm_outcomes.append(outcome)
         if outcome.truncated:
             logger.warning("story retell truncated — retrying with bigger max_tokens")
             outcome = _call_llm(client, RETELL_SYSTEM_PROMPT, user_prompt, max_tokens=RETELL_TRUNCATION_MAX_TOKENS)
+            llm_outcomes.append(outcome)
             if outcome.truncated:
                 raise ProviderError("LLM 输出被 max_tokens 截断（重试后仍截断）", provider="story")
         if outcome.provider == "template" or (outcome.error and outcome.error != "invalid_json"):
@@ -964,4 +972,5 @@ def retell_story(
         "feedback_en": feedback_en,
         "warnings": warnings,
         "provider": last_provider,
+        "usage": llm_usage(*llm_outcomes),
     }

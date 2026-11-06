@@ -1,4 +1,4 @@
-# 接口契约 v1.19（FROZEN · 2026-11-03）
+# 接口契约 v1.20（FROZEN · 2026-11-06）
 
 > **本文件是唯一事实来源（single source of truth）。**
 
@@ -26,6 +26,7 @@
 | 2026-11-02 | v1.17 | 新增 §23 **web 层扩展 API 汇总**（虚拟形象/故事录音/整段音频回放/音色/诊断分层），供原生客户端对接 | 新增端点，向后兼容 |
 | 2026-11-03 | v1.18 | 新增 §24 `GET /v1/words/ipa`（cmudict → IPA 音标）、错误码 `not_found`、`capabilities.word_ipa` | 新增端点，向后兼容 |
 | 2026-11-03 | v1.19 | `/v1/story/rewrite` 新增 `tense`（auto/past/present，默认 auto，叙事默认过去时）；响应回显 `tense`；新增 warning `tense_mismatch` | 向后兼容（不传按 auto）|
+| 2026-11-06 | v1.20 | 各 AI 端点新增可选 `usage`（LLM tokens / 图片张数 / TTS 字符 / ASR 秒），供 web 按家庭记账；`capabilities.usage_reporting` | 向后兼容（纯新增）|
 > `web/` 与 `voice/` 两个模块并行开发，任何一方需要改本契约，必须先通知 Lead 并同步改本文件。
 > 冻结范围：路径、请求字段名、响应字段名、枚举值、错误码。
 > 未冻结范围：各 provider 内部实现、日志格式、额外字段（允许追加 `provider_meta` 等可选字段，不得删除或改名已有字段）。
@@ -1106,3 +1107,34 @@ DELETE /api/chat/sessions/:id
   删除前 `window.confirm` 二次确认，成功后本地移除并 `router.refresh()`
 - 故事列表（`/api/materials/:id` DELETE）同样复用该左划容器，行为不变
 - 回归用例：`node scripts/check-delete-swipe.mjs`（14 项断言：列表结构/401/404/200/级联/重复删除）
+
+---
+
+## 25. v1.20 新增：用量上报 `usage`（成本核算用）
+
+> 目的：**按家庭独立核算 LLM / 图片 / 语音成本**。voice **只返回原始用量**，单价与金额由 web 计算（不写死在 voice）。
+> 约定：provider 不返回用量（模板降级、本地 OCR、fake）→ **`usage: null`，绝不编造**；
+> LLM usage 为本次请求内**所有 LLM 调用之和**（含 JSON 修复/截断重试），反映真实成本。
+
+| 端点 | 字段 |
+|---|---|
+| `POST /v1/dialogue` | `usage:{llm_prompt_tokens, llm_completion_tokens, llm_total_tokens}` |
+| `POST /v1/story/rewrite` | 同上 |
+| `POST /v1/story/retell` | 同上 |
+| `POST /v1/ocr` | 同上（视觉多模态 token；本地 OCR provider → null） |
+| `POST /v1/image/illustrate` | `usage:{images:1, size:"1280x1280", model:"glm-image"}` |
+| `POST /v1/image/avatar` | 同上（照片分析是 LLM，不并入图片 usage） |
+| `POST /v1/tts` | 二进制响应 → 响应头 **`x-usage-tts-chars: <n>`**（缓存命中也有） |
+| `POST /v1/asr` | `usage:{asr_seconds: float}`（解码后实际时长，2 位小数） |
+| `GET /v1/health` | `capabilities.usage_reporting: true` |
+
+真实实测（2026-11-06）：
+```
+dialogue        {"llm_prompt_tokens":1428,"llm_completion_tokens":303,"llm_total_tokens":1731}
+story/rewrite   {"llm_prompt_tokens":588,"llm_completion_tokens":72,"llm_total_tokens":660}
+story/retell    {"llm_prompt_tokens":786,"llm_completion_tokens":230,"llm_total_tokens":1016}
+ocr             {"llm_prompt_tokens":299,"llm_completion_tokens":4,"llm_total_tokens":303}
+image/illustrate {"images":1,"size":"1280x1280","model":"glm-image"}
+tts             x-usage-tts-chars: 11（"hello world"，缓存命中也有）
+asr             {"asr_seconds":1.0}
+```

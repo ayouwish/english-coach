@@ -23,6 +23,7 @@ DIALOGUE_KEYS = {
     "target_words",
     "flag",
     "done",
+    "usage",  # task-100：原始 token 用量（无 usage → null）
 }
 CORRECTION_KEYS = {"has_error", "type", "original", "better", "explain_zh", "severity"}
 

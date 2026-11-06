@@ -27,6 +27,7 @@ from .errors import BadRequest, PayloadTooLarge, PolicyDisabled, ProviderError, 
 from .voice_names import is_valid_voice_name
 from .audio_concat import MAX_TOTAL_INPUT_BYTES, concat_audio
 from .word_ipa import word_ipa as word_ipa_lookup
+from .usage import asr_usage, tts_usage
 from .languages import SUPPORTED_ASR_LANGUAGES, normalize_language
 from .story import retell_story, rewrite_story
 from .image_gen import (
@@ -209,7 +210,8 @@ async def health() -> dict:
     capabilities["avatar_presets"] = True
     # task-73：部署自查用静态标记（端点存在即 true，不做远程/耗时探测）
     capabilities["audio_concat"] = True
-    capabilities["word_ipa"] = True  # task-86：cmudict 音标查询（惰性加载，不影响启动）
+    capabilities["word_ipa"] = True
+    capabilities["usage_reporting"] = True  # task-100：各端点返回原始 usage（web 记账）  # task-86：cmudict 音标查询（惰性加载，不影响启动）
     # task-75：ASR provider 矩阵（静态实现 + 当前生效，auto 下中英文可能不同）
     capabilities["asr_providers"] = list(ASR_PROVIDERS)
     capabilities["asr_effective"] = asr_effective(providers, settings)
@@ -284,6 +286,7 @@ async def asr(
         raise ProviderError("没有识别到语音（静音或说话太短），请再说一次", provider="asr")
     _ensure_real_provider("asr", actual_provider)
     payload = result.to_contract()
+    payload["usage"] = asr_usage(clip.duration_ms)  # task-100：实际音频秒数（原始用量）
     warnings = list(getattr(result, "warnings", []) or [])
     if fallback:
         warnings.append("provider_fallback")
@@ -499,7 +502,9 @@ async def tts(payload: TTSRequest) -> Response:
             return Response(
                 content=cached_audio,
                 media_type=CONTENT_TYPES.get("." + cached_ext, "application/octet-stream"),
-                headers=_tts_headers(tts_provider, probe, "hit", fallback=False),
+                headers=_tts_headers(
+                    tts_provider, probe, "hit", fallback=False, tts_chars=len(text or payload.ssml or "")
+                ),
             )
 
     def _generate():
@@ -546,7 +551,9 @@ async def tts(payload: TTSRequest) -> Response:
     return Response(
         content=audio,
         media_type=content_type,
-        headers=_tts_headers(provider_name, probe, cache_state, fallback=bool(fallback)),
+        headers=_tts_headers(
+            provider_name, probe, cache_state, fallback=bool(fallback), tts_chars=len(text or payload.ssml or "")
+        ),
     )
 
 
@@ -588,13 +595,14 @@ def _purge_low_rate_wav_cache(cache, key: str, audio: bytes, ext: str, provider_
     return info
 
 
-def _tts_headers(provider_name: str, probe, cache_state: str, fallback: bool) -> dict:
+def _tts_headers(provider_name: str, probe, cache_state: str, fallback: bool, tts_chars: int = 0) -> dict:
     """契约要求始终带 X-TTS-Provider + X-Audio-Duration-Ms；其余为便于验收/排障的附加头。"""
     duration_ms = getattr(probe, "duration_ms", 0) or 0
     headers = {
         "X-TTS-Provider": provider_name,
         "X-Audio-Duration-Ms": str(int(duration_ms)),
         "X-Cache": cache_state,
+        "X-Usage-Tts-Chars": str(int(tts_chars)),  # task-100：TTS 响应是二进制，用量放响应头
         "Cache-Control": "no-store",
     }
     if probe is not None:

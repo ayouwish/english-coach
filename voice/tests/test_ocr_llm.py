@@ -28,7 +28,7 @@ from app.ocr import (
 from app.providers.registry import reset_providers
 
 FIXTURE = Path(__file__).resolve().parent / "fixtures" / "ocr-page.jpg"
-OCR_KEYS = {"provider", "text", "lines", "width", "height", "elapsed_ms", "warnings"}
+OCR_KEYS = {"provider", "text", "lines", "width", "height", "elapsed_ms", "warnings", "usage"}  # usage: task-100
 ROOT = Path(__file__).resolve().parent.parent
 
 THREE_LINES = "Hello! My name is Lily.\nI like drawing cats and dogs.\nCan you see three birds in the tree?"

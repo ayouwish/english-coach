@@ -21,7 +21,7 @@ from app.config import get_settings
 from app.ocr import OcrUnavailable, preprocess_image, recognize_image, sort_ocr_lines
 
 FIXTURE = Path(__file__).resolve().parent / "fixtures" / "ocr-page.jpg"
-OCR_KEYS = {"provider", "text", "lines", "width", "height", "elapsed_ms", "warnings"}
+OCR_KEYS = {"provider", "text", "lines", "width", "height", "elapsed_ms", "warnings", "usage"}  # usage: task-100
 ROOT = Path(__file__).resolve().parent.parent
 REQUIRES_OCR = pytest.mark.skipif(
     not ocr_module.engine_available(), reason="rapidocr-onnxruntime / opencv / pillow 未安装"

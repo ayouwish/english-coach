@@ -11,6 +11,7 @@ CAPABILITY_KEYS = {
     # task-73：部署自查标记
     "audio_concat", "chat_done_turn_index", "features",
     "word_ipa",  # task-86
+    "usage_reporting",  # task-100
     # task-75：ASR provider 矩阵
     "asr_providers", "asr_effective",
 }
@@ -43,6 +44,7 @@ def test_health_shape_and_defaults(client):
     assert isinstance(features, list)
     assert "audio/concat" in features
     assert body["capabilities"]["word_ipa"] is True
+    assert body["capabilities"]["usage_reporting"] is True
     assert body["capabilities"]["asr_providers"] == ["azure", "zhipu"]
     effective = body["capabilities"]["asr_effective"]
     assert set(effective) == {"zh", "en"}

@@ -29,7 +29,9 @@ class VisionOutcome:
     text: str | None = None
     error: str | None = None
     finish_reason: str | None = None
+    prompt_tokens: int | None = None  # task-100：provider response.usage 透传（不编造）
     completion_tokens: int | None = None
+    total_tokens: int | None = None
     reasoning_tokens: int | None = None
     reasoning_len: int = 0
     thinking_disabled: bool = False  # 本次请求是否真的带了 thinking:disabled（400 降级后为 False）
@@ -49,7 +51,9 @@ class LLMOutcome:
     data: dict | None = None
     error: str | None = None
     finish_reason: str | None = None
+    prompt_tokens: int | None = None  # task-100：provider response.usage 透传（不编造）
     completion_tokens: int | None = None
+    total_tokens: int | None = None
     reasoning_tokens: int | None = None
     thinking_disabled: bool = False
 
@@ -149,7 +153,9 @@ class LLMClient:
                     provider=self.provider_name,
                     error="empty_content",
                     finish_reason=finish_reason,
+                    prompt_tokens=usage.get("prompt_tokens"),
                     completion_tokens=usage.get("completion_tokens"),
+                    total_tokens=usage.get("total_tokens"),
                     reasoning_tokens=details.get("reasoning_tokens"),
                     reasoning_len=len(reasoning),
                     thinking_disabled=used_disable,
@@ -158,7 +164,9 @@ class LLMClient:
                 provider=self.provider_name,
                 text=str(content),
                 finish_reason=finish_reason,
+                prompt_tokens=usage.get("prompt_tokens"),
                 completion_tokens=usage.get("completion_tokens"),
+                total_tokens=usage.get("total_tokens"),
                 reasoning_tokens=details.get("reasoning_tokens"),
                 reasoning_len=len(reasoning),
                 thinking_disabled=used_disable,
@@ -228,7 +236,9 @@ class LLMClient:
                     provider=self.provider_name,
                     error="invalid_json",
                     finish_reason=finish_reason,
+                    prompt_tokens=usage.get("prompt_tokens"),
                     completion_tokens=usage.get("completion_tokens"),
+                    total_tokens=usage.get("total_tokens"),
                     reasoning_tokens=details.get("reasoning_tokens"),
                     thinking_disabled=used_disable,
                 )
@@ -236,7 +246,9 @@ class LLMClient:
                 provider=self.provider_name,
                 data=data,
                 finish_reason=finish_reason,
+                prompt_tokens=usage.get("prompt_tokens"),
                 completion_tokens=usage.get("completion_tokens"),
+                total_tokens=usage.get("total_tokens"),
                 reasoning_tokens=details.get("reasoning_tokens"),
                 thinking_disabled=used_disable,
             )

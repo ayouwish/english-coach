@@ -27,6 +27,7 @@ import httpx
 from .config import Settings, get_settings
 from .errors import BadRequest, ContentUnsafe, ProviderError, ProviderUnavailable
 from .llm import LLMClient, _loads_json
+from .usage import image_usage
 from .story import COMMON_WORDS  # 复用常用词做"是否为普通英文词"判断
 
 logger = logging.getLogger("voice.image")
@@ -692,6 +693,7 @@ def generate_avatar(
             "height": height,
             "prompt_used": prompt,
             "prompt_parts": parts,
+            "usage": image_usage(size, settings.image_model),
             "elapsed_ms": int(round((time.perf_counter() - started) * 1000)),
             "cached": cached,
             "warnings": [],
@@ -787,6 +789,7 @@ def generate_illustration(
             "height": height,
             "prompt_parts": prompt_parts,
             "character_used": bool(clean_desc),
+            "usage": image_usage(size, settings.image_model),
             "elapsed_ms": int(round((time.perf_counter() - started) * 1000)),
             "cached": cached,
             "warnings": warnings,

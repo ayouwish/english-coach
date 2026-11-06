@@ -18,6 +18,7 @@ import re
 from typing import Any
 
 from .config import get_settings
+from .usage import llm_usage
 
 logger = logging.getLogger("voice.dialogue")
 
@@ -500,6 +501,7 @@ def complete_dialogue(llm, payload: dict, timeout_s: float = 30.0) -> dict:
     """
     user_prompt = build_dialogue_user_prompt(payload)
     temperature = get_settings().dialogue_temperature
+    llm_outcomes: list = []
     attempts = (
         (DIALOGUE_SYSTEM_PROMPT, user_prompt),
         (DIALOGUE_SYSTEM_PROMPT + STRICT_JSON_REMINDER, user_prompt + STRICT_JSON_REMINDER),
@@ -508,17 +510,24 @@ def complete_dialogue(llm, payload: dict, timeout_s: float = 30.0) -> dict:
         for index, (system_prompt, prompt) in enumerate(attempts):
             # task-78：只对 dialogue 提高温度（其它 LLM 端点保持默认）
             outcome = llm.chat_json(system_prompt, prompt, timeout_s=timeout_s, temperature=temperature)
+            llm_outcomes.append(outcome)
             if outcome.ok and _looks_usable(outcome.data):
                 cleaned = sanitize_dialogue(outcome.data, payload)
                 if cleaned.get("reply"):
                     logger.info("dialogue served by %s (attempt %d)", outcome.provider, index + 1)
-                    return {"provider": outcome.provider, "degraded_llm": False, **cleaned}
+                    return {
+                        "provider": outcome.provider,
+                        "degraded_llm": False,
+                        "usage": llm_usage(*llm_outcomes),
+                        **cleaned,
+                    }
             logger.warning(
                 "dialogue LLM attempt %d unusable (error=%s)", index + 1, getattr(outcome, "error", None)
             )
 
     fallback = template_dialogue(payload)
     fallback["degraded_llm"] = True
+    fallback["usage"] = llm_usage(*llm_outcomes)  # 没有 provider 用量时是 null，不编造
     return fallback
 
 
