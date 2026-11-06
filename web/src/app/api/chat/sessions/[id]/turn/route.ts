@@ -113,7 +113,7 @@ export const POST = route(async (req: NextRequest, ctx: { params: Promise<{ id: 
       ],
       correction_level: prefs.correctionLevel,
       turn_index: turnIndex,
-    });
+    }, { familyId: user.familyId, userId: user.id, scene: "chat" });
   } catch (err) {
     degraded = true;
     console.warn("[dialogue] 降级到本地话术：", err instanceof Error ? err.message : err);

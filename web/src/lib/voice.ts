@@ -42,6 +42,30 @@ export const TIMEOUTS = {
   dialogue: 40_000,
 } as const;
 
+import type { CostContext } from "./cost";
+
+/** 记一笔 voice 成本（usage 缺失 → logCost 内部直接跳过；失败只 warn） */
+async function recordVoiceCost(
+  ctx: CostContext | undefined,
+  kind: "llm" | "image" | "tts" | "asr",
+  result: { usage?: unknown; provider?: string | null; model?: string | null } | null | undefined,
+  scene: string,
+): Promise<void> {
+  if (!ctx || !result) return;
+  try {
+    const { logCost } = await import("./cost");
+    await logCost(ctx, {
+      kind,
+      provider: (result.provider as string | null | undefined) ?? null,
+      model: (result.model as string | null | undefined) ?? null,
+      units: result.usage ?? null,
+      scene,
+    });
+  } catch (err) {
+    console.warn(`[cost] voice usage 记账异常（忽略）：${(err as Error).message}`);
+  }
+}
+
 export class VoiceError extends Error {
   code: VoiceErrorCode;
   status?: number;
@@ -154,10 +178,12 @@ export async function callPronounce(form: FormData): Promise<PronounceResult> {
 }
 
 /** 契约 §2：30s 超时，允许 1 次重试。 */
-export async function callAsr(form: FormData): Promise<AsrResult> {
-  return withRetry(() =>
+export async function callAsr(form: FormData, cost?: CostContext): Promise<AsrResult> {
+  const result = await withRetry(() =>
     callVoice<AsrResult>("/v1/asr", { method: "POST", body: form }, TIMEOUTS.asr),
   );
+  await recordVoiceCost(cost, "asr", result, "asr");
+  return result;
 }
 
 /**
@@ -170,11 +196,14 @@ export async function callOcr(image: {
   filename: string;
   /** 让 voice 顺带返回预处理后的 JPEG（base64，不含 data: 前缀）——保存"我的书页"用 */
   returnImage?: boolean;
+  cost?: CostContext;
 }): Promise<OcrResult> {
   const form = new FormData();
   form.append("image", new Blob([new Uint8Array(image.data)], { type: image.mime }), image.filename);
   if (image.returnImage) form.append("return_image", "1");
-  return callVoice<OcrResult>("/v1/ocr", { method: "POST", body: form }, TIMEOUTS.ocr);
+  const result = await callVoice<OcrResult>("/v1/ocr", { method: "POST", body: form }, TIMEOUTS.ocr);
+  await recordVoiceCost(image.cost, "llm", result, "ocr");
+  return result;
 }
 
 export interface StoryRewriteResult {
@@ -199,8 +228,9 @@ export async function callStoryRewrite(input: {
   level: string;
   max_sentences?: number;
   weak_phonemes?: string[];
+  cost?: CostContext;
 }): Promise<StoryRewriteResult> {
-  return callVoice<StoryRewriteResult>(
+  const result = await callVoice<StoryRewriteResult>(
     "/v1/story/rewrite",
     {
       method: "POST",
@@ -214,6 +244,8 @@ export async function callStoryRewrite(input: {
     },
     TIMEOUTS.story,
   );
+  await recordVoiceCost(input.cost, "llm", result, "story_rewrite");
+  return result;
 }
 
 export interface StoryRetellResult {
@@ -231,8 +263,9 @@ export async function callStoryRetell(input: {
   story_sentences: string[];
   transcript: string;
   level?: string;
+  cost?: CostContext;
 }): Promise<StoryRetellResult> {
-  return callVoice<StoryRetellResult>(
+  const result = await callVoice<StoryRetellResult>(
     "/v1/story/retell",
     {
       method: "POST",
@@ -245,6 +278,8 @@ export async function callStoryRetell(input: {
     },
     TIMEOUTS.story,
   );
+  await recordVoiceCost(input.cost, "llm", result, "story_retell");
+  return result;
 }
 
 export interface IllustrateResult {
@@ -270,9 +305,10 @@ export async function callIllustrate(input: {
   character_desc?: string | null;
   /** 虚拟形象风格（watercolor/cartoon/...） */
   character_style?: string | null;
+  cost?: CostContext;
 }): Promise<IllustrateResult> {
   const qs = input.force ? "?force=1" : "";
-  return callVoice<IllustrateResult>(
+  const result = await callVoice<IllustrateResult>(
     `/v1/image/illustrate${qs}`,
     {
       method: "POST",
@@ -287,6 +323,8 @@ export async function callIllustrate(input: {
     },
     TIMEOUTS.illustrate,
   );
+  await recordVoiceCost(input.cost, "image", result, "illustrate");
+  return result;
 }
 
 export interface AvatarResult {
@@ -306,12 +344,15 @@ export async function callAvatar(input: {
   filename: string;
   style: string;
   characterDesc?: string | null;
+  cost?: CostContext;
 }): Promise<AvatarResult> {
   const form = new FormData();
   form.append("photo", new Blob([new Uint8Array(input.data)], { type: input.mime }), input.filename);
   form.append("style", input.style);
   if (input.characterDesc) form.append("character_desc", input.characterDesc);
-  return callVoice<AvatarResult>("/v1/image/avatar", { method: "POST", body: form }, TIMEOUTS.avatar);
+  const result = await callVoice<AvatarResult>("/v1/image/avatar", { method: "POST", body: form }, TIMEOUTS.avatar);
+  await recordVoiceCost(input.cost, "image", result, "avatar");
+  return result;
 }
 
 export interface ConcatPart {
@@ -405,8 +446,8 @@ export async function callFeedback(payload: unknown): Promise<FeedbackResult> {
 }
 
 /** 契约 §6：40s 超时，1 次重试后由调用方降级到固定话术。 */
-export async function callDialogue(payload: unknown): Promise<DialogueResult> {
-  return withRetry(() =>
+export async function callDialogue(payload: unknown, cost?: CostContext): Promise<DialogueResult> {
+  const result = await withRetry(() =>
     callVoice<DialogueResult>(
       "/v1/dialogue",
       {
@@ -417,6 +458,8 @@ export async function callDialogue(payload: unknown): Promise<DialogueResult> {
       TIMEOUTS.dialogue,
     ),
   );
+  await recordVoiceCost(cost, "llm", result, "chat");
+  return result;
 }
 
 export interface WarmupItem {
@@ -459,6 +502,7 @@ export async function callTts(payload: {
   rate?: "slow" | "normal";
   format?: "mp3" | "wav";
   ssml?: string | null;
+  cost?: CostContext;
 }): Promise<{ body: ArrayBuffer; contentType: string; durationMs: string | null; provider: string | null }> {
   let res: Response;
   try {
@@ -477,8 +521,13 @@ export async function callTts(payload: {
   if (!res.ok) {
     throw new VoiceError("provider_error", `TTS 返回 ${res.status}`, res.status);
   }
+  const body = await res.arrayBuffer();
+  const ttsChars = Number(res.headers.get("x-usage-tts-chars") ?? "0");
+  if (payload.cost && Number.isFinite(ttsChars) && ttsChars > 0) {
+    await recordVoiceCost(payload.cost, "tts", { usage: { tts_chars: ttsChars }, provider: res.headers.get("x-tts-provider") }, "tts");
+  }
   return {
-    body: await res.arrayBuffer(),
+    body,
     contentType: res.headers.get("content-type") ?? "audio/mpeg",
     durationMs: res.headers.get("x-audio-duration-ms"),
     provider: res.headers.get("x-tts-provider"),

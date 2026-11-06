@@ -353,6 +353,24 @@ export const storyRetells = sqliteTable(
   (t) => [index("idx_story_retells_material").on(t.materialId, t.createdAt)],
 );
 
+/** 家庭成本台账（task-101）：voice usage 原始用量 + 微元金额。 */
+export const costEvents = sqliteTable(
+  "cost_events",
+  {
+    id: text("id").primaryKey(),
+    familyId: text("family_id").notNull(),
+    userId: text("user_id"),
+    kind: text("kind").notNull(),
+    provider: text("provider"),
+    model: text("model"),
+    unitsJson: text("units_json"),
+    costMicroCny: integer("cost_micro_cny").notNull(),
+    metaJson: text("meta_json"),
+    createdAt: text("created_at").notNull(),
+  },
+  (t) => [index("idx_cost_events_family_time").on(t.familyId, t.createdAt)],
+);
+
 /** web 私有扩展表：纠正强度 / 音色 / 语速偏好（不改动契约冻结列）。 */
 /** 跟读练习游标（task-84）：按 (user, scope) 记住上次练到第几句。 */
 export const practiceCursors = sqliteTable(

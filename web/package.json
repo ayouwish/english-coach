@@ -33,7 +33,8 @@
     "check:avatar": "node scripts/check-avatar.mjs",
     "check:words": "node scripts/check-words.mjs",
     "check:delete-swipe": "node scripts/check-delete-swipe.mjs",
-    "check:families": "node scripts/check-families.mjs"
+    "check:families": "node scripts/check-families.mjs",
+    "check:cost": "node scripts/check-cost.mjs"
   },
   "dependencies": {
     "bcryptjs": "^3.0.2",

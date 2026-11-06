@@ -63,6 +63,7 @@ export async function POST(req: NextRequest) {
       level: body.level,
       max_sentences: maxSentences,
       weak_phonemes: weak,
+      cost: { familyId: user.familyId, userId: user.id, scene: "story_rewrite" },
     });
 
     const sentences = Array.isArray(result.sentences) ? result.sentences.filter((s) => typeof s === "string" && s.trim()) : [];

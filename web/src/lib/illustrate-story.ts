@@ -54,6 +54,7 @@ export async function generateStoryIllustration(
     force,
     character_desc: characterDesc,
     character_style: avatar.style,
+    cost: { familyId: user.familyId, userId: user.id, scene: "illustrate" },
   });
 
   const bytes = base64ToBytes(result.image_b64 ?? "");

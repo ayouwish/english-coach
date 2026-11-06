@@ -8,7 +8,7 @@ const MAX_AUDIO_BYTES = 12 * 1024 * 1024;
 /** POST /api/asr — 语音转文字（对话的语音输入，契约 §2）。 */
 export async function POST(req: NextRequest) {
   try {
-    await requireUser();
+    const user = await requireUser();
     const form = await req.formData();
     const audio = form.get("audio");
     if (!(audio instanceof File)) throw new HttpError(400, "bad_request", "缺少 audio 文件");
@@ -25,7 +25,7 @@ export async function POST(req: NextRequest) {
     const provider = (form.get("provider") as string | null) ?? new URL(req.url).searchParams.get("provider");
     if (provider) outbound.append("provider", provider);
 
-    const result = await callAsr(outbound);
+    const result = await callAsr(outbound, user ? { familyId: user.familyId, userId: user.id, scene: "asr" } : undefined);
     return NextResponse.json({
       text: result.text,
       provider: result.provider,

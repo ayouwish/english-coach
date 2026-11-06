@@ -39,7 +39,7 @@ export async function POST(req: NextRequest) {
     if (transcript.length > MAX_TRANSCRIPT) throw new HttpError(400, "bad_request", "复述内容太长了，精简一点再试");
     const level = isCefrLevel(body.level) ? body.level : "A2";
 
-    const result = await callStoryRetell({ story_sentences: storySentences, transcript, level });
+    const result = await callStoryRetell({ story_sentences: storySentences, transcript, level, cost: { familyId: user.familyId, userId: user.id, scene: "story_retell" } });
     const record = {
       id: `ret_${crypto.randomUUID().replace(/-/g, "").slice(0, 20)}`,
       coverage: typeof result.coverage === "number" ? result.coverage : null,

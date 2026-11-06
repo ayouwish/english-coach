@@ -187,6 +187,12 @@ check(
   familyCols.join(","),
 );
 
+// 0024：成本台账（task-101）
+const costTable = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='cost_events'").get();
+check("cost_events 表已创建（微元金额）", costTable?.name === "cost_events");
+const costCols = db.prepare("PRAGMA table_info(cost_events)").all().map((c) => c.name);
+check("cost_events 关键列齐全", ["family_id", "user_id", "kind", "units_json", "cost_micro_cny", "created_at"].every((c) => costCols.includes(c)), costCols.join(","));
+
 // 幂等：再跑一次不应重复应用
 const second = migrate(db);
 check("重复执行迁移是幂等的", second.length === 0, `second run applied=${second.join(",") || "(none)"}`);

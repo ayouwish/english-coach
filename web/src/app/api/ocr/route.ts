@@ -37,7 +37,7 @@ const OCR_UNAVAILABLE_HINT =
 export async function POST(req: NextRequest) {
   try {
     await ensureBootstrap();
-    await requireUser();
+    const user = await requireUser();
 
     let form: FormData;
     try {
@@ -63,7 +63,7 @@ export async function POST(req: NextRequest) {
     }
     // 客户端要"保存我的书页"时会带 return_image=1（voice 契约：响应里多一个 image_jpeg_b64）
     const returnImage = form.get("return_image") === "1" || req.nextUrl.searchParams.get("return_image") === "1";
-    const result = await callOcr({ data, mime, filename: image.name || "page.jpg", returnImage });
+    const result = await callOcr({ data, mime, filename: image.name || "page.jpg", returnImage, cost: { familyId: user.familyId, userId: user.id, scene: "ocr" } });
     return jsonOk({
       provider: result.provider,
       text: result.text,

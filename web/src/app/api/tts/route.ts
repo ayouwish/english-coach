@@ -36,7 +36,7 @@ async function synthesize(params: {
   // 但对话回复每次都是全新文本（必 miss），此时 mp3 体积约 1/3、传输更快，所以聊天用 mp3。
   const format = params.format === "mp3" ? "mp3" : "wav";
 
-  const audio = await callTts({ text, rate, voice: params.voice ?? prefs.ttsVoice ?? null, format });
+  const audio = await callTts({ text, rate, voice: params.voice ?? prefs.ttsVoice ?? null, format, cost: { familyId: user.familyId, userId: user.id, scene: "tts" } });
   return new NextResponse(audio.body, {
     status: 200,
     headers: {
