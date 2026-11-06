@@ -20,10 +20,11 @@ export type Level = (typeof LEVELS)[number];
 /** 该用户能看到的自定义语料归属者集合。 */
 export async function visibleOwnerIds(user: SessionUser): Promise<string[]> {
   if (user.role === "parent") return [user.id];
+  // task-98：只返回**本家庭**的家长（跨家庭自定义语料不可见）
   const rows = await getDb()
     .select({ id: users.id })
     .from(users)
-    .where(eq(users.role, "parent"));
+    .where(and(eq(users.role, "parent"), eq(users.familyId, user.familyId)));
   return rows.map((r) => r.id);
 }
 

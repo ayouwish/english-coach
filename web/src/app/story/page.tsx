@@ -37,6 +37,7 @@ export default async function StoryPage() {
     const stories = await db
       .select({ id: readingMaterials.id })
       .from(readingMaterials)
+      // task-98：只看本家庭的故事
       .where(and(eq(readingMaterials.kind, "story"), eq(readingMaterials.createdBy, user.id)));
     const storyIds = stories.map((s) => s.id);
     if (storyIds.length > 0) {

@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { ensureBootstrap, getDb } from "@/db";
+import { getMaterialForViewer } from "@/lib/materials";
 import { storyRetells } from "@/db/schema";
 import { HttpError, requireUser } from "@/lib/auth";
 import { isCefrLevel } from "@/lib/levels";
@@ -24,6 +25,11 @@ export async function POST(req: NextRequest) {
     if (!body) throw new HttpError(400, "bad_request", "请求体必须是 JSON");
 
     const materialId = typeof body.material_id === "string" && body.material_id.trim() ? body.material_id.trim() : null;
+    // task-98：跨家庭的故事不能拿来复述（404，不泄漏）
+    if (materialId) {
+      const material = await getMaterialForViewer(user, materialId);
+      if (!material) throw new HttpError(404, "not_found", "找不到这个故事");
+    }
     const storySentences = Array.isArray(body.story_sentences)
       ? body.story_sentences.filter((s): s is string => typeof s === "string" && s.trim().length > 0).slice(0, 40)
       : [];

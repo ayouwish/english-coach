@@ -23,6 +23,7 @@ export const GET = route(async (req: NextRequest) => {
     offset: Number(sp.get("offset") ?? 0),
     kind: sp.get("kind"),
     viewerId: user.id,
+    familyId: user.familyId,
   });
   return jsonOk({ items, count: items.length });
 });

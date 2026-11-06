@@ -9,15 +9,15 @@ export const dynamic = "force-dynamic";
 /** GET /api/family/members —— 家庭成员列表（仅家长）。 */
 export const GET = route(async () => {
   await ensureBootstrap();
-  await requireParent();
-  const items = await listFamilyMembers();
+  const user = await requireParent();
+  const items = await listFamilyMembers(user.familyId);
   return jsonOk({ items, count: items.length });
 });
 
 /** POST /api/family/members —— 新建成员（仅家长；login 可写简称，自动补 @family.local）。 */
 export const POST = route(async (req: NextRequest) => {
   await ensureBootstrap();
-  await requireParent();
+  const user = await requireParent();
   const body = (await req.json().catch(() => null)) as Record<string, unknown> | null;
   if (!body) return jsonOk({ error: { code: "bad_request", message: "请求体必须是 JSON" } }, 400);
   const member = await createFamilyMember({
@@ -30,6 +30,7 @@ export const POST = route(async (req: NextRequest) => {
     avatar: body.avatar,
     dailyLimitMinutes: body.daily_limit_minutes,
     allowFreeChat: body.allow_free_chat,
+    familyId: user.familyId,
   });
   return jsonOk({ ok: true, member }, 201);
 });

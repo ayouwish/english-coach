@@ -48,7 +48,6 @@ const TINY_WAV = Buffer.from("UklGRiQAAABXQVZFZm10IBAAAAABAAEAQB8AAEAfAAABAAgAZG
 async function main() {
   console.log(`=== 历史对话左划删除验收 @ ${BASE} ===`);
   const girl = await login("girl@example.com", "Girl12345!");
-  const dad = await login("dad@example.com", "Dad12345!");
 
   // 造数据：女孩一次会话（含一条带录音的消息），爸爸一次会话
   const absWav = path.join(WEB_ROOT, "data", WAV_REL);

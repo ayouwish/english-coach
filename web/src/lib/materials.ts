@@ -81,6 +81,8 @@ export interface MaterialRow {
   sourceZh: string | null;
   level: string | null;
   createdBy: string | null;
+  /** 家庭（task-97）：跨家庭一律不可见 */
+  familyId: string;
   createdAt: string;
   updatedAt: string;
 }
@@ -198,6 +200,7 @@ export async function createMaterial(
   await db.insert(readingMaterials).values({
     id,
     createdBy: user.id,
+    familyId: user.familyId || "fam_default",
     title,
     text,
     imagePath,
@@ -214,12 +217,22 @@ export async function createMaterial(
 }
 
 export async function listMaterials(
-  opts: { limit?: number; offset?: number; kind?: string | null; viewerId?: string | null } = {},
+  opts: {
+    limit?: number;
+    offset?: number;
+    kind?: string | null;
+    viewerId?: string | null;
+    /** task-98：只看本家庭的材料（必传，跨家庭不可见） */
+    familyId?: string | null;
+  } = {},
 ): Promise<MaterialSummary[]> {
   const db = getDb();
   const limit = Math.min(Math.max(1, opts.limit ?? 50), 200);
   const offset = Math.max(0, opts.offset ?? 0);
-  const where = opts.kind === "story" || opts.kind === "page" ? eq(readingMaterials.kind, opts.kind) : undefined;
+  const where = and(
+    opts.kind === "story" || opts.kind === "page" ? eq(readingMaterials.kind, opts.kind) : undefined,
+    eq(readingMaterials.familyId, opts.familyId || "fam_default"),
+  );
   const rows = await db
     .select()
     .from(readingMaterials)
@@ -266,6 +279,17 @@ export async function listMaterials(
   );
 }
 
+/** 按查看者取材料（task-98）：跨家庭 → null（调用方转 404） */
+export async function getMaterialForViewer(
+  user: Pick<SessionUser, "familyId">,
+  id: string,
+): Promise<MaterialRow | null> {
+  const row = await getMaterial(id);
+  if (!row) return null;
+  if ((row.familyId || "fam_default") !== (user.familyId || "fam_default")) return null;
+  return row;
+}
+
 export async function getMaterial(id: string): Promise<MaterialRow | null> {
   const db = getDb();
   const [row] = await db.select().from(readingMaterials).where(eq(readingMaterials.id, id)).limit(1);
@@ -283,6 +307,7 @@ export async function getMaterial(id: string): Promise<MaterialRow | null> {
     sourceZh: row.sourceZh,
     level: row.level,
     createdBy: row.createdBy,
+    familyId: row.familyId ?? "fam_default",
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
   };

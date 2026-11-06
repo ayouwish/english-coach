@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { ensureBootstrap } from "@/db";
 import { HttpError, requireUser } from "@/lib/auth";
 import { jsonOk } from "@/lib/http";
-import { deleteMaterial, getMaterial, MaterialValidationError, updateMaterial } from "@/lib/materials";
+import { deleteMaterial, getMaterialForViewer, MaterialValidationError, updateMaterial } from "@/lib/materials";
 
 export const dynamic = "force-dynamic";
 
@@ -14,9 +14,9 @@ function errorJson(status: number, code: string, message: string) {
 export async function GET(_req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
   try {
     await ensureBootstrap();
-    await requireUser();
+    const user = await requireUser();
     const { id } = await ctx.params;
-    const material = await getMaterial(id);
+    const material = await getMaterialForViewer(user, id);
     if (!material) return errorJson(404, "not_found", "找不到这个书页");
     return jsonOk({
       id: material.id,
@@ -50,6 +50,8 @@ export async function PATCH(req: NextRequest, ctx: { params: Promise<{ id: strin
     const { id } = await ctx.params;
     const body = (await req.json().catch(() => null)) as { title?: unknown; text?: unknown } | null;
     if (!body) return errorJson(400, "bad_request", "请求体必须是 JSON");
+    const material = await getMaterialForViewer(user, id);
+    if (!material) return errorJson(404, "not_found", "找不到这个书页");
     const result = await updateMaterial(user, id, body);
     if (result === null) return errorJson(404, "not_found", "找不到这个书页");
     if (result === "forbidden") return errorJson(403, "forbidden", "只有创建者或家长可以修改这个书页");
@@ -68,6 +70,8 @@ export async function DELETE(_req: NextRequest, ctx: { params: Promise<{ id: str
     await ensureBootstrap();
     const user = await requireUser();
     const { id } = await ctx.params;
+    const material = await getMaterialForViewer(user, id);
+    if (!material) return errorJson(404, "not_found", "找不到这个书页");
     const result = await deleteMaterial(user, id);
     if (result === "not_found") return errorJson(404, "not_found", "找不到这个书页");
     if (result === "forbidden") return errorJson(403, "forbidden", "只有创建者或家长可以删除这个书页");

@@ -1,4 +1,4 @@
-import { asc } from "drizzle-orm";
+import { asc, eq } from "drizzle-orm";
 import { getDb, getSqlite } from "@/db";
 import { users } from "@/db/schema";
 import { WORD_LEVEL_KEY } from "@/lib/attempt-service";
@@ -92,14 +92,19 @@ export interface MemberSummary {
 }
 
 /** 家长面板数据源（route 与页面共用，避免重复实现）。仅由 requireParent 之后调用。 */
-export async function buildParentSummary(): Promise<ParentSummary> {
+export async function buildParentSummary(familyId: string): Promise<ParentSummary> {
   const db = getDb();
   const sqlite = getSqlite();
   const today = startOfToday().toISOString();
   const weekAgo = new Date(Date.now() - 7 * 24 * 3600 * 1000).toISOString();
   const fortnightAgo = new Date(Date.now() - 14 * 24 * 3600 * 1000).toISOString();
 
-  const allUsers = await db.select().from(users).orderBy(asc(users.createdAt));
+  // task-98：家长面板只统计**本家庭**成员（跨家庭不可见）
+  const allUsers = await db
+    .select()
+    .from(users)
+    .where(eq(users.familyId, familyId || "fam_default"))
+    .orderBy(asc(users.createdAt));
 
   const members: MemberSummary[] = await Promise.all(
     allUsers.map(async (u) => {

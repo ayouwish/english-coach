@@ -11,6 +11,8 @@ const WEB_VERSION = "0.1.0";
  * 用户/运维一条 `curl /api/health | grep features` 就能确认 NAS 上跑的是不是新构建，
  * 避免"我更新了但没生效"的扯皮。**不读运行时配置**。
  */
+import { allowSelfSignup } from "@/lib/families";
+
 const FEATURES = {
   chat_unlimited_turns: true,
   chat_audio_replay: true,
@@ -45,7 +47,7 @@ export async function GET(req: NextRequest) {
       version: WEB_VERSION,
       time: new Date().toISOString(),
       db: { ok: dbOk, error: dbError },
-      features: FEATURES,
+      features: { ...FEATURES, self_signup: allowSelfSignup() },
       voice: {
         reachable,
         mode,

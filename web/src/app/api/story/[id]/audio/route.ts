@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import fs from "node:fs";
 import { ensureBootstrap } from "@/db";
 import { HttpError, requireUser } from "@/lib/auth";
-import { getMaterial } from "@/lib/materials";
+import { getMaterialForViewer } from "@/lib/materials";
 import {
   getStoryAudioState,
   readStoryAudioMeta,
@@ -27,7 +27,7 @@ export const GET = route(async (req: NextRequest, ctx: { params: Promise<{ id: s
   const { id } = await ctx.params;
   const force = req.nextUrl.searchParams.get("force") === "1";
 
-  const material = await getMaterial(id);
+  const material = await getMaterialForViewer(user, id);
   if (!material) throw new HttpError(404, "not_found", "故事不存在");
   // task-95 rev2：拼接/回放按**查看者本人**（缓存也按用户隔离，见 story-audio）
 

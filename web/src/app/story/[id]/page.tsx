@@ -4,7 +4,7 @@ import { and, desc, eq } from "drizzle-orm";
 import { ensureBootstrap, getDb } from "@/db";
 import { attempts, storyRecordings, storyRetells } from "@/db/schema";
 import { getCurrentUser } from "@/lib/auth";
-import { getMaterial } from "@/lib/materials";
+import { getMaterialForViewer } from "@/lib/materials";
 import { IllustrateBox } from "@/components/IllustrateBox";
 import { StoryAudioReplay } from "@/components/StoryAudioReplay";
 import { SuggestButton } from "@/components/SuggestButton";
@@ -27,7 +27,7 @@ export default async function StoryDetailPage({ params }: { params: Promise<{ id
   if (!user) redirect("/login");
   const showWordIpa = effectiveShowWordIpa(await getPrefs(user.id, user.isChild));
   const { id } = await params;
-  const material = await getMaterial(id);
+  const material = await getMaterialForViewer(user, id);
   if (!material || material.kind !== "story") {
     return (
       <div className="flex flex-col gap-5">

@@ -9,7 +9,7 @@ import { HttpError, type SessionUser } from "@/lib/auth";
 import { getAvatar } from "@/lib/avatar";
 import { base64ToBytes, MAX_ILLUSTRATION_BYTES, writeIllustration } from "@/lib/illustration";
 import { buildCharacterDesc } from "@/lib/illustration-character";
-import { getMaterial } from "@/lib/materials";
+import { getMaterialForViewer } from "@/lib/materials";
 import { callIllustrate } from "@/lib/voice";
 
 export interface IllustrationResult {
@@ -35,7 +35,7 @@ export async function generateStoryIllustration(
   materialId: string,
   opts: { force?: boolean; style?: string } = {},
 ): Promise<IllustrationResult> {
-  const material = await getMaterial(materialId);
+  const material = await getMaterialForViewer(user, materialId);
   if (!material) throw new HttpError(404, "not_found", "找不到这个故事");
   const force = opts.force === true;
   const style = opts.style ?? "watercolor";

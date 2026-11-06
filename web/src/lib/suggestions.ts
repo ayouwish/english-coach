@@ -6,9 +6,9 @@
  *    （家长正文原样保存，家长要看真实内容）。
  *  - 长度/枚举**服务端再校验一遍**；`page`/`user_role`/`context` 由服务端采集。
  */
-import { desc, eq, sql } from "drizzle-orm";
+import { and, desc, eq, inArray, sql } from "drizzle-orm";
 import { getDb } from "@/db";
-import { suggestions } from "@/db/schema";
+import { suggestions, users } from "@/db/schema";
 import type { SessionUser } from "./auth";
 import {
   isSuggestionStatus,
@@ -44,11 +44,19 @@ export async function listSuggestions(opts: {
   status?: string | null;
   limit?: number;
   offset?: number;
+  /** task-98：只看本家庭成员提的建议（跨家庭不可见） */
+  familyId?: string | null;
 }): Promise<{ items: SuggestionView[]; counts: Record<string, number>; total: number }> {
   const db = getDb();
+  const memberIds = opts.familyId
+    ? (await db.select({ id: users.id }).from(users).where(eq(users.familyId, opts.familyId))).map((u) => u.id)
+    : null;
   const limit = Math.min(Math.max(1, opts.limit ?? 50), 200);
   const offset = Math.max(0, opts.offset ?? 0);
-  const where = isSuggestionStatus(opts.status) ? eq(suggestions.status, opts.status) : undefined;
+  const where = and(
+    isSuggestionStatus(opts.status) ? eq(suggestions.status, opts.status) : undefined,
+    memberIds ? inArray(suggestions.userId, memberIds) : undefined,
+  );
 
   const rows = await db
     .select()
@@ -61,6 +69,7 @@ export async function listSuggestions(opts: {
   const countRows = await db
     .select({ status: suggestions.status, c: sql<number>`count(*)` })
     .from(suggestions)
+    .where(memberIds ? inArray(suggestions.userId, memberIds) : undefined)
     .groupBy(suggestions.status);
   const counts: Record<string, number> = { open: 0, read: 0, resolved: 0 };
   let total = 0;
@@ -86,9 +95,23 @@ export async function listSuggestions(opts: {
   };
 }
 
-export async function setSuggestionStatus(id: string, status: SuggestionStatus): Promise<boolean> {
+export async function setSuggestionStatus(
+  id: string,
+  status: SuggestionStatus,
+  familyId?: string | null,
+): Promise<boolean> {
   const db = getDb();
-  const existing = await db.select({ id: suggestions.id }).from(suggestions).where(eq(suggestions.id, id)).limit(1);
+  const [owner] = await db.select({ id: suggestions.id, userId: suggestions.userId }).from(suggestions).where(eq(suggestions.id, id)).limit(1);
+  if (!owner) return false;
+  if (familyId) {
+    const [member] = await db
+      .select({ id: users.id })
+      .from(users)
+      .where(and(eq(users.id, owner.userId as string), eq(users.familyId, familyId)))
+      .limit(1);
+    if (!member) return false;
+  }
+  const existing = [owner];
   if (existing.length === 0) return false;
   await db
     .update(suggestions)

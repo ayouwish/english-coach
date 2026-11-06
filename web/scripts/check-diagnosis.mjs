@@ -173,21 +173,25 @@ const childReport = await get("/report", girl.cookie);
 check("儿童 /report 200", childReport.status === 200, `status=${childReport.status}`);
 check("★ 儿童 /report 零 IPA 字形", !IPA_RE.test(childReport.text), `len=${childReport.text.length}`);
 check("有诊断结论", childReport.text.includes('data-testid="diagnosis-summary"'));
-check("有诊断卡片", childReport.text.includes('data-testid="report-card"'));
-check("★ SSR 输出口型 SVG（无 JS 也有内容）", childReport.text.includes('data-testid="articulation-svg"'));
-check("有发音要点文字", childReport.text.includes("口型要点"));
-check("有「去练这 N 句」入口", childReport.text.includes('data-testid="practice-focus"'));
+// 默认「最近 7 天」是否有卡片取决于近期练习数据（可能全是 ok）→ 渲染断言用「全部累计」保证稳定
+const childReportAll = await get("/report?scope=all", girl.cookie);
+check("儿童 /report?scope=all 200", childReportAll.status === 200, `status=${childReportAll.status}`);
+check("★ 儿童 /report?scope=all 零 IPA 字形", !IPA_RE.test(childReportAll.text), `len=${childReportAll.text.length}`);
+check("有诊断卡片", childReportAll.text.includes('data-testid="report-card"'));
+check("★ SSR 输出口型 SVG（无 JS 也有内容）", childReportAll.text.includes('data-testid="articulation-svg"'));
+check("有发音要点文字", childReportAll.text.includes("口型要点"));
+check("有「去练这 N 句」入口", childReportAll.text.includes('data-testid="practice-focus"'));
 
 
-const dadReport = await get("/report", dad.cookie);
-check("成人 /report 200", dadReport.status === 200);
+const dadReport = await get("/report?scope=all", dad.cookie);
+check("成人 /report?scope=all 200", dadReport.status === 200);
 
 // ── task-40：对比听 = 两词顺序播放（normal 语速 + 词间停顿），不再拼成一句合成 ──
 {
-  const hasContrast = childReport.text.includes('data-testid="contrast-play"');
+  const hasContrast = childReportAll.text.includes('data-testid="contrast-play"');
   const adultHasContrast = dadReport.text.includes('data-testid="contrast-play"');
   check("★ /report 有「对比听」按钮（儿童或成人页）", hasContrast || adultHasContrast);
-  const html = hasContrast ? childReport.text : dadReport.text;
+  const html = hasContrast ? childReportAll.text : dadReport.text;
   const btn = /<button[^>]*data-testid="contrast-play"[^>]*>/.exec(html)?.[0] ?? "";
   check(
     "★ 对比听按钮带两词顺序信息（data-pair=\"a|b\" + data-rate=normal）",
@@ -232,7 +236,7 @@ const mom = await login("mom@example.com", "Mom12345!");
 const momDiag = await getJson("/api/diagnosis", mom.cookie);
 const momHasCards = (momDiag.json?.items ?? []).length > 0;
 if (momHasCards) {
-  const momReport = await get("/report", mom.cookie);
+  const momReport = await get("/report?scope=all", mom.cookie);
   const ipaSeen = (momReport.text.match(/data-ipa="([^"]+)"/) ?? [])[1] ?? "";
   check("有数据的家长在 /report 能看到 IPA（成人版）", Boolean(ipaSeen), `data-ipa="${ipaSeen}"`);
 } else {
@@ -244,8 +248,8 @@ if (momHasCards) {
 }
 
 const svg =
-  /<svg[^>]*data-testid="articulation-svg"[\s\S]{0,9000}?<\/svg>/.exec(childReport.text)?.[0] ??
-  /<svg[^>]*data-testid="articulation-svg"[\s\S]{0,9000}/.exec(childReport.text)?.[0] ??
+  /<svg[^>]*data-testid="articulation-svg"[\s\S]{0,9000}?<\/svg>/.exec(childReportAll.text)?.[0] ??
+  /<svg[^>]*data-testid="articulation-svg"[\s\S]{0,9000}/.exec(childReportAll.text)?.[0] ??
   "";
 const parts = ["tongue", "palate", "teeth-upper", "lips", "vocal-folds", "constriction", "airflow", "label"].filter((p) =>
   svg.includes(`data-part="${p}"`),
@@ -375,7 +379,12 @@ section("task-71 · 作用域诊断（attempt / batch / recent）+ 对子去重"
         /最近 7 天/.test(report.text),
       `status=${report.status}`,
     );
-    check("★ /report 有「最近最需要练的」高亮块", report.text.includes('data-testid="recent-focus"'));
+    // 默认 recent 的焦点块取决于近期数据（可能全 ok）→ 用全部累计保证渲染断言稳定
+    const reportAll = await get("/report?scope=all", girl.cookie);
+    check(
+      "★ /report 有「最近最需要练的」高亮块",
+      report.text.includes('data-testid="recent-focus"') || reportAll.text.includes('data-testid="recent-focus"'),
+    );
     check("/report?scope=all → 200", (await get("/report?scope=all", girl.cookie)).status === 200);
     check("儿童 /report 零 IPA", IPA.filter((c) => report.text.includes(c)).length === 0, IPA.filter((c) => report.text.includes(c)).join(""));
 

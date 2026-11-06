@@ -4,12 +4,28 @@
  */
 import { sqliteTable, text, integer, real, primaryKey, index, uniqueIndex } from "drizzle-orm/sqlite-core";
 
+/** 家庭（task-97）：多家庭账号互隔离；invite_code 供共同家长加入。 */
+export const families = sqliteTable("families", {
+  id: text("id").primaryKey(),
+  name: text("name").notNull(),
+  inviteCode: text("invite_code").notNull().unique(),
+  /** 一次性邀请码（task-99）：1 = 已被使用（rotate 后归零） */
+  inviteUsed: integer("invite_used").notNull().default(0),
+  /** 使用该邀请码的家长/时间（审计用） */
+  inviteUsedBy: text("invite_used_by"),
+  inviteUsedAt: text("invite_used_at"),
+  createdBy: text("created_by"),
+  createdAt: text("created_at").notNull(),
+});
+
 export const users = sqliteTable("users", {
   id: text("id").primaryKey(),
   email: text("email").notNull().unique(),
   passwordHash: text("password_hash").notNull(),
   displayName: text("display_name").notNull(),
   role: text("role").notNull(),
+  /** 家庭（task-97）：NOT NULL，老用户迁移时回填 fam_default */
+  familyId: text("family_id").notNull().default("fam_default"),
   birthYear: integer("birth_year"),
   ageBand: text("age_band").notNull(),
   cefrLevel: text("cefr_level").notNull().default("A1"),
@@ -295,6 +311,8 @@ export const readingMaterials = sqliteTable(
   {
     id: text("id").primaryKey(),
     createdBy: text("created_by"),
+    /** 家庭（task-97）：材料按家庭隔离 */
+    familyId: text("family_id").notNull().default("fam_default"),
     title: text("title").notNull(),
     text: text("text").notNull(),
     imagePath: text("image_path"),

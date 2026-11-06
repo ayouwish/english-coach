@@ -10,10 +10,10 @@ export const dynamic = "force-dynamic";
 export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
   try {
     await ensureBootstrap();
-    await requireParent();
+    const parentUser = await requireParent();
     const { id } = await ctx.params;
     const body = (await req.json().catch(() => null)) as { new_password?: unknown } | null;
-    await resetMemberPassword(id, body?.new_password);
+    await resetMemberPassword(parentUser.familyId, id, body?.new_password);
     return jsonOk({ ok: true });
   } catch (err) {
     if (err instanceof HttpError) {

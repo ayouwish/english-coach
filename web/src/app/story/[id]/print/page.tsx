@@ -2,7 +2,7 @@ import Link from "next/link";
 import { notFound, redirect } from "next/navigation";
 import { ensureBootstrap } from "@/db";
 import { getCurrentUser } from "@/lib/auth";
-import { getMaterial } from "@/lib/materials";
+import { getMaterialForViewer } from "@/lib/materials";
 import { isStoryOwner } from "@/lib/story-owner";
 import { StoryPrintBody } from "@/components/StoryPrintBody";
 import { StoryPrintCard } from "@/components/StoryPrintCard";
@@ -33,7 +33,7 @@ export default async function StoryPrintPage({
   const zh = sp.zh === "1";
   const lines = sp.lines === "1";
   const isCard = sp.layout === "card";
-  const material = await getMaterial(id);
+  const material = await getMaterialForViewer(user, id);
   if (!material) notFound();
   // task-95 rev2：中文原文仅故事创建者可见（英文正文家庭可见）
   const isOwner = isStoryOwner(user, material);

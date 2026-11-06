@@ -2,7 +2,7 @@ import Link from "next/link";
 import { redirect } from "next/navigation";
 import { ensureBootstrap } from "@/db";
 import { getCurrentUser } from "@/lib/auth";
-import { getMaterial } from "@/lib/materials";
+import { getMaterialForViewer } from "@/lib/materials";
 import { isStoryOwner } from "@/lib/story-owner";
 import { StoryPrintBody, type PrintStory } from "@/components/StoryPrintBody";
 import { PrintToolbar } from "@/components/PrintToolbar";
@@ -41,7 +41,7 @@ export default async function StoryCollectionPrintPage({
   let tooMany = rawIds.length > MAX_PRINT_STORIES;
   const ids = tooMany ? rawIds.slice(0, MAX_PRINT_STORIES) : rawIds;
   for (const id of ids) {
-    const material = await getMaterial(id);
+    const material = await getMaterialForViewer(user, id);
     if (!material) {
       missing.push(id);
       continue;

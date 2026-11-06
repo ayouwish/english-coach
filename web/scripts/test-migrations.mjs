@@ -164,6 +164,29 @@ check(
     "blind_tests",
 );
 
+// 0021：多家庭（task-97）
+const familyTable = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='families'").get();
+check("families 表已创建", familyTable?.name === "families");
+const userCols = db.prepare("PRAGMA table_info(users)").all();
+const familyCol = userCols.find((c) => c.name === "family_id");
+check("users.family_id 存在且 NOT NULL", Boolean(familyCol) && familyCol.notnull === 1, JSON.stringify(familyCol));
+const defaultFamily = db.prepare("SELECT * FROM families WHERE id='fam_default'").get();
+check("默认家庭 fam_default 已创建（我家）", defaultFamily?.name === "我家" && /^[A-Z0-9]{8}$/.test(defaultFamily?.invite_code ?? ""));
+check("老用户都归入 fam_default", db.prepare("SELECT COUNT(*) c FROM users WHERE family_id='fam_default'").get().c === db.prepare("SELECT COUNT(*) c FROM users").get().c);
+const materialCols = db.prepare("PRAGMA table_info(reading_materials)").all();
+const matFamilyCol = materialCols.find((c) => c.name === "family_id");
+check("reading_materials.family_id 存在且回填 fam_default", Boolean(matFamilyCol) && db.prepare("SELECT COUNT(*) c FROM reading_materials WHERE family_id IS NULL OR family_id=''").get().c === 0);
+const familyIndexes = db.prepare("SELECT name FROM sqlite_master WHERE type='index' AND tbl_name IN ('users','reading_materials') AND name LIKE 'idx_%family'").all();
+check("family 索引已建（users / materials）", familyIndexes.length >= 2, familyIndexes.map((r) => r.name).join(","));
+
+// 0022/0023：邀请码元数据（task-99）
+const familyCols = db.prepare("PRAGMA table_info(families)").all().map((c) => c.name);
+check(
+  "families 新增 invite_used / invite_used_by / invite_used_at",
+  ["invite_used", "invite_used_by", "invite_used_at"].every((c) => familyCols.includes(c)),
+  familyCols.join(","),
+);
+
 // 幂等：再跑一次不应重复应用
 const second = migrate(db);
 check("重复执行迁移是幂等的", second.length === 0, `second run applied=${second.join(",") || "(none)"}`);

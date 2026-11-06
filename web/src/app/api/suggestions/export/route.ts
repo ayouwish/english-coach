@@ -12,10 +12,10 @@ export const dynamic = "force-dynamic";
 export async function GET(req: NextRequest) {
   try {
     await ensureBootstrap();
-    await requireParent();
+    const user = await requireParent();
     const sp = req.nextUrl.searchParams;
     const format = sp.get("format") === "json" ? "json" : "md";
-    const data = await listSuggestions({ status: sp.get("status"), limit: 200, offset: 0 });
+    const data = await listSuggestions({ status: sp.get("status"), limit: 200, offset: 0, familyId: user.familyId });
     const generatedAt = new Date().toISOString();
     const stamp = generatedAt.slice(0, 16).replace(/[-:T]/g, "");
 

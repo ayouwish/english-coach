@@ -14,7 +14,7 @@ export async function PATCH(req: NextRequest, ctx: { params: Promise<{ id: strin
     const { id } = await ctx.params;
     const body = (await req.json().catch(() => null)) as Record<string, unknown> | null;
     if (!body) throw new HttpError(400, "bad_request", "请求体必须是 JSON");
-    const member = await updateFamilyMember(caller.id, id, {
+    const member = await updateFamilyMember(caller.id, caller.familyId, id, {
       displayName: body.display_name,
       cefrLevel: body.cefr_level,
       dailyLimitMinutes: body.daily_limit_minutes,

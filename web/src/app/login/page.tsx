@@ -1,5 +1,7 @@
+import Link from "next/link";
 import { redirect } from "next/navigation";
 import { ensureBootstrap } from "@/db";
+import { allowSelfSignup } from "@/lib/families";
 import { applyAccountOverrides } from "@/db/bootstrap";
 import { getCurrentUser } from "@/lib/auth";
 import { LoginForm, type DemoAccount } from "./LoginForm";
@@ -35,6 +37,7 @@ export default async function LoginPage() {
   const user = await getCurrentUser().catch(() => null);
   if (user) redirect("/");
   const { accounts, passwordsAreDefault } = buildDemoAccounts();
+  const selfSignup = allowSelfSignup();
   return (
     <div className="mx-auto max-w-md">
       <div className="ec-card">
@@ -43,6 +46,28 @@ export default async function LoginPage() {
           一家三口各自登录：爸爸、妈妈是家长账号，女儿是儿童账号（大按钮、不显示 IPA、到点自动收尾）。
         </p>
         <LoginForm demoAccounts={accounts} passwordsAreDefault={passwordsAreDefault} />
+        <p className="mt-4 border-t border-[#e6e8f5] pt-3 text-sm" data-testid="login-register-link" data-self-signup={selfSignup ? "1" : "0"}>
+          {selfSignup ? (
+            <>
+              第一次用？{" "}
+              <Link href="/register" className="font-semibold underline">
+                🆕 创建家庭
+              </Link>
+              {" · "}
+              <Link href="/register" className="underline">
+                🔑 用邀请码加入
+              </Link>
+            </>
+          ) : (
+            <>
+              第一次用？请用家长分享的{" "}
+              <Link href="/register" className="font-semibold underline">
+                🔑 邀请码加入
+              </Link>
+              （本站未开放自助注册）
+            </>
+          )}
+        </p>
       </div>
     </div>
   );

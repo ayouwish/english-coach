@@ -2,6 +2,7 @@ import { forbidden, redirect } from "next/navigation";
 import { ensureBootstrap } from "@/db";
 import { getCurrentUser } from "@/lib/auth";
 import { FamilyMembersPanel } from "@/components/FamilyMembersPanel";
+import { FamilyInviteCard } from "@/components/FamilyInviteCard";
 import { buildParentSummary, type MemberSummary } from "@/lib/parent-summary";
 import { getCapabilities } from "@/lib/voice";
 
@@ -18,7 +19,7 @@ export default async function ParentPage() {
   if (!user) redirect("/login");
   if (user.role !== "parent") forbidden();
 
-  const summary = await buildParentSummary();
+  const summary = await buildParentSummary(user.familyId);
   const caps = await getCapabilities();
 
   return (
@@ -46,6 +47,9 @@ export default async function ParentPage() {
           ))}
         </div>
       </section>
+
+      {/* task-97：家庭邀请码（家长分享给另一位家长） */}
+      <FamilyInviteCard />
 
       {/* task-54：家庭成员管理（创建账号 / 不同英语水平 / 重置密码） */}
       <FamilyMembersPanel viewerId={user.id} />

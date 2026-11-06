@@ -27,6 +27,8 @@ export interface SessionUser {
   email: string;
   displayName: string;
   role: Role;
+  /** 家庭（task-97）：所有家庭内数据按它隔离 */
+  familyId: string;
   ageBand: AgeBand;
   cefrLevel: string;
   birthYear: number | null;
@@ -54,6 +56,7 @@ function toSessionUser(row: typeof users.$inferSelect): SessionUser {
     email: row.email,
     displayName: row.displayName,
     role: row.role as Role,
+    familyId: row.familyId ?? "fam_default",
     ageBand: row.ageBand as AgeBand,
     cefrLevel: row.cefrLevel,
     birthYear: row.birthYear,

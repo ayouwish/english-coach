@@ -7,12 +7,24 @@
  *  - 密码只存 bcrypt hash，**绝不写日志/响应**
  *  - 不改动既有三个种子账号
  */
-import { desc, eq, sql } from "drizzle-orm";
+import { and, desc, eq, sql } from "drizzle-orm";
 import { getDb } from "@/db";
 import { attempts, users } from "@/db/schema";
 import { hashPassword } from "@/db/bootstrap";
 import { HttpError } from "./auth";
 import { CEFR_LEVELS, isCefrLevel } from "./levels";
+
+/** 当前用户的家庭 id（必有；缺失回退默认家庭） */
+export function getFamilyId(user: { familyId?: string | null }): string {
+  return user.familyId || "fam_default";
+}
+
+/** 跨家庭访问统一 404（不泄漏资源是否存在） */
+export function requireSameFamily(user: { familyId?: string | null }, ownerFamilyId: string | null | undefined): void {
+  const mine = getFamilyId(user);
+  const theirs = ownerFamilyId || "fam_default";
+  if (mine !== theirs) throw new HttpError(404, "not_found", "找不到这个资源");
+}
 
 export const FAMILY_LOGIN_DOMAIN = "@family.local";
 export const MIN_PASSWORD = 8;
@@ -107,6 +119,8 @@ export async function createFamilyMember(input: {
   avatar?: unknown;
   dailyLimitMinutes?: unknown;
   allowFreeChat?: unknown;
+  /** 新成员归属家庭（task-97；必传，来自当前家长） */
+  familyId: string;
 }): Promise<FamilyMember> {
   const displayName = normalizeDisplayName(input.displayName);
   const email = normalizeLogin(input.login);
@@ -133,6 +147,7 @@ export async function createFamilyMember(input: {
     passwordHash: hashPassword(password),
     displayName,
     role,
+    familyId: input.familyId,
     birthYear,
     ageBand,
     cefrLevel,
@@ -189,9 +204,9 @@ function toMember(row: typeof users.$inferSelect, stats?: { attempts: number; la
   };
 }
 
-export async function listFamilyMembers(): Promise<FamilyMember[]> {
+export async function listFamilyMembers(familyId: string): Promise<FamilyMember[]> {
   const db = getDb();
-  const rows = await db.select().from(users).orderBy(desc(users.createdAt));
+  const rows = await db.select().from(users).where(eq(users.familyId, familyId)).orderBy(desc(users.createdAt));
   const stats = await memberStats(rows.map((r) => r.id));
   return rows.map((r) => toMember(r, stats.get(r.id)));
 }
@@ -199,6 +214,7 @@ export async function listFamilyMembers(): Promise<FamilyMember[]> {
 /** PATCH：昵称/水平/时长/自由聊/头像（**角色不可改**；改自己的角色尤其禁止） */
 export async function updateFamilyMember(
   callerId: string,
+  familyId: string,
   id: string,
   patch: {
     displayName?: unknown;
@@ -214,7 +230,7 @@ export async function updateFamilyMember(
     throw new HttpError(400, "bad_request", "暂不支持修改成员角色，请新建一个成员");
   }
   const db = getDb();
-  const [row] = await db.select().from(users).where(eq(users.id, id)).limit(1);
+  const [row] = await db.select().from(users).where(and(eq(users.id, id), eq(users.familyId, familyId))).limit(1);
   if (!row) throw new HttpError(404, "not_found", "找不到这个成员");
 
   const next: {
@@ -238,10 +254,14 @@ export async function updateFamilyMember(
 }
 
 /** 家长重置成员密码（旧密码立即失效） */
-export async function resetMemberPassword(id: string, newPassword: unknown): Promise<void> {
+export async function resetMemberPassword(callerFamilyId: string, id: string, newPassword: unknown): Promise<void> {
   const password = normalizePassword(newPassword);
   const db = getDb();
-  const [row] = await db.select({ id: users.id }).from(users).where(eq(users.id, id)).limit(1);
+  const [row] = await db
+    .select({ id: users.id })
+    .from(users)
+    .where(and(eq(users.id, id), eq(users.familyId, callerFamilyId)))
+    .limit(1);
   if (!row) throw new HttpError(404, "not_found", "找不到这个成员");
   await db.update(users).set({ passwordHash: hashPassword(password) }).where(eq(users.id, id));
 }

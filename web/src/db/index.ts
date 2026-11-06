@@ -104,6 +104,8 @@ export async function ensureBootstrap(): Promise<void> {
   const store = globalForDb.__englishCoachDb;
   if (store.bootstrapped) return;
   runMigrations(getSqlite());
+  const { ensureDefaultFamily } = await import("@/lib/families");
+  await ensureDefaultFamily();
   const { seedIfEmpty } = await import("./bootstrap");
   await seedIfEmpty(getSqlite());
   // task-24：把上次进程遗留的 pending/scoring 标成 failed（否则永远卡"评分中"）

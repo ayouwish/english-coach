@@ -80,12 +80,13 @@ export const POST = route(async (req: NextRequest) => {
 /** GET /api/suggestions —— **仅家长**；儿童 403。 */
 export const GET = route(async (req: NextRequest) => {
   await ensureBootstrap();
-  await requireParent();
+  const user = await requireParent();
   const sp = req.nextUrl.searchParams;
   const data = await listSuggestions({
     status: sp.get("status"),
     limit: Number(sp.get("limit") ?? 50),
     offset: Number(sp.get("offset") ?? 0),
+    familyId: user.familyId,
   });
   return jsonOk({
     ...data,

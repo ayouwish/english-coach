@@ -4,7 +4,7 @@ import { Readable } from "node:stream";
 import { ensureBootstrap } from "@/db";
 import { HttpError, requireUser } from "@/lib/auth";
 import { mimeForPath } from "@/lib/illustration";
-import { getMaterial, resolveMaterialPath } from "@/lib/materials";
+import { getMaterialForViewer, resolveMaterialPath } from "@/lib/materials";
 
 export const dynamic = "force-dynamic";
 
@@ -15,9 +15,9 @@ export const dynamic = "force-dynamic";
 export async function GET(_req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
   try {
     await ensureBootstrap();
-    await requireUser();
+    const user = await requireUser();
     const { id } = await ctx.params;
-    const material = await getMaterial(id);
+    const material = await getMaterialForViewer(user, id);
     if (!material || !material.imagePath) {
       throw new HttpError(404, "not_found", "这个书页没有保存图片");
     }
