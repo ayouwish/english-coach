@@ -187,6 +187,10 @@ check(
   familyCols.join(","),
 );
 
+// 0025：盲测软取消（task-103）
+const btCols = db.prepare("PRAGMA table_info(blind_tests)").all().map((c) => c.name);
+check("blind_tests 新增 cancelled_at（软取消）", btCols.includes("cancelled_at"), btCols.join(","));
+
 // 0024：成本台账（task-101）
 const costTable = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='cost_events'").get();
 check("cost_events 表已创建（微元金额）", costTable?.name === "cost_events");

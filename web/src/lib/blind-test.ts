@@ -20,6 +20,7 @@ export interface BlindTestRowView {
   user_id: string;
   started_at: string;
   ended_at: string | null;
+  cancelled_at: string | null;
   item_count: number;
   avg_pron: number | null;
   avg_accuracy: number | null;
@@ -34,6 +35,7 @@ function toView(row: typeof blindTests.$inferSelect): BlindTestRowView {
     user_id: row.userId,
     started_at: row.startedAt,
     ended_at: row.endedAt,
+    cancelled_at: row.cancelledAt ?? null,
     item_count: row.itemCount,
     avg_pron: row.avgPron,
     avg_accuracy: row.avgAccuracy,
@@ -107,7 +109,7 @@ export async function startBlindTest(user: SessionUser): Promise<{
   const [inProgress] = await db
     .select()
     .from(blindTests)
-    .where(and(eq(blindTests.userId, user.id), isNull(blindTests.endedAt)))
+    .where(and(eq(blindTests.userId, user.id), isNull(blindTests.endedAt), isNull(blindTests.cancelledAt)))
     .orderBy(desc(blindTests.startedAt))
     .limit(1);
   if (inProgress) {
@@ -145,6 +147,9 @@ export async function requireOpenBlindTest(user: SessionUser, blindTestId: strin
   const db = getDb();
   const [row] = await db.select().from(blindTests).where(eq(blindTests.id, blindTestId)).limit(1);
   if (!row || row.userId !== user.id) throw new HttpError(404, "not_found", "盲测批次不存在");
+  if (row.cancelledAt) {
+    throw new HttpError(409, "blind_cancelled", "这次盲测已经取消了");
+  }
   if (row.endedAt) {
     throw new HttpError(409, "blind_test_closed", "这次盲测已经结束了");
   }
@@ -255,6 +260,9 @@ export async function finishBlindTest(user: SessionUser, blindTestId: string) {
   const db = getDb();
   const [row] = await db.select().from(blindTests).where(eq(blindTests.id, blindTestId)).limit(1);
   if (!row || row.userId !== user.id) throw new HttpError(404, "not_found", "盲测批次不存在");
+  if (row.cancelledAt) {
+    throw new HttpError(409, "blind_cancelled", "这次盲测已经取消了");
+  }
 
   let view = toView(row);
   let lastStats: Awaited<ReturnType<typeof computeBlindAverages>> | null = null;
@@ -373,7 +381,8 @@ export async function listBlindTests(userId: string) {
     scored: scoredById.get(t.id) ?? 0,
     pending: pendingById.get(t.id) ?? 0,
   });
-  const tests = rows.map(toView).map(withCounts);
+  // task-103：已取消批次不出现在 tests / trend / in_progress（软取消，DB 保留审计）
+  const tests = rows.map(toView).map(withCounts).filter((t) => t.cancelled_at === null);
   const finished = tests.filter((t) => t.ended_at !== null);
   const current = finished[0] ?? null;
   const previous = finished[1] ?? null;
@@ -383,7 +392,7 @@ export async function listBlindTests(userId: string) {
   return {
     user_id: userId,
     tests,
-    in_progress: tests.find((t) => t.ended_at === null) ?? null,
+    in_progress: tests.find((t) => t.ended_at === null && t.cancelled_at === null) ?? null,
     /** 所有未评完的盲测条目总数（周报顶部「待评分 N 条」） */
     pending_total: [...pendingById.values()].reduce((a, b) => a + b, 0),
     trend: {
@@ -436,7 +445,7 @@ export async function getBlindTestForPage(user: SessionUser) {
   const [inProgress] = await db
     .select()
     .from(blindTests)
-    .where(and(eq(blindTests.userId, user.id), isNull(blindTests.endedAt)))
+    .where(and(eq(blindTests.userId, user.id), isNull(blindTests.endedAt), isNull(blindTests.cancelledAt)))
     .orderBy(desc(blindTests.startedAt))
     .limit(1);
 
@@ -478,4 +487,39 @@ export async function getBlindTestForPage(user: SessionUser) {
     })),
     progress: await blindProgress(view.id, view.sentence_ids.length),
   };
+}
+
+/**
+ * 软取消盲测（task-103）：只允许进行中 → cancelled_at；已完成 409；已取消幂等 200。
+ * 不物理删除（attempts.blind_test_id 审计保留）。
+ */
+export async function cancelBlindTest(user: SessionUser, blindTestId: string): Promise<{
+  cancelled: true;
+  blind_test_id: string;
+  cancelled_at: string;
+}> {
+  const db = getDb();
+  const [row] = await db.select().from(blindTests).where(eq(blindTests.id, blindTestId)).limit(1);
+  if (!row || row.userId !== user.id) throw new HttpError(404, "not_found", "盲测批次不存在");
+  if (row.cancelledAt) {
+    return { cancelled: true, blind_test_id: row.id, cancelled_at: row.cancelledAt };
+  }
+  if (row.endedAt) {
+    throw new HttpError(409, "already_finished", "这次盲测已经完成了，不能取消");
+  }
+  const now = new Date().toISOString();
+  const result = await db
+    .update(blindTests)
+    .set({ cancelledAt: now })
+    .where(and(eq(blindTests.id, blindTestId), isNull(blindTests.endedAt), isNull(blindTests.cancelledAt)));
+  if (result.changes === 0) {
+    // 并发：重读判断三态
+    const [fresh] = await db.select().from(blindTests).where(eq(blindTests.id, blindTestId)).limit(1);
+    if (!fresh) throw new HttpError(404, "not_found", "盲测批次不存在");
+    if (fresh.cancelledAt) return { cancelled: true, blind_test_id: fresh.id, cancelled_at: fresh.cancelledAt };
+    if (fresh.endedAt) throw new HttpError(409, "already_finished", "这次盲测已经完成了，不能取消");
+    throw new HttpError(409, "conflict", "取消失败，请重试");
+  }
+  console.info("[blind] cancelled", { userId: user.id, blindTestId, cancelledAt: now });
+  return { cancelled: true, blind_test_id: blindTestId, cancelled_at: now };
 }

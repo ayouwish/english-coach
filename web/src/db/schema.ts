@@ -199,6 +199,8 @@ export const blindTests = sqliteTable(
     startedAt: text("started_at").notNull(),
     /** NULL = 进行中；进行中不得对外暴露任何分数（契约 §13.3） */
     endedAt: text("ended_at"),
+    /** 软取消（task-103）：NULL=未取消；已取消批次不物理删除 */
+    cancelledAt: text("cancelled_at"),
     itemCount: integer("item_count").notNull().default(0),
     avgPron: real("avg_pron"),
     avgAccuracy: real("avg_accuracy"),

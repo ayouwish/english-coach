@@ -3,6 +3,7 @@ import { redirect } from "next/navigation";
 import { ensureBootstrap } from "@/db";
 import { getCurrentUser } from "@/lib/auth";
 import { listBlindTests } from "@/lib/blind-test";
+import { BlindCancelButton } from "@/components/BlindCancelButton";
 
 export const dynamic = "force-dynamic";
 
@@ -68,9 +69,12 @@ export default async function BlindTestReportPage() {
               ))}
             </ul>
           ) : null}
-          <Link href="/blindtest" className="ec-btn ec-btn-primary mt-3">
-            继续这次盲测
-          </Link>
+          <div className="mt-3 flex flex-wrap items-center gap-2">
+            <Link href="/blindtest" className="ec-btn ec-btn-primary">
+              继续这次盲测
+            </Link>
+            <BlindCancelButton blindTestId={data.in_progress.id} isChild={isChild} />
+          </div>
         </section>
       ) : null}
 
