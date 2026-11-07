@@ -10,6 +10,7 @@ import { getAvatar, avatarView } from "@/lib/avatar";
 import { loadAvatarPresets } from "@/lib/avatar-presets";
 import { CorpusManager } from "./CorpusManager";
 import { SettingsForm } from "./SettingsForm";
+import { PasswordChangeForm } from "@/components/PasswordChangeForm";
 
 export const dynamic = "force-dynamic";
 
@@ -48,6 +49,7 @@ export default async function SettingsPage() {
       usage={usage}
       imageConfigured={Boolean(caps?.image)}
     />
+      <PasswordChangeForm isChild={user.isChild} />
     <AvatarSection
       isChild={user.isChild}
       initialPresets={avatarPresets}

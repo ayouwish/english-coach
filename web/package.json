@@ -35,7 +35,8 @@
     "check:delete-swipe": "node scripts/check-delete-swipe.mjs",
     "check:families": "node scripts/check-families.mjs",
     "check:cost": "node scripts/check-cost.mjs",
-    "check:blind": "node scripts/check-blind.mjs"
+    "check:blind": "node scripts/check-blind.mjs",
+    "check:password": "node scripts/check-password.mjs"
   },
   "dependencies": {
     "bcryptjs": "^3.0.2",
