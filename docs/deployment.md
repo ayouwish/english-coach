@@ -1582,7 +1582,11 @@ docker compose -f deploy/docker-compose.yml cp caddy:/data/caddy/pki/authorities
 ## 多家庭与注册开关
 
 - 每个家庭独立：账号、故事、材料、对话、统计、成本全部按家庭隔离（跨家庭一律 404）
-- `ALLOW_SELF_SIGNUP=1`（默认）：朋友可在登录页「🆕 创建家庭」自助注册
-- `ALLOW_SELF_SIGNUP=0`：关闭自助注册（只能凭邀请码加入已有家庭）
-- 邀请码：家长面板生成；**一次性**；每家庭最多 **3 个家长账号**（创建者 + 受邀 2）
+- **默认邀请制**（`ALLOW_SELF_SIGNUP=0`）：不允许公开自助注册；只允许两种受邀动作
+- **两级邀请**：
+  1. **受邀加入现有家庭**（共同家长）：家长面板生成「家长邀请码」（一次性）；每家庭 ≤3 家长
+  2. **受邀创建新家庭**：**管理员家庭**生成「新家庭邀请码」（一次性，每个消耗 1 个名额）；
+     管理员家庭默认 **100** 个名额，其它家庭 **0**
+- 调整名额：`docker compose exec -T web node scripts/family-quota.mjs --family fam_default --add 10`
+- 管理员家庭 = `fam_default`（迁移 0027 自动设置 `is_admin=1`）
 - 成本：家长面板「💰 本月成本」按家庭统计 LLM/图片/TTS/ASR；单价见 `deploy/.env.example` 的 `COST_*`
