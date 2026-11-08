@@ -36,7 +36,9 @@
     "check:families": "node scripts/check-families.mjs",
     "check:cost": "node scripts/check-cost.mjs",
     "check:blind": "node scripts/check-blind.mjs",
-    "check:password": "node scripts/check-password.mjs"
+    "check:password": "node scripts/check-password.mjs",
+    "backfill:opening-zh": "node scripts/backfill-opening-zh.mjs",
+    "check:openings": "node scripts/check-openings.mjs"
   },
   "dependencies": {
     "bcryptjs": "^3.0.2",

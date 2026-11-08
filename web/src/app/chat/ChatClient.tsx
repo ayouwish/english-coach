@@ -18,6 +18,7 @@ interface ScenarioItem {
   title_zh: string;
   setting_zh: string;
   opening_line: string;
+  opening_zh?: string | null;
   level: string;
   min_age: number;
   tags?: string[];
@@ -110,6 +111,7 @@ export function ChatClient({
     setting_zh: "",
     role_prompt: "",
     opening_line: "",
+    opening_zh: "",
     level: "A2",
   });
   const [customBusy, setCustomBusy] = useState(false);
@@ -377,7 +379,7 @@ export function ChatClient({
       }
       setShowCustomForm(false);
       setEditingId(null);
-      setCustomForm({ title: "", title_zh: "", setting_zh: "", role_prompt: "", opening_line: "", level: "A2" });
+      setCustomForm({ title: "", title_zh: "", setting_zh: "", role_prompt: "", opening_line: "", opening_zh: "", level: "A2" });
       router.refresh();
     } catch (err) {
       setCustomError(`保存失败：${(err as Error).message}`);
@@ -416,6 +418,7 @@ export function ChatClient({
       setting_zh: item.setting_zh,
       role_prompt: "",
       opening_line: item.opening_line,
+      opening_zh: item.opening_zh ?? "",
       level: item.level,
     });
   }
@@ -717,6 +720,14 @@ export function ChatClient({
               onChange={(e) => setCustomForm((f) => ({ ...f, opening_line: e.target.value }))}
               placeholder="开场白（5–200，英文）"
               data-testid="custom-opening"
+              className="mt-2 w-full rounded-lg border border-[#d9dcf0] px-2 py-1 text-sm"
+            />
+            <input
+              value={customForm.opening_zh}
+              onChange={(e) => setCustomForm((f) => ({ ...f, opening_zh: e.target.value }))}
+              placeholder="开场白中文（可选，1–200）：比如「你好！想喝点什么？」"
+              data-testid="custom-opening-zh"
+              maxLength={200}
               className="mt-2 w-full rounded-lg border border-[#d9dcf0] px-2 py-1 text-sm"
             />
             <div className="mt-2 flex flex-wrap items-center gap-2">

@@ -79,9 +79,10 @@ export interface CustomScenarioRow {
   settingZh: string;
   rolePrompt: string;
   openingLine: string;
+  openingZh: string | null;
+  variantsJson: string | null;
   level: string;
   audience: string;
-  variantsJson: string | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -181,6 +182,7 @@ export interface CustomScenarioInput {
   setting_zh?: unknown;
   role_prompt?: unknown;
   opening_line?: unknown;
+  opening_zh?: unknown;
   level?: unknown;
   audience?: unknown;
   variants?: unknown;
@@ -197,6 +199,7 @@ export function validateCustomScenario(body: CustomScenarioInput, isChild: boole
   settingZh: string;
   rolePrompt: string;
   openingLine: string;
+  openingZh: string | null;
   level: string;
   audience: "child" | "adult";
   variantsJson: string | null;
@@ -206,6 +209,8 @@ export function validateCustomScenario(body: CustomScenarioInput, isChild: boole
   const settingZh = str(body.setting_zh);
   const rolePrompt = str(body.role_prompt);
   const openingLine = str(body.opening_line);
+  const openingZhRaw = str(body.opening_zh);
+  const openingZh = openingZhRaw ? openingZhRaw : null;
   const level = str(body.level) || "A2";
   const audienceRaw = str(body.audience) || (isChild ? "child" : "adult");
 
@@ -214,6 +219,7 @@ export function validateCustomScenario(body: CustomScenarioInput, isChild: boole
   if (settingZh.length < 1 || settingZh.length > 200) throw new HttpError(400, "bad_request", "场景说明需为 1–200 个字符");
   if (rolePrompt.length < 20 || rolePrompt.length > 1500) throw new HttpError(400, "bad_request", "角色设定需为 20–1500 个字符");
   if (openingLine.length < 5 || openingLine.length > 200) throw new HttpError(400, "bad_request", "开场白需为 5–200 个字符");
+  if (openingZh && openingZh.length > 200) throw new HttpError(400, "bad_request", "开场白中文最多 200 字");
   if (!SCENARIO_LEVELS.includes(level)) throw new HttpError(400, "bad_request", `难度必须是 ${SCENARIO_LEVELS.join("/")}`);
   if (!SCENARIO_AUDIENCES.includes(audienceRaw)) throw new HttpError(400, "bad_request", "audience 必须是 child/adult");
   if (isChild && audienceRaw !== "child") throw new HttpError(400, "bad_request", "儿童账号只能创建「小朋友」场景");
@@ -239,6 +245,7 @@ export function validateCustomScenario(body: CustomScenarioInput, isChild: boole
     settingZh,
     rolePrompt,
     openingLine,
+    openingZh,
     level,
     audience: audienceRaw as "child" | "adult",
     variantsJson: variants.length > 0 ? JSON.stringify(variants) : null,

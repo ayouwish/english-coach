@@ -400,6 +400,8 @@ export const userScenarios = sqliteTable(
     settingZh: text("setting_zh").notNull(),
     rolePrompt: text("role_prompt").notNull(),
     openingLine: text("opening_line").notNull(),
+    /** 开场白中文（task-104；可选） */
+    openingZh: text("opening_zh"),
     level: text("level").notNull().default("A2"),
     audience: text("audience").notNull().default("adult"),
     variantsJson: text("variants_json"),

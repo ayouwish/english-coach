@@ -6,7 +6,7 @@ import { HttpError, requireUser } from "@/lib/auth";
 import { jsonOk, route } from "@/lib/http";
 import { assertWithinDailyLimit } from "@/lib/limits";
 import { ageOf, audienceForUser, isScenarioAllowedFor, scenarioAudience } from "@/lib/chat";
-import { openingZh } from "@/lib/opening-zh";
+import { openingZhFor } from "@/lib/opening-zh";
 import { builtinVariations, getCustomScenario, parseVariants, pickVariation, type ScenarioVariation } from "@/lib/custom-scenarios";
 
 export const dynamic = "force-dynamic";
@@ -28,8 +28,9 @@ export const POST = route(async (req: NextRequest) => {
     .where(and(eq(chatScenarios.id, scenarioId), eq(chatScenarios.enabled, 1)))
     .limit(1);
 
-  // task-79：内置场景不存在 → 可能是当前用户的自定义场景（仅 owner，他人 404）
-  if (!scenario) {
+  // task-79/104：自定义场景会镜像到 chat_scenarios（id=us_…）→ 也要走自定义分支，
+  // 否则会落到内置分支、丢掉自定义 opening_zh。
+  if (!scenario || scenario.id.startsWith("us_")) {
     const custom = await getCustomScenario(user.id, scenarioId);
     if (!custom) throw new HttpError(404, "not_found", "场景不存在或未启用");
     if (custom.audience !== audienceForUser(user)) {
@@ -38,6 +39,8 @@ export const POST = route(async (req: NextRequest) => {
     const variants = parseVariants(custom.variantsJson);
     const variation = pickVariation(variants);
     const opening = variation?.opening_line ?? custom.openingLine;
+    // task-104：自定义场景优先用自己填的中文开场白，否则按文本映射
+    const customTextZh = custom.openingZh ?? openingZhFor(opening);
     const sessionId = `cs_${crypto.randomUUID().replace(/-/g, "").slice(0, 20)}`;
     const now = new Date().toISOString();
     await db.insert(chatSessions).values({
@@ -55,7 +58,7 @@ export const POST = route(async (req: NextRequest) => {
       chatSessionId: sessionId,
       role: "assistant",
       text: opening,
-      textZh: null,
+      textZh: customTextZh,
       correctionJson: null,
       flag: "ok",
       audioPath: null,
@@ -70,6 +73,7 @@ export const POST = route(async (req: NextRequest) => {
         title_zh: custom.titleZh,
         setting_zh: custom.settingZh,
         opening_line: opening,
+        opening_zh: customTextZh,
         level: custom.level,
         min_age: 0,
         variation,
@@ -112,7 +116,8 @@ export const POST = route(async (req: NextRequest) => {
     chatSessionId: sessionId,
     role: "assistant",
     text: opening,
-    textZh: openingZh(scenario.id),
+    // task-104：按**实际选中的开场白文本**匹配中文（variation 文本变了也能对上）
+    textZh: openingZhFor(opening, scenario.id),
     correctionJson: null,
     flag: "ok",
     audioPath: null,
@@ -128,6 +133,7 @@ export const POST = route(async (req: NextRequest) => {
         title_zh: scenario.titleZh,
         setting_zh: scenario.settingZh,
         opening_line: opening,
+        opening_zh: openingZhFor(opening, scenario.id),
         level: scenario.level,
         min_age: scenario.minAge,
         variation,
@@ -135,7 +141,7 @@ export const POST = route(async (req: NextRequest) => {
       age: ageOf(user),
       turn_count: 0,
       messages: [
-        { role: "assistant", text: scenario.openingLine, text_zh: null, created_at: now },
+        { role: "assistant", text: opening, text_zh: openingZhFor(opening, scenario.id), created_at: now },
       ],
     },
     201,

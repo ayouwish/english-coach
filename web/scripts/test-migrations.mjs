@@ -187,6 +187,10 @@ check(
   familyCols.join(","),
 );
 
+// 0026：自定义场景中文开场白（task-104）
+const usCols = db.prepare("PRAGMA table_info(user_scenarios)").all().map((c) => c.name);
+check("user_scenarios 新增 opening_zh", usCols.includes("opening_zh"), usCols.join(","));
+
 // 0025：盲测软取消（task-103）
 const btCols = db.prepare("PRAGMA table_info(blind_tests)").all().map((c) => c.name);
 check("blind_tests 新增 cancelled_at（软取消）", btCols.includes("cancelled_at"), btCols.join(","));
