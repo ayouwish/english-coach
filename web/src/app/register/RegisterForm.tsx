@@ -4,7 +4,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useState } from "react";
 
-type Mode = "create" | "join";
+type Mode = "create" | "join" | "newfamily";
 
 /**
  * 注册表单（task-97/99）：创建新家庭 / 用邀请码加入。
@@ -33,7 +33,11 @@ export function RegisterForm({ allowSelfSignup }: { allowSelfSignup: boolean }) 
           display_name: displayName,
           email,
           password,
-          ...(mode === "create" ? { family_name: familyName } : { invite_code: inviteCode }),
+          ...(mode === "create"
+            ? { family_name: familyName }
+            : mode === "newfamily"
+              ? { family_name: familyName, new_family_code: inviteCode }
+              : { invite_code: inviteCode }),
         }),
       });
       const body = (await res.json().catch(() => null)) as { error?: { message?: string } } | null;
@@ -54,7 +58,7 @@ export function RegisterForm({ allowSelfSignup }: { allowSelfSignup: boolean }) 
     <>
       {/* 关闭自助注册时：不渲染"创建家庭"入口，只保留"用邀请码加入"（家长可控） */}
       {allowSelfSignup ? (
-        <div className="mt-3 flex gap-2" data-testid="register-mode" data-self-signup="1">
+        <div className="mt-3 flex flex-wrap gap-2" data-testid="register-mode" data-self-signup="1">
           <button
             type="button"
             data-testid="register-mode-create"
@@ -73,12 +77,36 @@ export function RegisterForm({ allowSelfSignup }: { allowSelfSignup: boolean }) 
           >
             🔑 用邀请码加入
           </button>
+          <button
+            type="button"
+            data-testid="register-mode-newfamily"
+            aria-pressed={mode === "newfamily"}
+            className={`ec-btn ${mode === "newfamily" ? "ec-btn-primary" : "ec-btn-ghost"} !px-2 !py-1 text-xs`}
+            onClick={() => setMode("newfamily")}
+          >
+            🏠 受邀创建新家庭
+          </button>
         </div>
       ) : (
-        <div className="mt-3" data-testid="register-mode" data-self-signup="0">
-          <p className="text-sm font-semibold" data-testid="register-mode-join">
-            🔑 用邀请码加入家庭
-          </p>
+        <div className="mt-3 flex flex-wrap gap-2" data-testid="register-mode" data-self-signup="0">
+          <button
+            type="button"
+            data-testid="register-mode-join"
+            aria-pressed={mode === "join"}
+            className={`ec-btn ${mode === "join" ? "ec-btn-primary" : "ec-btn-ghost"} !px-2 !py-1 text-xs`}
+            onClick={() => setMode("join")}
+          >
+            🔑 受邀加入家庭
+          </button>
+          <button
+            type="button"
+            data-testid="register-mode-newfamily"
+            aria-pressed={mode === "newfamily"}
+            className={`ec-btn ${mode === "newfamily" ? "ec-btn-primary" : "ec-btn-ghost"} !px-2 !py-1 text-xs`}
+            onClick={() => setMode("newfamily")}
+          >
+            🏠 受邀创建新家庭
+          </button>
         </div>
       )}
 
@@ -89,7 +117,7 @@ export function RegisterForm({ allowSelfSignup }: { allowSelfSignup: boolean }) 
       ) : null}
 
       <form onSubmit={submit} className="mt-3 flex flex-col gap-3" data-testid="register-form" data-mode={mode}>
-        {mode === "create" ? (
+        {mode !== "join" ? (
           <label className="text-sm font-semibold">
             家庭名称
             <input
@@ -97,7 +125,7 @@ export function RegisterForm({ allowSelfSignup }: { allowSelfSignup: boolean }) 
               onChange={(e) => setFamilyName(e.target.value)}
               required
               maxLength={20}
-              placeholder="例如：王家"
+              placeholder={mode === "newfamily" ? "你的新家庭名称（例如：李家）" : "例如：王家"}
               data-testid="register-family-name"
               className="mt-1 w-full rounded-lg border border-[#d9dcf0] px-3 py-2 text-base font-normal"
             />

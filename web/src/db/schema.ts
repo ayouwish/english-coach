@@ -14,6 +14,10 @@ export const families = sqliteTable("families", {
   /** 使用该邀请码的家长/时间（审计用） */
   inviteUsedBy: text("invite_used_by"),
   inviteUsedAt: text("invite_used_at"),
+  /** 管理员家庭（主家庭）：可生成「新家庭邀请码」（task-105） */
+  isAdmin: integer("is_admin").notNull().default(0),
+  /** 剩余可邀请的新家庭数（默认 0；主家庭迁移为 100） */
+  familyInviteQuota: integer("family_invite_quota").notNull().default(0),
   createdBy: text("created_by"),
   createdAt: text("created_at").notNull(),
 });
@@ -353,6 +357,21 @@ export const storyRetells = sqliteTable(
     createdAt: text("created_at").notNull(),
   },
   (t) => [index("idx_story_retells_material").on(t.materialId, t.createdAt)],
+);
+
+/** 新家庭邀请码（task-105）：生成时已扣管理员家庭名额。 */
+export const familyInvites = sqliteTable(
+  "family_invites",
+  {
+    code: text("code").primaryKey(),
+    createdByUserId: text("created_by_user_id").notNull(),
+    createdByFamilyId: text("created_by_family_id").notNull(),
+    createdAt: text("created_at").notNull(),
+    usedAt: text("used_at"),
+    usedByUserId: text("used_by_user_id"),
+    usedByFamilyId: text("used_by_family_id"),
+  },
+  (t) => [index("idx_family_invites_creator").on(t.createdByFamilyId, t.createdAt)],
 );
 
 /** 家庭成本台账（task-101）：voice usage 原始用量 + 微元金额。 */

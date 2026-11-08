@@ -42,6 +42,8 @@ const cleanup = () => {
   const ids = db.prepare(`SELECT id FROM users WHERE email IN (${emails.map(() => "?").join(",")})`).all(...emails).map((r) => r.id);
   for (const id of ids) db.prepare("DELETE FROM users WHERE id = ?").run(id);
   db.prepare("DELETE FROM families WHERE name LIKE '成本测试%'").run();
+  db.prepare("DELETE FROM family_invites WHERE created_at >= ?").run(new Date(TS - 60000).toISOString());
+  db.prepare("UPDATE families SET family_invite_quota = 100 WHERE id = 'fam_default'").run();
   db.close();
 };
 
@@ -80,11 +82,14 @@ async function main() {
   }
   db.close();
 
-  // 跨家庭：新家庭没有 dad 的成本
+  // 跨家庭：新家庭没有 dad 的成本（task-105：需管理员生成新家庭邀请码）
+  const dadCookie = dad;
+  const invRes = await fetch(`${BASE}/api/family/family-invites`, { method: "POST", headers: { cookie: dadCookie } });
+  const inv = await invRes.json().catch(() => null);
   const reg = await fetch(`${BASE}/api/auth/register`, {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({ family_name: `成本测试${TS}`, display_name: "成本家长", email: `costfam${TS}@test.local`, password: "Passw0rd!" }),
+    body: JSON.stringify({ family_name: `成本测试${TS}`, display_name: "成本家长", email: `costfam${TS}@test.local`, password: "Passw0rd!", new_family_code: inv?.code }),
   });
   const raw = typeof reg.headers.getSetCookie === "function" ? reg.headers.getSetCookie() : [];
   const costCookie = (raw.find((c) => c.startsWith("ec_session=")) ?? raw[0] ?? "").split(";")[0];

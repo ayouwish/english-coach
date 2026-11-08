@@ -7,9 +7,9 @@
  *  - 邀请码 8 位大写字母数字（去易混字符），家长可重置；旧码立即失效
  */
 import { randomBytes } from "node:crypto";
-import { and, eq } from "drizzle-orm";
+import { and, desc, eq, sql } from "drizzle-orm";
 import { getDb } from "@/db";
-import { families, users } from "@/db/schema";
+import { families, familyInvites, users } from "@/db/schema";
 import { HttpError, createSession, type SessionUser } from "./auth";
 import { hashPassword } from "@/db/bootstrap";
 
@@ -23,7 +23,8 @@ export const MAX_PARENTS_PER_FAMILY = 3;
 
 /** 是否允许"创建新家庭"（ALLOW_SELF_SIGNUP=0 时关闭；凭邀请码加入不受影响） */
 export function allowSelfSignup(): boolean {
-  return process.env.ALLOW_SELF_SIGNUP !== "0";
+  // task-105：默认关闭开放注册；只有显式 ALLOW_SELF_SIGNUP=1 才允许无码建家庭
+  return process.env.ALLOW_SELF_SIGNUP === "1";
 }
 
 export function generateInviteCode(length = INVITE_CODE_LENGTH): string {
@@ -140,6 +141,7 @@ export interface RegisterInput {
   password: unknown;
   family_name?: unknown;
   invite_code?: unknown;
+  new_family_code?: unknown;
 }
 
 /**
@@ -152,12 +154,27 @@ export async function registerAccount(input: RegisterInput) {
   const password = normalizePassword(input.password);
   const displayName = normalizeDisplayName(input.display_name);
   const inviteCode = normalizeInviteCode(input.invite_code);
+  const newFamilyCode = normalizeInviteCode(input.new_family_code);
+  if (inviteCode && newFamilyCode) throw new HttpError(400, "bad_request", "一次只能使用一种邀请码");
 
   const [existing] = await db.select({ id: users.id }).from(users).where(eq(users.email, email)).limit(1);
   if (existing) throw new HttpError(409, "conflict", "这个邮箱已经注册过了，直接登录吧");
 
   let familyId: string;
-  if (inviteCode) {
+  if (newFamilyCode) {
+    const [famInvite] = await db.select().from(familyInvites).where(eq(familyInvites.code, newFamilyCode)).limit(1);
+    if (!famInvite) throw new HttpError(400, "bad_request", "邀请码无效，请向管理员确认");
+    if (famInvite.usedAt) throw new HttpError(400, "bad_request", "邀请码已被使用，请让管理员重新生成");
+    familyId = `fam_${randomBytes(8).toString("hex")}`;
+    await createFamilyWithUniqueCode(familyId, normalizeFamilyName(input.family_name));
+    // 占用码（并发下只有一次成功）
+    const [claimed] = await db
+      .update(familyInvites)
+      .set({ usedAt: new Date().toISOString(), usedByUserId: null, usedByFamilyId: familyId })
+      .where(and(eq(familyInvites.code, newFamilyCode), sql`${familyInvites.usedAt} IS NULL`))
+      .returning();
+    if (!claimed) throw new HttpError(400, "bad_request", "邀请码已被使用，请让管理员重新生成");
+  } else if (inviteCode) {
     const [family] = await db.select().from(families).where(eq(families.inviteCode, inviteCode)).limit(1);
     if (!family) throw new HttpError(400, "bad_request", "邀请码无效，请向家长确认");
     // task-99：邀请码一次性（已被使用 → 失效，需要家长重置）
@@ -210,6 +227,9 @@ export async function registerAccount(input: RegisterInput) {
     if (/UNIQUE constraint failed/i.test(String(err))) throw new HttpError(409, "conflict", "这个邮箱已经注册过了，直接登录吧");
     throw err;
   }
+  if (newFamilyCode) {
+    await db.update(familyInvites).set({ usedByUserId: userId }).where(eq(familyInvites.code, newFamilyCode));
+  }
   if (inviteCode) {
     // 记录使用人/时间（审计；失败不影响注册主流程）
     await db
@@ -250,4 +270,60 @@ async function createFamilyWithUniqueCode(familyId: string, name: string) {
     }
   }
   return null;
+}
+
+/** 新家庭邀请（task-105）——仅管理员家庭、且必须余量 > 0。 */
+export interface FamilyInviteView {
+  code: string;
+  created_at: string;
+  used_at: string | null;
+  used_by_family_name: string | null;
+}
+
+export async function listFamilyInvites(user: SessionUser) {
+  const family = await getFamilyOf(user);
+  const isAdmin = family?.isAdmin === 1;
+  if (!isAdmin) throw new HttpError(403, "no_family_quota", "本家庭没有邀请新家庭的名额，请联系管理员");
+  const rows = await getDb()
+    .select({ inv: familyInvites, name: families.name })
+    .from(familyInvites)
+    .leftJoin(families, eq(families.id, familyInvites.usedByFamilyId))
+    .where(eq(familyInvites.createdByFamilyId, family!.id))
+    .orderBy(desc(familyInvites.createdAt))
+    .limit(20);
+  return {
+    is_admin: true,
+    quota_remaining: family!.familyInviteQuota,
+    quota_total_hint: 100,
+    invites: rows.map((r) => ({
+      code: r.inv.code,
+      created_at: r.inv.createdAt,
+      used_at: r.inv.usedAt,
+      used_by_family_name: r.name ?? null,
+    })),
+  };
+}
+
+export async function createFamilyInvite(user: SessionUser) {
+  const family = await getFamilyOf(user);
+  if (!family?.isAdmin) throw new HttpError(403, "no_family_quota", "本家庭没有邀请新家庭的名额，请联系管理员");
+  const [claimed] = await getDb()
+    .update(families)
+    .set({ familyInviteQuota: sql`${families.familyInviteQuota} - 1` })
+    .where(and(eq(families.id, family.id), sql`${families.familyInviteQuota} > 0`))
+    .returning();
+  if (!claimed) throw new HttpError(403, "no_family_quota", "本家庭没有邀请新家庭的名额，请联系管理员");
+  const code = generateInviteCode();
+  const now = new Date().toISOString();
+  try {
+    await getDb().insert(familyInvites).values({ code, createdByUserId: user.id, createdByFamilyId: family.id, createdAt: now });
+  } catch (err) {
+    // 极小概率撞码：回滚名额并重试一次
+    await getDb().update(families).set({ familyInviteQuota: sql`${families.familyInviteQuota} + 1` }).where(eq(families.id, family.id));
+    if (!/UNIQUE constraint failed/i.test(String(err))) throw err;
+    const retryCode = generateInviteCode();
+    await getDb().insert(familyInvites).values({ code: retryCode, createdByUserId: user.id, createdByFamilyId: family.id, createdAt: now });
+    return { code: retryCode, quota_remaining: claimed.familyInviteQuota };
+  }
+  return { code, quota_remaining: claimed.familyInviteQuota };
 }

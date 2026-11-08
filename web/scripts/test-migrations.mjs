@@ -187,6 +187,13 @@ check(
   familyCols.join(","),
 );
 
+// 0027：新家庭邀请名额（task-105）
+const famCols27 = db.prepare("PRAGMA table_info(families)").all().map((c) => c.name);
+check("families 新增 is_admin / family_invite_quota", famCols27.includes("is_admin") && famCols27.includes("family_invite_quota"), famCols27.join(","));
+const adminRow = db.prepare("SELECT is_admin, family_invite_quota FROM families WHERE id = 'fam_default'").get();
+check("fam_default is_admin=1 / quota=100", adminRow?.is_admin === 1 && adminRow?.family_invite_quota === 100, JSON.stringify(adminRow));
+check("family_invites 表已创建", db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='family_invites'").get()?.name === "family_invites");
+
 // 0026：自定义场景中文开场白（task-104）
 const usCols = db.prepare("PRAGMA table_info(user_scenarios)").all().map((c) => c.name);
 check("user_scenarios 新增 opening_zh", usCols.includes("opening_zh"), usCols.join(","));

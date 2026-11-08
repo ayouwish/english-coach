@@ -21,6 +21,7 @@ export const POST = route(async (req: NextRequest) => {
     password: body.password,
     family_name: body.family_name,
     invite_code: body.invite_code,
+    new_family_code: body.new_family_code,
   });
   await setSessionCookie(result.token, result.expiresAt);
   return jsonOk({ ok: true, user: result.user, token: result.token }, 201);
