@@ -327,3 +327,10 @@ export async function createFamilyInvite(user: SessionUser) {
   }
   return { code, quota_remaining: claimed.familyInviteQuota };
 }
+
+/** task-108：管理员家庭权限（parent + 本家庭 is_admin=1），否则 403。 */
+export async function requireAdminFamily(user: SessionUser): Promise<void> {
+  if (user.role !== "parent") throw new HttpError(403, "forbidden", "仅家长可访问");
+  const family = await getFamilyOf(user);
+  if (!family || family.isAdmin !== 1) throw new HttpError(403, "forbidden", "仅管理员家庭可访问成本看板");
+}

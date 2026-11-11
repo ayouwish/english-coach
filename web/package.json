@@ -39,7 +39,8 @@
     "check:password": "node scripts/check-password.mjs",
     "backfill:opening-zh": "node scripts/backfill-opening-zh.mjs",
     "check:openings": "node scripts/check-openings.mjs",
-    "family:quota": "node scripts/family-quota.mjs"
+    "family:quota": "node scripts/family-quota.mjs",
+    "check:admin-costs": "node scripts/check-admin-costs.mjs"
   },
   "dependencies": {
     "bcryptjs": "^3.0.2",
