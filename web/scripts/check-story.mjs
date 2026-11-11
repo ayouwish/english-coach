@@ -639,7 +639,15 @@ try {
         const offId = await mkStory(`Master Switch Off ${Date.now()}`);
         const offDetail = (await (await fetch(`http://127.0.0.1:${port}/story/${offId}`, { headers: { cookie: cookie2 } })).text()).replace(/<!--[\s\S]*?-->/g, "");
         check("★ 开关关闭：详情页无任何「生成插画」按钮", !offDetail.includes('data-testid="illustration-generate"') && !offDetail.includes('data-testid="illustration-regenerate"') && !offDetail.includes('data-testid="illustration-retry"'));
-        check("★ 开关关闭：详情页显示「插画功能已关闭」+ 去设置", offDetail.includes('data-testid="illustration-disabled"') && /插画功能已关闭/.test(offDetail));
+        // task-107：关闭时整块隐藏（section/标题/说明/占位都不出现）
+        check(
+          "★ 开关关闭：整块插画不渲染（无 detail-illustration / illustration-disabled / 故事插画 / 生成插画）",
+          !offDetail.includes('data-testid="detail-illustration"') &&
+            !offDetail.includes('data-testid="illustration-disabled"') &&
+            !/故事插画/.test(offDetail) &&
+            !/生成插画/.test(offDetail),
+        );
+        check("开关关闭：插画提示词区块也不渲染", !offDetail.includes('data-testid="image-prompt-block"'));
         const offApi = await fetch(`http://127.0.0.1:${port}/api/story/${offId}/illustrate`, {
           method: "POST",
           headers: { "content-type": "application/json", cookie: cookie2 },
@@ -660,7 +668,7 @@ try {
         await patch(true);
         const onId = await mkStory(`Master Switch On ${Date.now()}`);
         const onDetail = (await (await fetch(`http://127.0.0.1:${port}/story/${onId}`, { headers: { cookie: cookie2 } })).text()).replace(/<!--[\s\S]*?-->/g, "");
-        check("★ 开关打开：详情页出现「生成插画」按钮", onDetail.includes('data-testid="illustration-generate"'));
+        check("★ 开关打开：详情页出现「生成插画」按钮（区块回归）", onDetail.includes('data-testid="illustration-generate"') && onDetail.includes('data-testid="detail-illustration"') && /故事插画/.test(onDetail));
         const onApi = await fetch(`http://127.0.0.1:${port}/api/story/${onId}/illustrate`, {
           method: "POST",
           headers: { "content-type": "application/json", cookie: cookie2 },
@@ -668,6 +676,16 @@ try {
         });
         check("★ 开关打开：手动 API 恢复可用（200 或图片服务 503，不再是 403 policy_disabled）", onApi.status !== 403, `status=${onApi.status}`);
         await patch(false);
+
+        // ④ task-107：默认关闭（新建用户/家庭成员 auto_illustrate 默认 0）+ 设置页文案
+        {
+          const dbd = new Database(DB_PATH, { readonly: true });
+          const col = dbd.prepare("PRAGMA table_info(users)").all().find((c) => c.name === "auto_illustrate");
+          dbd.close();
+          check("★ 默认关闭：users.auto_illustrate 默认值 = 0", col?.dflt_value === "0" || col?.dflt_value === 0, JSON.stringify(col));
+          const settingsHtml2 = await (await fetch(`http://127.0.0.1:${port}/settings`, { headers: { cookie: cookie2 } })).text();
+          check("设置页保留唯一开启入口 + 新文案（默认关闭/不会出现画图入口）", settingsHtml2.includes('data-testid="auto-illustrate-toggle"') && /默认关闭/.test(settingsHtml2) && /不会出现画图入口/.test(settingsHtml2));
+        }
 
         // ④ 源码门控：统一 helper + after 跳过
         const materialsSrc = fs.readFileSync(path.join(WEB_ROOT, "src/app/api/materials/route.ts"), "utf8");

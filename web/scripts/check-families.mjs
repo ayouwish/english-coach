@@ -373,6 +373,35 @@ async function main() {
     check("★ 同码再用 → 400", reuseNewFam.status === 400, `status=${reuseNewFam.status}`);
     const regPage = await (await fetch(`${BASE}/register`)).text();
     check("★ /register 默认显示「受邀创建新家庭」且无「创建家庭」", regPage.includes('data-testid="register-mode-newfamily"') && !regPage.includes('data-testid="register-mode-create"'));
+    const aParentHtml = await (await fetch(`${BASE}/parent`, { headers: { cookie: dadLogin } })).text();
+    check("★ /parent 不含字面 **（UI 星号）", !aParentHtml.includes("**"));
+    // 全站 tsx 渲染文本扫描（排除注释）：不应有字面 **
+    {
+      const fsMod = await import("node:fs");
+      const files = [];
+      const walk = (dir) => {
+        for (const e of fsMod.readdirSync(dir, { withFileTypes: true })) {
+          const full = path.join(dir, e.name);
+          if (e.isDirectory()) walk(full);
+          else if (e.name.endsWith(".tsx")) files.push(full);
+        }
+      };
+      walk(path.join(WEB_ROOT, "src"));
+      const bad = [];
+      for (const f of files) {
+        const src = fsMod.readFileSync(f, "utf8");
+        let inBlock = false;
+        for (const [i, line] of src.split("\n").entries()) {
+          const st = line.trim();
+          if (inBlock) { if (st.includes("*/")) inBlock = false; continue; }
+          if (st.startsWith("/*") || st.startsWith("/**")) { if (!st.includes("*/")) inBlock = true; continue; }
+          const code = line.split("//")[0].replace(/\/\*.*?\*\//g, "");
+          if (code.includes("**")) bad.push(`${f}:${i + 1}`);
+        }
+      }
+      check("全站 tsx 渲染文本无字面 **（注释除外）", bad.length === 0, bad.slice(0, 3).join(" | "));
+    }
+
     const bParent = await (await fetch(`${BASE}/parent`, { headers: { cookie: B.cookie } })).text();
     const nfSrc = (await import("node:fs")).readFileSync(path.join(WEB_ROOT, "src/components/NewFamilyInviteCard.tsx"), "utf8");
     check("非管理员 /parent 含邀请新家庭卡 + 卡片显示名额 0 / 联系管理员", bParent.includes('data-testid="new-family-invite-card"') && /名额 0 · 联系管理员/.test(nfSrc));

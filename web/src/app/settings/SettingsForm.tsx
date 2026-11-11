@@ -178,7 +178,7 @@ export function SettingsForm({
             🖼️ {user.isChild ? "要不要玩画图？" : "卡通插画功能"}
           </label>
           <p className="mt-1 text-xs text-[var(--ec-muted)]">
-            每张约 ¥0.1。关闭后<strong>插画功能完全不可用</strong>（保存不自动画、故事页也没有「生成插画」按钮），
+            每张约 ¥0.1。<strong>默认关闭</strong>；关闭时故事页<strong>不会出现画图入口</strong>（保存不自动画、API 也不可用），
             用来控制成本；打开后可在故事页手动生成，保存故事时也会自动画一张。
             当前图像服务：<strong>{imageConfigured ? "已配置" : "未配置（生成会给出可读提示）"}</strong>
           </p>

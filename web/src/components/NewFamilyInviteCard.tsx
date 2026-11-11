@@ -48,7 +48,7 @@ export function NewFamilyInviteCard() {
     <section className="ec-card" data-testid="new-family-invite-card">
       <h2 className="text-base font-extrabold">🏠 邀请新家庭</h2>
       <p className="mt-1 text-xs text-[var(--ec-muted)]">
-        每个邀请码可让一位朋友创建一个**全新家庭**，消耗本家庭 1 个名额（该码一次性）。共同家长请用上面的「家庭邀请码」。
+        每个邀请码可让一位朋友创建一个<strong>全新家庭</strong>，消耗本家庭 1 个名额（该码一次性）。共同家长请用上面的「家庭邀请码」。
       </p>
       {error ? <p className="mt-2 rounded-xl bg-red-50 p-2 text-xs text-red-700" role="alert" data-testid="new-family-invite-error">{error}</p> : null}
       {data ? (

@@ -171,6 +171,8 @@ export default async function StoryDetailPage({ params }: { params: Promise<{ id
         ) : null}
       </section>
 
+      {/* task-107：插画总开关关闭时，整块不渲染（标题/说明/占位都不出现） */}
+      {illustrationAllowed(user) ? (
       <section className="ec-card" data-testid="detail-illustration">
         <h2 className="text-base font-extrabold">🖼️ 故事插画</h2>
         <p className="mt-1 text-xs text-[var(--ec-muted)]">
@@ -223,6 +225,7 @@ export default async function StoryDetailPage({ params }: { params: Promise<{ id
           </p>
         )}
       </section>
+      ) : null}
 
       <section className="ec-card" data-testid="detail-audio">
         <h2 className="text-base font-extrabold">听我上次读的</h2>
