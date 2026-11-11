@@ -23,6 +23,15 @@ export function RegisterForm({ allowSelfSignup }: { allowSelfSignup: boolean }) 
 
   async function submit(e: React.FormEvent) {
     e.preventDefault();
+    // task-106 rev2：newfamily 模式必须填邀请码（之前该模式不渲染邀请码输入，永远为空）
+    if (mode === "newfamily" && !inviteCode.trim()) {
+      setError("请填写管理员给你的新家庭邀请码");
+      return;
+    }
+    if (mode === "join" && !inviteCode.trim()) {
+      setError("请填写邀请码");
+      return;
+    }
     setBusy(true);
     setError(null);
     try {
@@ -117,6 +126,21 @@ export function RegisterForm({ allowSelfSignup }: { allowSelfSignup: boolean }) 
       ) : null}
 
       <form onSubmit={submit} className="mt-3 flex flex-col gap-3" data-testid="register-form" data-mode={mode}>
+        {/* task-106 rev2：「受邀创建新家庭」= 邀请码 + 家庭名称（两个都要）；加入家庭只要邀请码 */}
+        {mode !== "create" ? (
+          <label className="text-sm font-semibold">
+            {mode === "newfamily" ? "新家庭邀请码" : "邀请码"}
+            <input
+              value={inviteCode}
+              onChange={(e) => setInviteCode(e.target.value.toUpperCase())}
+              required
+              maxLength={12}
+              placeholder={mode === "newfamily" ? "管理员提供的新家庭邀请码" : "8 位邀请码（一次性）"}
+              data-testid="register-invite-code"
+              className="mt-1 w-full rounded-lg border border-[#d9dcf0] px-3 py-2 text-base font-normal tracking-widest"
+            />
+          </label>
+        ) : null}
         {mode !== "join" ? (
           <label className="text-sm font-semibold">
             家庭名称
@@ -130,20 +154,7 @@ export function RegisterForm({ allowSelfSignup }: { allowSelfSignup: boolean }) 
               className="mt-1 w-full rounded-lg border border-[#d9dcf0] px-3 py-2 text-base font-normal"
             />
           </label>
-        ) : (
-          <label className="text-sm font-semibold">
-            邀请码
-            <input
-              value={inviteCode}
-              onChange={(e) => setInviteCode(e.target.value.toUpperCase())}
-              required
-              maxLength={12}
-              placeholder="8 位邀请码（一次性）"
-              data-testid="register-invite-code"
-              className="mt-1 w-full rounded-lg border border-[#d9dcf0] px-3 py-2 text-base font-normal tracking-widest"
-            />
-          </label>
-        )}
+        ) : null}
         <label className="text-sm font-semibold">
           你的昵称
           <input

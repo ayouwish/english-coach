@@ -64,6 +64,7 @@ const cleanup = () => {
     `famC3${TS}@test.local`.toLowerCase(),
     `famC4${TS}@test.local`.toLowerCase(),
     `famB2${TS}@test.local`.toLowerCase(),
+    `newfam${TS}@test.local`.toLowerCase(),
   ];
   const ids = db.prepare(`SELECT id FROM users WHERE email IN (${emails.map(() => "?").join(",")})`).all(...emails).map((r) => r.id);
   if (ids.length > 0) {
@@ -340,6 +341,36 @@ async function main() {
     dbq2.close();
     const parentPage = await (await fetch(`${BASE}/parent`, { headers: { cookie: dadLogin } })).text();
     check("★ /parent 含「邀请新家庭」卡片与剩余名额（SSR）", parentPage.includes('data-testid="new-family-invite-card"') && /邀请新家庭/.test(parentPage));
+    // task-106 rev2：newfamily 表单必须同时有「邀请码 + 家庭名称」；E2E 走 new_family_code
+    const regSrc = (await import("node:fs")).readFileSync(path.join(WEB_ROOT, "src/app/register/RegisterForm.tsx"), "utf8");
+    check(
+      "★ newfamily 表单含邀请码+家庭名称两个输入（源码）",
+      /mode !== "create" \? \([\s\S]{0,600}?data-testid="register-invite-code"/.test(regSrc) &&
+        /mode !== "join" \? \([\s\S]{0,600}?data-testid="register-family-name"/.test(regSrc) &&
+        /new_family_code: inviteCode/.test(regSrc) &&
+        /mode === "newfamily" && !inviteCode\.trim\(\)/.test(regSrc),
+    );
+    const invNew = await mkInvite();
+    const newFam = await register({
+      family_name: `新家庭测试${TS}`,
+      display_name: "新家庭爸",
+      email: `newfam${TS}@test.local`.toLowerCase(),
+      password: "Passw0rd!",
+      new_family_code: invNew.body?.code,
+    });
+    check(
+      "★ newfamily 模式（new_family_code+family_name）→ 201 全新家庭",
+      newFam.status === 201 && Boolean(newFam.body?.user?.familyId) && newFam.body?.user?.familyId !== "fam_default",
+      `${newFam.status}/${newFam.body?.user?.familyId}`,
+    );
+    const reuseNewFam = await register({
+      family_name: `新家庭测试复用${TS}`,
+      display_name: "复用",
+      email: `newfamreuse${TS}@test.local`.toLowerCase(),
+      password: "Passw0rd!",
+      new_family_code: invNew.body?.code,
+    });
+    check("★ 同码再用 → 400", reuseNewFam.status === 400, `status=${reuseNewFam.status}`);
     const regPage = await (await fetch(`${BASE}/register`)).text();
     check("★ /register 默认显示「受邀创建新家庭」且无「创建家庭」", regPage.includes('data-testid="register-mode-newfamily"') && !regPage.includes('data-testid="register-mode-create"'));
     const bParent = await (await fetch(`${BASE}/parent`, { headers: { cookie: B.cookie } })).text();
