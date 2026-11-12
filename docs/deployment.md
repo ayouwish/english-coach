@@ -1590,3 +1590,15 @@ docker compose -f deploy/docker-compose.yml cp caddy:/data/caddy/pki/authorities
 - 调整名额：`docker compose exec -T web node scripts/family-quota.mjs --family fam_default --add 10`
 - 管理员家庭 = `fam_default`（迁移 0027 自动设置 `is_admin=1`）
 - 成本：家长面板「💰 本月成本」按家庭统计 LLM/图片/TTS/ASR；单价见 `deploy/.env.example` 的 `COST_*`
+
+---
+
+## 后台管理员（独立于家庭账号）
+
+- 在 `deploy/.env` 设置 `ADMIN_PASSWORD=<强密码>` 后重启 web
+- 访问 `https://<域名>/admin/login` 输入密码进入后台（与任何家庭账号无关）
+- 后台功能：
+  - **成本看板**：跨家庭 LLM tokens（输入/输出/合计）、图片张数、TTS/ASR、金额；按家庭/按天/最近明细
+  - **邀请码管理**：生成「新家庭邀请码」（默认 100 个名额，可自助调整）、查看已用/未用
+- 家庭账号（含家长）**无法**进入后台；`/parent` 无后台入口
+- 未设置 `ADMIN_PASSWORD` 时后台不可用（不影响家庭使用）
