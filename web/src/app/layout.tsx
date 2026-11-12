@@ -1,7 +1,8 @@
 import type { Metadata } from "next";
 import "./globals.css";
 import { getCurrentUser, type SessionUser } from "@/lib/auth";
-import { NavBar } from "@/components/NavBar";
+import { SiteChrome } from "@/components/SiteChrome";
+import { headers } from "next/headers";
 
 export const dynamic = "force-dynamic";
 
@@ -21,14 +22,18 @@ async function safeUser(): Promise<SessionUser | null> {
 
 export default async function RootLayout({ children }: { children: React.ReactNode }) {
   const user = await safeUser();
+  // middleware 注入 pathname：/admin* 使用独立布局（不套家庭导航），SSR 也正确
+  const hdrs = await headers();
+  const pathname = hdrs.get("x-pathname") ?? "";
+  const isAdminChrome = pathname === "/admin" || pathname.startsWith("/admin/");
   return (
     <html lang="zh-CN">
       <body data-child={user?.isChild ? "true" : "false"}>
-        <NavBar user={user} />
-        <main className="mx-auto w-full max-w-5xl px-4 pb-16 pt-6">{children}</main>
-        <footer className="mx-auto max-w-5xl px-4 pb-10 text-xs text-[var(--ec-muted)]">
-          English Coach v0.1 · web ↔ voice(FastAPI) 契约 v1 · 音频文件不入库
-        </footer>
+        {isAdminChrome ? (
+          <main className="mx-auto w-full max-w-6xl px-4 pb-16 pt-6">{children}</main>
+        ) : (
+          <SiteChrome user={user}>{children}</SiteChrome>
+        )}
       </body>
     </html>
   );

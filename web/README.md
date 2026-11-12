@@ -390,6 +390,8 @@ GET/PATCH /api/settings       偏好设置（儿童不能自行改时长/自由�
    | `DATA_DIR` / `DB_PATH` / `MIGRATIONS_DIR` | `./data` 等 | 数据与迁移位置 |
    | `AUTO_SEED=0` | 开启 | 关闭"users 为空时自动灌种子" |
    | `BOOTSTRAP_DAD_EMAIL/PASSWORD`、`BOOTSTRAP_MOM_*`、`BOOTSTRAP_CHILD_*` | 见上表 | 覆盖初始账号（只在首次创建时生效） |
+   | `ADMIN_PASSWORD` | — | 独立后台（`/admin`）管理密码；未设置则后台不可用 |
+   | `ADMIN_COOKIE_SECRET` | 由密码派生 | 管理员 cookie 签名密钥（可选） |
    | `ALLOW_SELF_SIGNUP=0` | 开启 | 关闭"创建新家庭"的自助注册（`/register` 只保留邀请码加入；`/api/health.features.self_signup` 反映） |
    | `COOKIE_SECURE=1` | `0` | HTTPS 部署时设置；内网 http 保持 0，否则登录会失败 |
    | `SESSION_SECRET` | — | **不需要**：session 是 32 字节随机串存 `sessions` 表，不做签名 |

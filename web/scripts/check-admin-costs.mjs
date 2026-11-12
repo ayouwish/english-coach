@@ -1,84 +1,106 @@
 #!/usr/bin/env node
-/** task-108 验收：管理员成本看板（权限/跨家庭聚合/月份/容错/页面）。 */
+/** task-110 验收：独立后台管理员认证 + 独立成本看板（/admin）。 */
 import path from "node:path";
+import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import Database from "better-sqlite3";
 
 const WEB_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-const BASE = (process.env.BASE_URL ?? "http://127.0.0.1:3040").replace(/\/$/, "");
+const PORT = 3053;
+const BASE = `http://127.0.0.1:${PORT}`;
 const DB_PATH = process.env.DB_PATH ?? path.join(WEB_ROOT, "data/app.db");
+const ADMIN_PASSWORD = "AdminTest123!";
 const TS = Date.now();
-const TEST_FAMILY = `fam_test108_${TS}`;
 let failed = 0;
 const check = (n, c, d = "") => { if (!c) failed += 1; console.log(`${c ? "✅" : "❌"} ${n}${d ? ` — ${d}` : ""}`); };
-async function login(email, password) {
-  const r = await fetch(`${BASE}/api/auth/login`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ email, password }) });
-  const raw = typeof r.headers.getSetCookie === "function" ? r.headers.getSetCookie() : [];
-  return (raw.find((c) => c.startsWith("ec_session=")) ?? raw[0] ?? "").split(";")[0];
-}
 const cleanup = () => {
   const db = new Database(DB_PATH);
-  db.prepare("DELETE FROM cost_events WHERE id LIKE 'ce_test108_%'").run();
-  db.prepare("DELETE FROM users WHERE email LIKE ?").run(`acost${TS}%@test.local`);
-  db.prepare("DELETE FROM families WHERE id = ? OR name LIKE ?").run(TEST_FAMILY, `成本看板测试${TS}%`);
-  db.prepare("DELETE FROM family_invites WHERE created_at >= ?").run(new Date(TS - 60000).toISOString());
-  db.prepare("UPDATE families SET family_invite_quota = 100 WHERE id = 'fam_default'").run();
+  db.prepare("DELETE FROM cost_events WHERE id LIKE 'ce_test110_%'").run();
   db.close();
 };
+async function familyLogin() {
+  const r = await fetch(`${BASE}/api/auth/login`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ email: "dad@example.com", password: "Dad12345!" }) });
+  const raw = typeof r.headers.getSetCookie === "function" ? r.headers.getSetCookie() : [];
+  return { cookie: (raw.find((c) => c.startsWith("ec_session=")) ?? raw[0] ?? "").split(";")[0] };
+}
+async function adminLogin(password) {
+  const r = await fetch(`${BASE}/api/admin/login`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ password }) });
+  const raw = typeof r.headers.getSetCookie === "function" ? r.headers.getSetCookie() : [];
+  return { status: r.status, body: await r.json().catch(() => null), cookie: (raw.find((c) => c.startsWith("ec_admin=")) ?? "").split(";")[0], raw };
+}
 async function main() {
-  console.log(`=== 管理员成本看板验收 @ ${BASE} ===`);
-  const dad = await login("dad@example.com", "Dad12345!");
-  const girl = await login("girl@example.com", "Girl12345!");
-  check("登录 dad/girl", Boolean(dad) && Boolean(girl));
-
-  // 造两个家庭的数据：fam_default + 测试家庭
+  console.log(`=== 独立后台管理员验收 @ ${BASE} ===`);
   const db = new Database(DB_PATH);
-  db.prepare("INSERT OR IGNORE INTO families (id, name, invite_code, invite_used, created_by, created_at) VALUES (?, ?, ?, 0, NULL, ?)").run(TEST_FAMILY, `成本看板测试${TS}`, `T108${String(TS).slice(-4)}`, new Date().toISOString());
-  const now = new Date().toISOString();
   const ins = db.prepare("INSERT INTO cost_events (id, family_id, user_id, kind, provider, model, units_json, cost_micro_cny, meta_json, created_at) VALUES (?,?,?,?,?,?,?,?,?,?)");
-  ins.run(`ce_test108_a_${TS}`, "fam_default", "u-dad", "llm", "deepseek", "deepseek-chat", JSON.stringify({ llm_prompt_tokens: 1_000_000, llm_completion_tokens: 0, llm_total_tokens: 1_000_000 }), 2_000_000, "{}", now);
-  ins.run(`ce_test108_b_${TS}`, TEST_FAMILY, null, "image", "zhipu", "glm-image", JSON.stringify({ images: 2 }), 200_000, "{}", now);
-  ins.run(`ce_test108_c_${TS}`, TEST_FAMILY, null, "tts", "azure", null, "not-json", 50_000, "{}", now);
-  ins.run(`ce_test108_old_${TS}`, TEST_FAMILY, null, "asr", "azure", null, JSON.stringify({ asr_seconds: 30 }), 100_000, "{}", "2025-03-15T00:00:00.000Z");
+  const now = new Date().toISOString();
+  ins.run(`ce_test110_a_${TS}`, "fam_default", "u-dad", "llm", "deepseek", "deepseek-chat", JSON.stringify({ llm_prompt_tokens: 1000, llm_completion_tokens: 100, llm_total_tokens: 1100 }), 1_200_000, "{}", now);
+  ins.run(`ce_test110_b_${TS}`, "fam_default", "u-mom", "image", "zhipu", "glm-image", JSON.stringify({ images: 1 }), 100_000, "{}", now);
+  ins.run(`ce_test110_c_${TS}`, "fam_default", null, "tts", "azure", null, "not-json", 10_000, "{}", now);
+  ins.run(`ce_test110_old_${TS}`, "fam_default", null, "asr", "azure", null, JSON.stringify({ asr_seconds: 30 }), 50_000, "{}", "2025-05-10T00:00:00.000Z");
   db.close();
 
-  const res = await fetch(`${BASE}/api/admin/costs`, { headers: { cookie: dad } });
+  // ① 正确登录（先于限速测试；成功会清空失败计数）
+  const ok = await adminLogin(ADMIN_PASSWORD);
+  check("★ 正确管理密码 → 200 + HttpOnly ec_admin cookie", ok.status === 200 && Boolean(ok.cookie) && ok.raw.some((c) => c.includes("ec_admin=") && /HttpOnly/i.test(c)), `status=${ok.status}`);
+  const adminCookie = ok.cookie;
+  // ② 限速：连续 5 次失败后第 6 次 429
+  const wrong = await adminLogin("wrong-password");
+  check("★ 管理密码错误 → 401", wrong.status === 401, `status=${wrong.status}`);
+  for (let i = 0; i < 4; i++) await adminLogin("wrong-password");
+  const limited = await adminLogin("wrong-password");
+  check("连续 6 次失败 → 429（5 次/60s 限速）", limited.status === 429, `status=${limited.status}`);
+  check("管理员 cookie 不是家庭 session", adminCookie.startsWith("ec_admin="));
+
+  // ② API：管理员 200 + 聚合 + 容错；家庭账号 401
+  const res = await fetch(`${BASE}/api/admin/costs`, { headers: { cookie: adminCookie } });
   const data = await res.json().catch(() => null);
   check("★ 管理员 GET /api/admin/costs → 200", res.status === 200, `status=${res.status}`);
-  check("★ totals：成本/LLM tokens/图片/调用", (data?.totals?.cost_cny ?? 0) >= 2.25 && (data?.totals?.llm_total_tokens ?? 0) >= 1_000_000 && (data?.totals?.image_count ?? 0) >= 2 && (data?.totals?.calls ?? 0) >= 3, JSON.stringify(data?.totals));
-  check("★ by_family 含两个家庭且按成本降序", (data?.by_family ?? []).length >= 2 && data.by_family[0].cost_cny >= data.by_family[1].cost_cny && data.by_family.some((f) => f.family_id === TEST_FAMILY), (data?.by_family ?? []).map((f) => `${f.family_name}:${f.cost_cny}`).join(","));
-  check("by_family 含成员数/图片/TTS/ASR", (data?.by_family ?? []).every((f) => typeof f.members === "number" && typeof f.image_count === "number" && typeof f.tts_chars === "number" && typeof f.asr_seconds === "number"));
-  check("★ 非法 units_json 容错（tts 事件仍计数，不崩）", (data?.recent_events ?? []).some((e) => e.kind === "tts") || (data?.totals?.calls ?? 0) >= 3);
-  check("by_day + recent_events 含家庭名", (data?.by_day ?? []).length >= 1 && (data?.recent_events ?? []).some((e) => String(e.family_name ?? "").includes("成本看板测试")));
-  check("recent_events ≤50", (data?.recent_events ?? []).length <= 50);
+  check("★ totals 含成本/LLM tokens/图片/调用（手算）", (data?.totals?.cost_cny ?? 0) >= 1.31 && (data?.totals?.llm_total_tokens ?? 0) >= 1100 && (data?.totals?.image_count ?? 0) >= 1 && (data?.totals?.calls ?? 0) >= 3, JSON.stringify(data?.totals));
+  check("非法 units_json 容错（事件仍计数）", (data?.recent_events ?? []).some((e) => e.kind === "tts") || (data?.totals?.calls ?? 0) >= 3);
+  check("by_family/by_day/recent 结构", Array.isArray(data?.by_family) && data.by_family.length >= 1 && Array.isArray(data?.by_day) && Array.isArray(data?.recent_events));
+  const old = await (await fetch(`${BASE}/api/admin/costs?month=2025-05`, { headers: { cookie: adminCookie } })).json();
+  check("★ 月份筛选：2025-05 只有旧事件", old?.month === "2025-05" && (old?.totals?.asr_seconds ?? 0) >= 30 && (old?.totals?.calls ?? 0) === 1, JSON.stringify(old?.totals));
+  const family = await familyLogin();
+  check("★ 家庭账号访问 /api/admin/* → 401", (await fetch(`${BASE}/api/admin/costs`, { headers: { cookie: family.cookie } })).status === 401);
+  check("无 cookie 访问 /api/admin/* → 401", (await fetch(`${BASE}/api/admin/costs`)).status === 401);
 
-  // 月份筛选
-  const old = await (await fetch(`${BASE}/api/admin/costs?month=2025-03`, { headers: { cookie: dad } })).json();
-  check("★ ?month=2025-03 → 仅旧事件（ASR 30 秒）", old?.month === "2025-03" && (old?.totals?.asr_seconds ?? 0) >= 30 && (old?.totals?.calls ?? 0) >= 1, JSON.stringify(old?.totals));
-  const empty = await (await fetch(`${BASE}/api/admin/costs?month=2024-01`, { headers: { cookie: dad } })).json();
-  check("空月份 → totals 全 0", (empty?.totals?.calls ?? 0) === 0);
-
-  // 权限
-  check("★ 儿童 → 403", (await fetch(`${BASE}/api/admin/costs`, { headers: { cookie: girl } })).status === 403);
-  const inv = await (await fetch(`${BASE}/api/family/family-invites`, { method: "POST", headers: { cookie: dad } })).json();
-  const reg = await fetch(`${BASE}/api/auth/register`, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({ family_name: `成本看板测试${TS}B`, display_name: "看板B", email: `acost${TS}b@test.local`, password: "Passw0rd!", new_family_code: inv?.code }),
-  });
-  const raw = typeof reg.headers.getSetCookie === "function" ? reg.headers.getSetCookie() : [];
-  const bCookie = (raw.find((c) => c.startsWith("ec_session=")) ?? raw[0] ?? "").split(";")[0];
-  check("★ 非管理员家庭家长 → 403", reg.status === 201 && (await fetch(`${BASE}/api/admin/costs`, { headers: { cookie: bCookie } })).status === 403, `reg=${reg.status}`);
-
-  // 页面 SSR + /parent 入口
-  const page = await (await fetch(`${BASE}/admin/costs`, { headers: { cookie: dad } })).text();
-  check("★ /admin/costs SSR：总计/家庭表/按天/最近事件", page.includes('data-testid="admin-costs-page"') && page.includes('data-testid="admin-costs-total"') && page.includes('data-testid="admin-costs-family-row"') && page.includes('data-testid="admin-costs-days"') && page.includes('data-testid="admin-costs-recent"'));
-  check("页面含测试家庭名", /成本看板测试/.test(page));
-  const childPage = await fetch(`${BASE}/admin/costs`, { headers: { cookie: girl } });
-  check("儿童访问页面 → 403", childPage.status === 403, `status=${childPage.status}`);
-  const parentHtml = await (await fetch(`${BASE}/parent`, { headers: { cookie: dad } })).text();
-  const bParentHtml = await (await fetch(`${BASE}/parent`, { headers: { cookie: bCookie } })).text();
-  check("★ /parent 管理员有 admin-costs-link；非管理员没有", parentHtml.includes('data-testid="admin-costs-link"') && !bParentHtml.includes('data-testid="admin-costs-link"'));
+  // ③ 页面：未登录跳登录、管理员 sSSR、/admin/costs 重定向、独立导航
+  const noAuth = await fetch(`${BASE}/admin`, { redirect: "manual" });
+  check("★ /admin 未登录 → 跳 /admin/login", noAuth.status >= 300 && noAuth.status < 400 && (noAuth.headers.get("location") ?? "").includes("/admin/login"), `status=${noAuth.status} loc=${noAuth.headers.get("location")}`);
+  const loginPage = await (await fetch(`${BASE}/admin/login`)).text();
+  check("★ 独立登录页含 admin-login-form", loginPage.includes('data-testid="admin-login-form"') && !loginPage.includes("ec-btn-primary\">登录"));
+  const adminPage = await fetch(`${BASE}/admin`, { headers: { cookie: adminCookie } });
+  const html = await adminPage.text();
+  check("★ /admin 管理员 SSR：总计/家庭表/按天/最近事件", adminPage.status === 200 && html.includes('data-testid="admin-page"') && html.includes('data-testid="admin-total"') && html.includes('data-testid="admin-family-row"') && html.includes('data-testid="admin-days"') && html.includes('data-testid="admin-recent"'));
+  check(
+    "★ /admin 独立布局：无家庭导航（无 <nav / 家庭功能链接）",
+    !/<nav[\s>]/.test(html) && !/href="\/(practice|flow|story|blindtest|parent)"/.test(html),
+  );
+  const costsRedirect = await fetch(`${BASE}/admin/costs`, { redirect: "manual", headers: { cookie: adminCookie } });
+  check("★ /admin/costs → 重定向 /admin", costsRedirect.status >= 300 && costsRedirect.status < 400 && (costsRedirect.headers.get("location") ?? "").endsWith("/admin"), `status=${costsRedirect.status} loc=${costsRedirect.headers.get("location")}`);
+  const parentHtml = await (await fetch(`${BASE}/parent`, { headers: { cookie: family.cookie } })).text();
+  check("★ /parent 已移除管理员看板入口", !parentHtml.includes('data-testid="admin-costs-link"') && !/管理员成本看板/.test(parentHtml));
+  const logout = await fetch(`${BASE}/api/admin/logout`, { method: "POST", headers: { cookie: adminCookie } });
+  check("POST /api/admin/logout → 200", logout.status === 200);
 }
-try { await main(); } catch (e) { failed += 1; console.error("守卫崩溃：", e); }
+try {
+  const child = spawn("pnpm", ["exec", "next", "start", "-p", String(PORT)], {
+    detached: true,
+    cwd: WEB_ROOT,
+    env: { ...process.env, ADMIN_PASSWORD, VOICE_SERVICE_URL: process.env.VOICE_SERVICE_URL ?? "http://127.0.0.1:8100" },
+    stdio: "ignore",
+  });
+  try {
+    let up = false;
+    for (let i = 0; i < 60; i++) {
+      await new Promise((r) => setTimeout(r, 500));
+      try { if ((await fetch(`${BASE}/api/health`, { signal: AbortSignal.timeout(1500) })).ok) { up = true; break; } } catch { /* retry */ }
+    }
+    check("独立后台实例启动成功（3053, ADMIN_PASSWORD 已设置）", up);
+    if (up) await main();
+    else failed += 1;
+  } finally {
+    try { process.kill(-child.pid, "SIGTERM"); } catch { /* ignore */ }
+  }
+} catch (e) { failed += 1; console.error("守卫崩溃：", e); }
 finally { cleanup(); console.log(failed === 0 ? "\n结论：全部通过 ✅" : "\n结论：存在失败 ❌"); process.exit(failed > 0 ? 1 : 0); }

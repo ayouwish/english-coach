@@ -6,8 +6,6 @@ import { FamilyInviteCard } from "@/components/FamilyInviteCard";
 import { CostSummaryCard } from "@/components/CostSummaryCard";
 import { NewFamilyInviteCard } from "@/components/NewFamilyInviteCard";
 import { buildParentSummary, type MemberSummary } from "@/lib/parent-summary";
-import { getFamilyOf } from "@/lib/families";
-import Link from "next/link";
 import { getCapabilities } from "@/lib/voice";
 
 export const dynamic = "force-dynamic";
@@ -24,7 +22,6 @@ export default async function ParentPage() {
   if (user.role !== "parent") forbidden();
 
   const summary = await buildParentSummary(user.familyId);
-  const family = await getFamilyOf(user);
   const caps = await getCapabilities();
 
   return (
@@ -53,14 +50,6 @@ export default async function ParentPage() {
         </div>
       </section>
 
-      {/* task-108：管理员成本看板入口（仅管理员家庭） */}
-      {family?.isAdmin === 1 ? (
-        <p>
-          <Link href="/admin/costs" className="ec-btn ec-btn-ghost text-xs" data-testid="admin-costs-link">
-            📊 管理员成本看板
-          </Link>
-        </p>
-      ) : null}
 
       {/* task-101：家庭成本台账（仅本家庭） */}
       <CostSummaryCard familyId={user.familyId} />
