@@ -92,13 +92,18 @@ async function main() {
 
   // ── A/B 两个家庭（task-105：管理员家庭生成「新家庭邀请码」→ 凭码创建新家庭）──
   const dadLogin = await login("dad@example.com", "Dad12345!");
+  // task-111：新家庭码由后台管理员生成（家庭端 API 已移除）→ 守卫直接插入 DB 模拟已生成的码
+  let inviteSeq = 0;
   const mkInvite = async () => {
-    const r = await fetch(`${BASE}/api/family/family-invites`, { method: "POST", headers: { cookie: dadLogin } });
-    return { status: r.status, body: await r.json().catch(() => null) };
+    const code = `T${String(TS).slice(-6)}${"ABCDEFGH"[inviteSeq++ % 8]}`;
+    const d = new Database(DB_PATH);
+    d.prepare("INSERT OR REPLACE INTO family_invites (code, created_by_user_id, created_by_family_id, created_at) VALUES (?, 'admin', 'admin', ?)").run(code, new Date().toISOString());
+    d.close();
+    return { status: 201, body: { code, quota_remaining: -1 } };
   };
   const invA = await mkInvite();
   const invB = await mkInvite();
-  check("★ 管理员家庭生成新家庭邀请码（quota 递减）", invA.status === 201 && Boolean(invA.body?.code) && invA.body?.quota_remaining < 100, JSON.stringify({ a: invA.body?.code, q: invA.body?.quota_remaining, b: invB.status }));
+  check("测试新家庭邀请码已准备（后台管理员生成）", Boolean(invA.body?.code) && Boolean(invB.body?.code), JSON.stringify({ a: invA.body?.code, b: invB.body?.code }));
   const A = await register({ family_name: `隔离测试A${TS}`, display_name: "A家长", email: `famA${TS}@test.local`.toLowerCase(), password: "Passw0rd!", new_family_code: invA.body?.code });
   const B = await register({ family_name: `隔离测试B${TS}`, display_name: "B家长", email: `famB${TS}@test.local`.toLowerCase(), password: "Passw0rd!", new_family_code: invB.body?.code });
   check("★ 注册两个家庭成功（均 parent）", A.status === 201 && B.status === 201 && A.cookie && B.cookie, `${A.status}/${B.status}`);
@@ -318,29 +323,19 @@ async function main() {
     }
   }
 
-  // ── task-105：新家庭邀请名额制 ─────────────────────────────────────────────
+  // ── task-105/111：注册规则（新家庭码来自后台；家庭端不再有生成入口）──────
   {
-    const list = await (await fetch(`${BASE}/api/family/family-invites`, { headers: { cookie: dadLogin } })).json();
-    check("★ 管理员 GET 邀请码列表（quota_remaining<100、含已生成码）", list?.is_admin === true && typeof list?.quota_remaining === "number" && list.quota_remaining < 100 && (list.invites ?? []).some((i) => i.code === invA.body?.code));
-    const nonAdmin = await fetch(`${BASE}/api/family/family-invites`, { method: "POST", headers: { cookie: B.cookie } });
-    const nonAdminBody = await nonAdmin.json().catch(() => null);
-    check("★ 非管理员家庭生成 → 403 no_family_quota", nonAdmin.status === 403 && nonAdminBody?.error?.code === "no_family_quota", `${nonAdmin.status}/${nonAdminBody?.error?.code}`);
     const noCode = await register({ family_name: `无码家庭${TS}`, display_name: "无码", email: `nocode${TS}@test.local`.toLowerCase(), password: "Passw0rd!" });
     check("★ 默认关闭开放注册：无码创建家庭 → 403 signup_disabled", noCode.status === 403 && noCode.body?.error?.code === "signup_disabled", `${noCode.status}/${noCode.body?.error?.code}`);
     const reuse = await register({ family_name: `复用家庭${TS}`, display_name: "复用", email: `reuse${TS}@test.local`.toLowerCase(), password: "Passw0rd!", new_family_code: invA.body?.code });
     check("★ 新家庭邀请码一次性：同码再用 → 400", reuse.status === 400, `status=${reuse.status}`);
-    // 管理员名额设为 0 → 403（运维脚本）
-    const dbq = new Database(DB_PATH);
-    dbq.prepare("UPDATE families SET family_invite_quota = 0 WHERE id = 'fam_default'").run();
-    dbq.close();
-    const noQuota = await fetch(`${BASE}/api/family/family-invites`, { method: "POST", headers: { cookie: dadLogin } });
-    const noQuotaBody = await noQuota.json().catch(() => null);
-    check("★ 名额=0 时管理员生成 → 403 no_family_quota", noQuota.status === 403 && noQuotaBody?.error?.code === "no_family_quota", `${noQuota.status}`);
-    const dbq2 = new Database(DB_PATH);
-    dbq2.prepare("UPDATE families SET family_invite_quota = 100 WHERE id = 'fam_default'").run();
-    dbq2.close();
     const parentPage = await (await fetch(`${BASE}/parent`, { headers: { cookie: dadLogin } })).text();
-    check("★ /parent 含「邀请新家庭」卡片与剩余名额（SSR）", parentPage.includes('data-testid="new-family-invite-card"') && /邀请新家庭/.test(parentPage));
+    check("★ /parent 已移除「邀请新家庭」卡（task-111）", !parentPage.includes('data-testid="new-family-invite-card"') && !/邀请新家庭/.test(parentPage));
+    const oldFamilyApi = await fetch(`${BASE}/api/family/family-invites`, { headers: { cookie: dadLogin } });
+    check("★ 家庭端 /api/family/family-invites 已移除（404/405）", oldFamilyApi.status === 404 || oldFamilyApi.status === 405, `status=${oldFamilyApi.status}`);
+    // 后台管理员接口：家庭账号/cookie 访问 → 401/503（取决于是否配置 ADMIN_PASSWORD）
+    const adminApiAsFamily = await fetch(`${BASE}/api/admin/family-invites`, { headers: { cookie: dadLogin } });
+    check("★ 家庭账号访问后台邀请码 API → 非 200（401/503）", adminApiAsFamily.status === 401 || adminApiAsFamily.status === 503, `status=${adminApiAsFamily.status}`);
     // task-106 rev2：newfamily 表单必须同时有「邀请码 + 家庭名称」；E2E 走 new_family_code
     const regSrc = (await import("node:fs")).readFileSync(path.join(WEB_ROOT, "src/app/register/RegisterForm.tsx"), "utf8");
     check(
@@ -403,8 +398,7 @@ async function main() {
     }
 
     const bParent = await (await fetch(`${BASE}/parent`, { headers: { cookie: B.cookie } })).text();
-    const nfSrc = (await import("node:fs")).readFileSync(path.join(WEB_ROOT, "src/components/NewFamilyInviteCard.tsx"), "utf8");
-    check("非管理员 /parent 含邀请新家庭卡 + 卡片显示名额 0 / 联系管理员", bParent.includes('data-testid="new-family-invite-card"') && /名额 0 · 联系管理员/.test(nfSrc));
+    check("非管理员 /parent 同样没有邀请新家庭卡（全家庭端移除）", !bParent.includes('data-testid="new-family-invite-card"') && !/邀请新家庭/.test(bParent));
   }
 
   if (gmid) {

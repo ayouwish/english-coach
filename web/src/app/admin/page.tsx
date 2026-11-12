@@ -4,6 +4,7 @@ import { ensureBootstrap } from "@/db";
 import { adminEnabled, hasAdminSession } from "@/lib/admin-auth";
 import { buildAdminCosts } from "@/lib/admin-costs";
 import { AdminLogoutButton } from "./AdminLogoutButton";
+import { AdminFamilyInvites } from "./AdminFamilyInvites";
 
 export const dynamic = "force-dynamic";
 
@@ -57,6 +58,8 @@ export default async function AdminPage({ searchParams }: { searchParams: Promis
           <div className="rounded-xl bg-[#fff3d6] p-2">调用：<strong data-testid="admin-calls">{data.totals.calls}</strong> 次</div>
         </div>
       </section>
+
+      <AdminFamilyInvites />
 
       <section className="ec-card">
         <h2 className="text-base font-extrabold">按家庭</h2>

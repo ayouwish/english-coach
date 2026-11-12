@@ -359,6 +359,13 @@ export const storyRetells = sqliteTable(
   (t) => [index("idx_story_retells_material").on(t.materialId, t.createdAt)],
 );
 
+/** 系统设置（task-111）：后台管理员维护的全局键值（如新家庭邀请名额）。 */
+export const systemSettings = sqliteTable("system_settings", {
+  key: text("key").primaryKey(),
+  value: text("value").notNull(),
+  updatedAt: text("updated_at").notNull(),
+});
+
 /** 新家庭邀请码（task-105）：生成时已扣管理员家庭名额。 */
 export const familyInvites = sqliteTable(
   "family_invites",

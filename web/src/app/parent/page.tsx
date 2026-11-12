@@ -4,7 +4,6 @@ import { getCurrentUser } from "@/lib/auth";
 import { FamilyMembersPanel } from "@/components/FamilyMembersPanel";
 import { FamilyInviteCard } from "@/components/FamilyInviteCard";
 import { CostSummaryCard } from "@/components/CostSummaryCard";
-import { NewFamilyInviteCard } from "@/components/NewFamilyInviteCard";
 import { buildParentSummary, type MemberSummary } from "@/lib/parent-summary";
 import { getCapabilities } from "@/lib/voice";
 
@@ -54,8 +53,6 @@ export default async function ParentPage() {
       {/* task-101：家庭成本台账（仅本家庭） */}
       <CostSummaryCard familyId={user.familyId} />
 
-      {/* task-105：邀请一个新家庭（管理员家庭名额制） */}
-      <NewFamilyInviteCard />
 
       {/* task-97：家庭邀请码（家长分享给另一位家长） */}
       <FamilyInviteCard />

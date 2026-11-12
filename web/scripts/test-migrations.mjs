@@ -187,6 +187,11 @@ check(
   familyCols.join(","),
 );
 
+// 0028：system_settings + 邀请名额（task-111）
+check("system_settings 表已创建", db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='system_settings'").get()?.name === "system_settings");
+const quotaRow = db.prepare("SELECT value FROM system_settings WHERE key='family_invite_quota_remaining'").get();
+check("初始 family_invite_quota_remaining=100", quotaRow?.value === "100", JSON.stringify(quotaRow));
+
 // 0027：新家庭邀请名额（task-105）
 const famCols27 = db.prepare("PRAGMA table_info(families)").all().map((c) => c.name);
 check("families 新增 is_admin / family_invite_quota", famCols27.includes("is_admin") && famCols27.includes("family_invite_quota"), famCols27.join(","));

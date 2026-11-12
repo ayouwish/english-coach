@@ -16,6 +16,10 @@ const check = (n, c, d = "") => { if (!c) failed += 1; console.log(`${c ? "✅" 
 const cleanup = () => {
   const db = new Database(DB_PATH);
   db.prepare("DELETE FROM cost_events WHERE id LIKE 'ce_test110_%'").run();
+  db.prepare("DELETE FROM users WHERE email LIKE ?").run(`admininv${TS}%@test.local`);
+  db.prepare("DELETE FROM families WHERE name LIKE ?").run(`后台邀请测试${TS}%`);
+  db.prepare("DELETE FROM family_invites WHERE created_at >= ?").run(new Date(TS - 60000).toISOString());
+  db.prepare("INSERT INTO system_settings (key, value, updated_at) VALUES ('family_invite_quota_remaining','100',?) ON CONFLICT(key) DO UPDATE SET value='100'").run(new Date().toISOString());
   db.close();
 };
 async function familyLogin() {
@@ -80,6 +84,43 @@ async function main() {
   check("★ /admin/costs → 重定向 /admin", costsRedirect.status >= 300 && costsRedirect.status < 400 && (costsRedirect.headers.get("location") ?? "").endsWith("/admin"), `status=${costsRedirect.status} loc=${costsRedirect.headers.get("location")}`);
   const parentHtml = await (await fetch(`${BASE}/parent`, { headers: { cookie: family.cookie } })).text();
   check("★ /parent 已移除管理员看板入口", !parentHtml.includes('data-testid="admin-costs-link"') && !/管理员成本看板/.test(parentHtml));
+  // ── task-111：后台新家庭邀请码管理 ────────────────────────────────────────
+  {
+    const inv0 = await fetch(`${BASE}/api/admin/family-invites`, { headers: { cookie: adminCookie } });
+    const inv0Body = await inv0.json().catch(() => null);
+    check("★ 后台 GET 新家庭邀请码：200 + 剩余名额 100", inv0.status === 200 && inv0Body?.quota_remaining === 100, `status=${inv0.status} quota=${inv0Body?.quota_remaining}`);
+    const gen = await fetch(`${BASE}/api/admin/family-invites`, { method: "POST", headers: { cookie: adminCookie } });
+    const genBody = await gen.json().catch(() => null);
+    check("★ 后台生成新家庭码 → 201 且名额 99", gen.status === 201 && Boolean(genBody?.code) && genBody?.quota_remaining === 99, `${gen.status}/${genBody?.quota_remaining}`);
+    const inv1 = await (await fetch(`${BASE}/api/admin/family-invites`, { headers: { cookie: adminCookie } })).json();
+    check("列表含新码（未使用）且名额 99", (inv1?.invites ?? []).some((i) => i.code === genBody?.code && !i.used_at) && inv1?.quota_remaining === 99);
+    const reg = await fetch(`${BASE}/api/auth/register`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ family_name: `后台邀请测试${TS}`, display_name: "受邀家长", email: `admininv${TS}@test.local`, password: "Passw0rd!", new_family_code: genBody?.code }),
+    });
+    check("★ 用后台生成的码注册 → 201 新家庭", reg.status === 201, `status=${reg.status}`);
+    const reuse = await fetch(`${BASE}/api/auth/register`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ family_name: `后台邀请测试${TS}复用`, display_name: "复用", email: `admininvr${TS}@test.local`, password: "Passw0rd!", new_family_code: genBody?.code }),
+    });
+    check("★ 同码再用 → 400", reuse.status === 400, `status=${reuse.status}`);
+    const set5 = await (await fetch(`${BASE}/api/admin/family-invites/quota`, { method: "POST", headers: { "content-type": "application/json", cookie: adminCookie }, body: JSON.stringify({ set: 5 }) })).json();
+    check("★ 调整名额 set=5", set5?.quota_remaining === 5, JSON.stringify(set5));
+    const add2 = await (await fetch(`${BASE}/api/admin/family-invites/quota`, { method: "POST", headers: { "content-type": "application/json", cookie: adminCookie }, body: JSON.stringify({ add: 2 }) })).json();
+    check("★ 调整名额 add=2 → 7", add2?.quota_remaining === 7, JSON.stringify(add2));
+    // 名额=0 时生成 → 403
+    await fetch(`${BASE}/api/admin/family-invites/quota`, { method: "POST", headers: { "content-type": "application/json", cookie: adminCookie }, body: JSON.stringify({ set: 0 }) });
+    const noQuota = await fetch(`${BASE}/api/admin/family-invites`, { method: "POST", headers: { cookie: adminCookie } });
+    const noQuotaBody = await noQuota.json().catch(() => null);
+    check("★ 名额=0 生成 → 403 no_family_quota", noQuota.status === 403 && noQuotaBody?.error?.code === "no_family_quota", `${noQuota.status}/${noQuotaBody?.error?.code}`);
+    const family = await familyLogin();
+    check("★ 家庭账号访问后台邀请码 API → 401", (await fetch(`${BASE}/api/admin/family-invites`, { headers: { cookie: family.cookie } })).status === 401);
+    const page2 = await (await fetch(`${BASE}/admin`, { headers: { cookie: adminCookie } })).text();
+    check("★ /admin 含邀请码管理区块（SSR）", page2.includes('data-testid="admin-invites"') && /邀请码管理/.test(page2));
+  }
+
   const logout = await fetch(`${BASE}/api/admin/logout`, { method: "POST", headers: { cookie: adminCookie } });
   check("POST /api/admin/logout → 200", logout.status === 200);
 }
