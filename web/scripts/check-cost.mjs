@@ -82,10 +82,21 @@ async function main() {
   }
   db.close();
 
-  // 跨家庭：新家庭没有 dad 的成本（task-105：需管理员生成新家庭邀请码）
-  const dadCookie = dad;
-  const invRes = await fetch(`${BASE}/api/family/family-invites`, { method: "POST", headers: { cookie: dadCookie } });
-  const inv = await invRes.json().catch(() => null);
+    // 跨家庭：新家庭没有 dad 的成本（task-111：邀请码改由后台管理员生成）
+    const adminPw = process.env.ADMIN_PASSWORD;
+    check("需要 ADMIN_PASSWORD（管理员生成新家庭邀请码）", Boolean(adminPw), "请以 ADMIN_PASSWORD=... 运行本守卫");
+    let inv = null;
+    if (adminPw) {
+      const loginRes = await fetch(`${BASE}/api/admin/login`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ password: adminPw }),
+      });
+      const rawAdmin = typeof loginRes.headers.getSetCookie === "function" ? loginRes.headers.getSetCookie() : [];
+      const adminCookie = (rawAdmin.find((c) => c.startsWith("ec_admin=")) ?? "").split(";")[0];
+      const invRes = await fetch(`${BASE}/api/admin/family-invites`, { method: "POST", headers: { cookie: adminCookie } });
+      inv = await invRes.json().catch(() => null);
+    }
   const reg = await fetch(`${BASE}/api/auth/register`, {
     method: "POST",
     headers: { "content-type": "application/json" },
