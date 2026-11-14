@@ -24,7 +24,8 @@ export default async function AdminPage({ searchParams }: { searchParams: Promis
   const data = await buildAdminCosts(sp.month ?? null);
   const yuan = (n: number) => `¥${n.toFixed(2)}`;
   const [y, mo] = data.month.split("-").map(Number);
-  const prev = new Date(Date.UTC(mo === 1 ? y - 1 : y, mo === 1 ? 11 : mo - 1, 1));
+  // 注意：JS 月份 0-based；mo 是 1-based 当前月 → 上个月索引 = mo - 2
+  const prev = new Date(Date.UTC(mo === 1 ? y - 1 : y, mo === 1 ? 11 : mo - 2, 1));
   const nextD = new Date(Date.UTC(mo === 12 ? y + 1 : y, mo === 12 ? 0 : mo, 1));
   const fmt = (d: Date) => d.toISOString().slice(0, 7);
 

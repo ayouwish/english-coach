@@ -80,6 +80,17 @@ async function main() {
     "★ /admin 独立布局：无家庭导航（无 <nav / 家庭功能链接）",
     !/<nav[\s>]/.test(html) && !/href="\/(practice|flow|story|blindtest|parent)"/.test(html),
   );
+  // ★ 月份切换链接正确（2026-12 → 上个月 2026-11；下个月 2027-01）
+  const decHtml = await (await fetch(`${BASE}/admin?month=2026-12`, { headers: { cookie: adminCookie } })).text();
+  check("★ 月份切换：2026-12 上个月=2026-11、下个月=2027-01",
+    decHtml.includes("/admin?month=2026-11") && decHtml.includes("/admin?month=2027-01"),
+    decHtml.match(/month=\d{4}-\d{2}/g)?.slice(0, 4)?.join(",") ?? "none");
+  // ★ 跨年：2026-01 → 上个月 2025-12、下个月 2026-02
+  const janHtml = await (await fetch(`${BASE}/admin?month=2026-01`, { headers: { cookie: adminCookie } })).text();
+  check("★ 月份切换：2026-01 上个月=2025-12、下个月=2026-02",
+    janHtml.includes("/admin?month=2025-12") && janHtml.includes("/admin?month=2026-02"),
+    janHtml.match(/month=\d{4}-\d{2}/g)?.slice(0, 4)?.join(",") ?? "none");
+
   const costsRedirect = await fetch(`${BASE}/admin/costs`, { redirect: "manual", headers: { cookie: adminCookie } });
   check("★ /admin/costs → 重定向 /admin", costsRedirect.status >= 300 && costsRedirect.status < 400 && (costsRedirect.headers.get("location") ?? "").endsWith("/admin"), `status=${costsRedirect.status} loc=${costsRedirect.headers.get("location")}`);
   const parentHtml = await (await fetch(`${BASE}/parent`, { headers: { cookie: family.cookie } })).text();
