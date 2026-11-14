@@ -1602,3 +1602,19 @@ docker compose -f deploy/docker-compose.yml cp caddy:/data/caddy/pki/authorities
   - **邀请码管理**：生成「新家庭邀请码」（默认 100 个名额，可自助调整）、查看已用/未用
 - 家庭账号（含家长）**无法**进入后台；`/parent` 无后台入口
 - 未设置 `ADMIN_PASSWORD` 时后台不可用（不影响家庭使用）
+
+---
+
+## ASR provider 选择（含 DeepSeek）
+
+| 配置 | 行为 |
+|---|---|
+| `ASR_PROVIDER=auto`（默认） | 中文 → 智谱 GLM-ASR；英文 → Azure（行为不变） |
+| `ASR_PROVIDER=deepseek` | 中英都走 DeepSeek ASR（自动识别语种） |
+| `ASR_PROVIDER=azure` / `zhipu` | 强制单一 provider |
+
+- `DEEPSEEK_ASR_API_KEY`（缺省回退 `LLM_API_KEY`）；`DEEPSEEK_ASR_CHUNK_SECONDS=110`；`DEEPSEEK_ASR_MAX_BYTES=8388608`
+- `ASR_FALLBACK=1`（默认）：DeepSeek 失败（429/503/504/超时）→ 自动回退智谱/Azure，响应带 `fallback_from`；**不会静默降级 mock**
+- 成本：`COST_ASR_DEEPSEEK_CNY_PER_HOUR=0.78`（限时 0.39 可配）；其它 ASR 仍 `COST_ASR_CNY_PER_MINUTE`
+- **限制**：DeepSeek ASR 无音素/置信度/时间戳 → **发音评测（PA）仍必须 Azure**；跟读评分不受影响
+- A/B 报告见 `docs/asr-ab-report.md`（合成语音：英文 CER 0.007/755ms；中文 0.015/810ms）
