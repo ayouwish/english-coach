@@ -37,7 +37,7 @@ async function login(email, password) {
 
 const cleanup = () => {
   const db = new Database(DB_PATH);
-  db.prepare("DELETE FROM cost_events WHERE id LIKE 'ce_test%' OR (user_id = 'u-dad' AND created_at >= ?)").run(new Date(TS - 1000).toISOString());
+  db.prepare("DELETE FROM cost_events WHERE id LIKE 'ce_test%' OR (user_id = 'u-dad' AND created_at >= ?) OR (kind = 'asr' AND created_at >= ?)").run(new Date(TS - 1000).toISOString(), new Date(TS - 1000).toISOString());
   const emails = [`costfam${TS}@test.local`];
   const ids = db.prepare(`SELECT id FROM users WHERE email IN (${emails.map(() => "?").join(",")})`).all(...emails).map((r) => r.id);
   for (const id of ids) db.prepare("DELETE FROM users WHERE id = ?").run(id);
@@ -46,6 +46,19 @@ const cleanup = () => {
   db.prepare("UPDATE families SET family_invite_quota = 100 WHERE id = 'fam_default'").run();
   db.close();
 };
+
+
+/** 1 秒 16kHz 单声道 16-bit 静音 WAV（task-113 ASR 真实链路用） */
+function makeWav(seconds = 1) {
+  const sampleRate = 16000;
+  const n = sampleRate * seconds;
+  const buf = Buffer.alloc(44 + n * 2);
+  buf.write("RIFF", 0); buf.writeUInt32LE(36 + n * 2, 4); buf.write("WAVE", 8);
+  buf.write("fmt ", 12); buf.writeUInt32LE(16, 16); buf.writeUInt16LE(1, 20); buf.writeUInt16LE(1, 22);
+  buf.writeUInt32LE(sampleRate, 24); buf.writeUInt32LE(sampleRate * 2, 28); buf.writeUInt16LE(2, 32); buf.writeUInt16LE(16, 34);
+  buf.write("data", 36); buf.writeUInt32LE(n * 2, 40);
+  return buf;
+}
 
 async function main() {
   console.log(`=== 家庭成本台账验收 @ ${BASE} ===`);
@@ -129,6 +142,56 @@ async function main() {
   // 家长面板 SSR：成本卡
   const parentPage = await (await fetch(`${BASE}/parent`, { headers: { cookie: dad } })).text();
   check("★ /parent 含「💰 本月成本」卡（SSR）", parentPage.includes('data-testid="cost-card"') && /本月成本/.test(parentPage) && parentPage.includes('data-testid="cost-total"'));
+
+  // ── task-113：DeepSeek ASR provider + 按 provider 计价 ────────────────────
+  {
+    const price = Number(process.env.COST_ASR_DEEPSEEK_CNY_PER_HOUR ?? 0.78);
+    const sumPrices = await (await fetch(`${BASE}/api/cost/summary`, { headers: { cookie: dad } })).json();
+    check("★ summary prices 含 asr_deepseek_per_hour（默认 0.78）", Number(sumPrices?.prices?.asr_deepseek_per_hour) === price, JSON.stringify(sumPrices?.prices));
+    const illegal = await fetch(`${BASE}/api/asr?provider=not-a-provider`, { method: "POST", headers: { cookie: dad }, body: (() => { const f = new FormData(); f.append("audio", new Blob([makeWav(1)], { type: "audio/wav" }), "a.wav"); return f; })() });
+    check("★ 非法 provider → 400", illegal.status === 400, `status=${illegal.status}`);
+
+    const speechAudio = async () => {
+      try {
+        const r = await fetch(`${BASE}/api/tts?${new URLSearchParams({ text: "Hello there my friend", rate: "normal", format: "wav" })}`, { headers: { cookie: dad } });
+        if (r.status === 200) return Buffer.from(await r.arrayBuffer());
+      } catch { /* fall through */ }
+      return makeWav(2);
+    };
+    const asrAudio = await speechAudio();
+    const callAsr = async (provider) => {
+      const f = new FormData();
+      f.append("audio", new Blob([asrAudio], { type: "audio/wav" }), "a.wav");
+      const r = await fetch(`${BASE}/api/asr?provider=${provider}`, { method: "POST", headers: { cookie: dad }, body: f });
+      return { status: r.status, body: await r.json().catch(() => null) };
+    };
+    const start = new Date(Date.now() - 2000).toISOString();
+    const ds = await callAsr("deepseek");
+    if (ds.status === 200) {
+      check("★ /api/asr?provider=deepseek → 200", true, `provider=${ds.body?.provider} fallback_from=${ds.body?.fallback_from ?? "—"} warnings=${JSON.stringify(ds.body?.warnings ?? [])}`);
+      const db2 = new Database(DB_PATH, { readonly: true });
+      const row = db2.prepare("SELECT * FROM cost_events WHERE kind = 'asr' AND created_at >= ? ORDER BY created_at DESC LIMIT 1").get(start);
+      db2.close();
+      const units = row ? (() => { try { return JSON.parse(row.units_json ?? "{}"); } catch { return {}; } })() : {};
+      const expected = Math.round((Number(units.asr_seconds ?? 0) / 3600) * price * 1_000_000);
+      check("★ ASR 记账：kind=asr、provider=deepseek、金额=秒数×0.78/3600（±2 微元）", Boolean(row) && row.provider === "deepseek" && Math.abs(Number(row.cost_micro_cny) - expected) <= 2, row ? JSON.stringify({ provider: row.provider, micro: row.cost_micro_cny, expected, units }) : "无记录");
+    } else {
+      console.log(`⏭ DeepSeek ASR 不可用（status=${ds.status}, ${ds.body?.error?.code ?? "—"}），跳过深度断言（不伪造数据）`);
+      check("DeepSeek ASR 不可用时给出可读错误（不伪造数据）", Boolean(ds.body?.error?.message));
+    }
+    const az = await callAsr("azure");
+    if (az.status === 200) {
+      const db3 = new Database(DB_PATH, { readonly: true });
+      const row = db3.prepare("SELECT * FROM cost_events WHERE kind = 'asr' AND created_at >= ? ORDER BY created_at DESC LIMIT 1").get(start);
+      db3.close();
+      const units = row ? (() => { try { return JSON.parse(row.units_json ?? "{}"); } catch { return {}; } })() : {};
+      const expected = Math.round((Number(units.asr_seconds ?? 0) / 60) * Number(process.env.COST_ASR_CNY_PER_MINUTE ?? 0.006) * 1_000_000);
+      check("★ azure 回归：ASR 200 且按分钟计价", Boolean(row) && Math.abs(Number(row.cost_micro_cny) - expected) <= 2, row ? JSON.stringify({ provider: row.provider, micro: row.cost_micro_cny, expected }) : "无记录");
+    } else {
+      console.log(`⏭ azure ASR 不可用，跳过计价断言（status=${az.status}）`);
+      check("azure ASR 不可用时返回可读错误", Boolean(az.body?.error?.message));
+    }
+  }
 }
 
 try {

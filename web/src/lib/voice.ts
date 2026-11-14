@@ -56,7 +56,11 @@ async function recordVoiceCost(
     const { logCost } = await import("./cost");
     await logCost(ctx, {
       kind,
-      provider: (result.provider as string | null | undefined) ?? null,
+      provider:
+        (result.provider as string | null | undefined) ??
+        (kind === "asr" && typeof ctx.meta?.requested_provider === "string"
+          ? (ctx.meta.requested_provider as string)
+          : null),
       model: (result.model as string | null | undefined) ?? null,
       units: result.usage ?? null,
       scene,

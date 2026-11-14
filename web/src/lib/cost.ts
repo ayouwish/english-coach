@@ -28,6 +28,7 @@ export function priceTable() {
     imagePerImage: envPrice("COST_IMAGE_CNY_PER_IMAGE", 0.1),
     ttsPer1KChars: envPrice("COST_TTS_CNY_PER_1K_CHARS", 0.02),
     asrPerMinute: envPrice("COST_ASR_CNY_PER_MINUTE", 0.006),
+    asrDeepseekPerHour: envPrice("COST_ASR_DEEPSEEK_CNY_PER_HOUR", 0.78),
   };
 }
 
@@ -65,6 +66,7 @@ function micro(cny: number): number {
 export function computeCostMicro(
   kind: CostKind,
   units: unknown,
+  provider?: string | null,
 ): number | null {
   const p = priceTable();
   if (!units || typeof units !== "object") return null;
@@ -91,6 +93,9 @@ export function computeCostMicro(
     const u = units as AsrUnits;
     const seconds = Number(u.asr_seconds ?? 0);
     if (!Number.isFinite(seconds) || seconds <= 0) return null;
+    if (String(provider ?? "").toLowerCase() === "deepseek") {
+      return micro((seconds / 3600) * p.asrDeepseekPerHour);
+    }
     return micro((seconds / 60) * p.asrPerMinute);
   }
   return null;
@@ -109,7 +114,7 @@ export async function logCost(
   },
 ): Promise<void> {
   try {
-    const cost = computeCostMicro(entry.kind, entry.units);
+    const cost = computeCostMicro(entry.kind, entry.units, entry.provider ?? null);
     if (cost === null) return; // usage 缺失 → 不记账
     await getDb().insert(costEvents).values({
       id: `ce_${randomUUID().replace(/-/g, "").slice(0, 20)}`,
@@ -135,7 +140,7 @@ export interface CostSummary {
   by_kind: Record<string, number>;
   by_user: { user_id: string | null; display_name: string | null; cny: number; count: number }[];
   by_day: { date: string; cny: number }[];
-  prices: ReturnType<typeof priceTable>;
+  prices: ReturnType<typeof priceTable> & { asr_deepseek_per_hour: number };
 }
 
 /** 月度汇总（仅本家庭；micro → 元 2 位） */
@@ -184,6 +189,6 @@ export async function costSummary(familyId: string, month?: string | null): Prom
       .map(([userId, v]) => ({ user_id: userId, display_name: userId ? names.get(userId) ?? null : null, cny: toCny(v.micro), count: v.count }))
       .sort((a, b) => b.cny - a.cny),
     by_day: [...byDayMicro.entries()].map(([date, micro]) => ({ date, cny: toCny(micro) })).sort((a, b) => a.date.localeCompare(b.date)),
-    prices: priceTable(),
+    prices: { ...priceTable(), asr_deepseek_per_hour: priceTable().asrDeepseekPerHour },
   };
 }

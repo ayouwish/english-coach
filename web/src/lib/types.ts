@@ -164,6 +164,10 @@ export interface AsrResult {
   duration_ms: number;
   words: { word: string; start_ms: number; end_ms: number; probability: number }[];
   provider: string;
+  /** task-113：provider 回退来源 / warnings / usage */
+  fallback_from?: string | null;
+  warnings?: string[];
+  usage?: { asr_seconds?: number } | null;
 }
 
 export type CorrectionType = "grammar" | "vocabulary" | "politeness" | "pronunciation" | "none";
