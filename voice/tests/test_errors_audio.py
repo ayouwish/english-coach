@@ -40,6 +40,7 @@ def test_error_codes_are_frozen_set():
         "content_unsafe",  # 契约 v2.0（task-52）：文生图内容被安全过滤
         "policy_disabled",  # 契约 v2.2（task-63）：照片生成形象按隐私策略关闭
         "not_found",  # 契约 v2.4（task-86）：单词不在 cmudict 词典里（404）
+        "rate_limited",  # 契约 v2.5（task-112）：DeepSeek ASR 429 限流
     }
 
 

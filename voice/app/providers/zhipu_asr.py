@@ -53,61 +53,14 @@ def _api_key(settings: Settings) -> str:
     return key
 
 
-def _frame_rms(samples: np.ndarray, frame: int, hop: int) -> np.ndarray:
-    if samples.size == 0:
-        return np.zeros(0, dtype=np.float32)
-    count = 1 + max(0, (samples.size - frame) // hop)
-    out = np.empty(count, dtype=np.float32)
-    for index in range(count):
-        window = samples[index * hop : index * hop + frame]
-        out[index] = float(np.sqrt(np.mean(window * window))) if window.size else 0.0
-    return out
+from ..audio_split import split_audio_by_silence as _generic_split_audio_by_silence
 
 
-def split_audio_by_silence(
-    samples: np.ndarray, sample_rate: int, max_seconds: float = 25.0
-) -> list[np.ndarray]:
-    """按静音切段：每段 ≤ max_seconds（不超过 GLM-ASR 的 30s 限制）。
-
-    - 从目标切点向前找连续 ≥150ms 的静音（RMS 低）作为切点，切在静音中间；
-    - 找不到静音就硬切（保证不超限，不静默截断）；
-    - 音频本身 ≤ max_seconds 时原样返回一段。
-    """
-    if samples.size == 0:
-        return [samples]
-    max_seconds = max(2.0, min(float(max_seconds), ZHIPU_ASR_MAX_CHUNK_SECONDS))
-    max_samples = int(max_seconds * sample_rate)
-    if samples.size <= max_samples:
-        return [samples]
-
-    hop = max(1, int(sample_rate * 0.01))  # 10ms
-    frame = max(hop, int(sample_rate * 0.02))  # 20ms
-    rms = _frame_rms(samples, frame, hop)
-    threshold = max(0.008, float(np.percentile(rms, 25)) * 0.5)
-    quiet_frames = 15  # 150ms
-
-    def _is_quiet(index: int) -> bool:
-        lo = max(0, index - quiet_frames // 2)
-        hi = min(len(rms), index + quiet_frames // 2 + 1)
-        return hi > lo and bool(np.all(rms[lo:hi] < threshold * 1.5))
-
-    segments: list[np.ndarray] = []
-    start = 0
-    min_segment = int(4.0 * sample_rate)
-    while samples.size - start > max_samples:
-        target = start + max_samples
-        search_floor = max(start + min_segment, target - int(8.0 * sample_rate))
-        cut = target
-        for pos in range(target, search_floor, -hop):
-            index = pos // hop
-            if index < len(rms) and _is_quiet(index):
-                cut = int((index + 0.5) * hop)
-                break
-        cut = max(start + int(2.0 * sample_rate), min(cut, start + max_samples))
-        segments.append(samples[start:cut])
-        start = cut
-    segments.append(samples[start:])
-    return segments
+def split_audio_by_silence(samples, sample_rate: int, max_seconds: float = 25.0):
+    """智谱 ASR 的切段（硬上限 30s，文档限制）。通用实现见 app/audio_split.py。"""
+    return _generic_split_audio_by_silence(
+        samples, sample_rate, max_seconds, absolute_max_seconds=ZHIPU_ASR_MAX_CHUNK_SECONDS
+    )
 
 
 def _join_texts(texts: list[str]) -> str:

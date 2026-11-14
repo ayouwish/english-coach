@@ -215,6 +215,7 @@ async def health() -> dict:
     # task-75：ASR provider 矩阵（静态实现 + 当前生效，auto 下中英文可能不同）
     capabilities["asr_providers"] = list(ASR_PROVIDERS)
     capabilities["asr_effective"] = asr_effective(providers, settings)
+    capabilities["asr_fallback"] = bool(settings.asr_fallback)  # task-112
     capabilities["chat_done_turn_index"] = done_turn_index(settings)  # 0 = 不限轮数（默认）
     capabilities["features"] = list(CONTRACT_FEATURES)
     # task-44：如实上报"配置的 provider 是否真的可用"（线上曾谎报 azure、实际回落到 mock）
@@ -291,6 +292,9 @@ async def asr(
     if fallback:
         warnings.append("provider_fallback")
         payload["provider_meta"] = {"fallback_errors": errors[-3:]}
+        primary_name = getattr(chain[0], "name", "") if chain else ""
+        if primary_name == "deepseek":
+            payload["fallback_from"] = "deepseek"  # task-112：DeepSeek 失败后回退（不静默）
     if warnings:
         payload["warnings"] = warnings
     return payload

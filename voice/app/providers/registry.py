@@ -29,6 +29,10 @@ def _make(kind: str, name: str):
             from .zhipu_asr import ZhipuASR  # task-75：智谱 GLM-ASR（中文长音频）
 
             return ZhipuASR()
+        if name == "deepseek":
+            from .deepseek_asr import DeepSeekASR  # task-112：DeepSeek ASR
+
+            return DeepSeekASR()
     elif kind == "pa":
         if name == "mock":
             return MockPA()
@@ -157,8 +161,8 @@ __all__ = [
 # --------------------------------------------------------------------------------------
 # ASR provider 选择（task-75）
 # --------------------------------------------------------------------------------------
-ASR_PROVIDERS = ["azure", "zhipu"]
-ASR_PREFERENCES = ("auto", "azure", "zhipu")
+ASR_PROVIDERS = ["azure", "zhipu", "deepseek"]
+ASR_PREFERENCES = ("auto", "azure", "zhipu", "deepseek")
 
 
 def _zhipu_asr_ready(settings: Settings | None = None) -> tuple[bool, str | None]:
@@ -167,6 +171,15 @@ def _zhipu_asr_ready(settings: Settings | None = None) -> tuple[bool, str | None
 
         return zhipu_asr_available(settings)
     except Exception as exc:  # pragma: no cover - 依赖异常按不可用处理
+        return False, f"{type(exc).__name__}: {exc}"
+
+
+def _deepseek_asr_ready(settings: Settings | None = None) -> tuple[bool, str | None]:
+    try:
+        from .deepseek_asr import deepseek_asr_available
+
+        return deepseek_asr_available(settings)
+    except Exception as exc:  # pragma: no cover
         return False, f"{type(exc).__name__}: {exc}"
 
 
@@ -183,6 +196,21 @@ def asr_chain_for(
     if selected in ("azure", "zhipu"):
         instance = _make("asr", selected)
         return [instance, MockASR()]
+    if selected == "deepseek":
+        chain = [_make("asr", "deepseek")]
+        if bool(getattr(settings, "asr_fallback", True)):
+            # task-112：DeepSeek 失败（429/503/504/超时）→ 回退中文 zhipu / 英文 azure
+            names = {"deepseek"}
+            if (language or "").lower().startswith("zh") and _zhipu_asr_ready(settings)[0]:
+                chain.append(_make("asr", "zhipu"))
+                names.add("zhipu")
+            for provider in providers.asr_chain:
+                name = getattr(provider, "name", "")
+                if name not in names:
+                    chain.append(provider)
+                    names.add(name)
+        chain.append(MockASR())
+        return chain
     if (language or "").lower().startswith("zh") and _zhipu_asr_ready(settings)[0]:
         zhipu = _make("asr", "zhipu")
         chain = [zhipu]
@@ -197,8 +225,11 @@ def asr_timeout_for(chain: list, settings: Settings | None = None) -> float:
 
     settings = settings or get_settings()
     base = float(TIMEOUTS.get("asr", 25.0))
-    if any(getattr(provider, "name", "") == "zhipu" for provider in chain):
+    names = {getattr(provider, "name", "") for provider in chain}
+    if "zhipu" in names:
         return max(base, float(settings.zhipu_asr_timeout_s))
+    if "deepseek" in names:
+        return max(base, float(settings.deepseek_asr_timeout_s))
     return base
 
 
@@ -206,6 +237,9 @@ def asr_effective(providers: ProviderSet, settings: Settings | None = None) -> d
     """health 用：当前生效的 ASR provider（auto 模式下中文/英文可能不同）。"""
     settings = settings or get_settings()
     mode_primary = getattr(providers.asr_chain[0], "name", "mock") if providers.asr_chain else "mock"
+    selected = (getattr(settings, "asr_preference", "auto") or "auto").strip().lower()
+    if selected in ("azure", "zhipu", "deepseek"):
+        return {"zh": selected, "en": selected}  # 显式指定时中英文一致
     zh = "zhipu" if _zhipu_asr_ready(settings)[0] else mode_primary
     return {"zh": zh, "en": mode_primary}
 
@@ -230,6 +264,10 @@ def provider_availability(kind: str, name: str) -> tuple[bool, str | None]:
             from .zhipu_asr import zhipu_asr_available
 
             return zhipu_asr_available()
+        if name == "deepseek" and kind == "asr":
+            from .deepseek_asr import deepseek_asr_available
+
+            return deepseek_asr_available()
         if name == "local":
             import importlib.util
 

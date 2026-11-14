@@ -1,4 +1,4 @@
-# 接口契约 v1.20（FROZEN · 2026-11-06）
+# 接口契约 v1.21（FROZEN · 2026-11-14）
 
 > **本文件是唯一事实来源（single source of truth）。**
 
@@ -27,6 +27,7 @@
 | 2026-11-03 | v1.18 | 新增 §24 `GET /v1/words/ipa`（cmudict → IPA 音标）、错误码 `not_found`、`capabilities.word_ipa` | 新增端点，向后兼容 |
 | 2026-11-03 | v1.19 | `/v1/story/rewrite` 新增 `tense`（auto/past/present，默认 auto，叙事默认过去时）；响应回显 `tense`；新增 warning `tense_mismatch` | 向后兼容（不传按 auto）|
 | 2026-11-06 | v1.20 | 各 AI 端点新增可选 `usage`（LLM tokens / 图片张数 / TTS 字符 / ASR 秒），供 web 按家庭记账；`capabilities.usage_reporting` | 向后兼容（纯新增）|
+| 2026-11-14 | v1.21 | ASR 新增 `deepseek` provider（`ASR_PROVIDER` 枚举、`provider` 覆盖）；新增回退字段 `fallback_from` / warning `provider_fallback`、错误码 `rate_limited`、health `asr_fallback` | 向后兼容 |
 > `web/` 与 `voice/` 两个模块并行开发，任何一方需要改本契约，必须先通知 Lead 并同步改本文件。
 > 冻结范围：路径、请求字段名、响应字段名、枚举值、错误码。
 > 未冻结范围：各 provider 内部实现、日志格式、额外字段（允许追加 `provider_meta` 等可选字段，不得删除或改名已有字段）。
@@ -1138,3 +1139,43 @@ image/illustrate {"images":1,"size":"1280x1280","model":"glm-image"}
 tts             x-usage-tts-chars: 11（"hello world"，缓存命中也有）
 asr             {"asr_seconds":1.0}
 ```
+
+---
+
+## 26. v1.21 新增：ASR 接入 DeepSeek（可选 provider + 回退）
+
+DeepSeek 新 ASR：`POST https://api.deepseek.com/v1/tools/asr`（multipart `file`）：
+只收 **16-bit PCM WAV / Ogg Opus**、≤8 MiB、≤120 秒、不支持流式；返回 `{request_id,text,duration_ms}`
+（**无时间戳/置信度/音素**）；自动识别语种；¥0.78/小时（限时 0.39）。
+
+### 26.1 配置
+| env | 默认 | 说明 |
+|---|---|---|
+| `ASR_PROVIDER` | `auto` | 枚举新增 **`deepseek`**；`auto` 行为不变（中文 zhipu / 英文 azure） |
+| `DEEPSEEK_ASR_API_KEY` | 回退 `LLM_API_KEY` | DeepSeek key |
+| `DEEPSEEK_ASR_BASE_URL` | `https://api.deepseek.com` | |
+| `DEEPSEEK_ASR_TIMEOUT_S` | `60` | |
+| `DEEPSEEK_ASR_CHUNK_SECONDS` | `110` | ≤120s 上限留余量；静音切分 |
+| `DEEPSEEK_ASR_MAX_BYTES` | `8388608` | 每片 ≤8 MiB |
+| `ASR_FALLBACK` | `1` | DeepSeek 失败（429/503/504/超时）→ 回退 zhipu/azure；`0` 则直接报错 |
+
+### 26.2 行为
+- 音频统一转 **16 kHz / 16-bit / mono WAV**；长音频按静音切段（≤110s、≤8MiB）逐片识别后拼接
+- 回退成功时 `/v1/asr` 响应新增**可选** `fallback_from:"deepseek"` + `warnings:["provider_fallback"]`；
+  **不静默降级 mock**
+- 新错误码 **`rate_limited`（429）**（DeepSeek 并发超限）；`provider_error`(400) 类不回退
+- `usage.asr_seconds` 沿用 §25（按实际音频时长）
+- `/v1/health`：`capabilities.asr_providers` 含 `deepseek`、新增 `capabilities.asr_fallback`；
+  `ASR_PROVIDER=deepseek` 时 `asr_effective={zh:"deepseek",en:"deepseek"}`
+
+### 26.3 实测（A/B，`docs/asr-ab-report.md`）
+Azure TTS 合成 20 英 + 20 中已知文本：
+| 语言 | Provider | CER 均值 | 平均延迟 | 估算成本 |
+|---|---|---|---|---|
+| en | **deepseek** | **0.007** | **755 ms** | ¥0.0089 |
+| en | azure | 0.043 | 1892 ms | ¥0.0821 |
+| zh | **deepseek** | **0.015** | **810 ms** | ¥0.0100 |
+| zh | zhipu | 未执行（本机无 key，不伪造） | — | — |
+
+> 局限：合成语音≠儿童真实语音；未覆盖口音/噪声/数字标点/中英混说/长音频。
+> **不能替代发音评测（PA）**：DeepSeek ASR 无音素分/置信度/时间戳，跟读评分仍用 Azure PronunciationAssessment。

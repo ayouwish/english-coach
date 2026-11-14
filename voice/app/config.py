@@ -193,7 +193,7 @@ def _llm_configured(base_url: str | None, api_key: str | None) -> bool:
 def _asr_preference() -> str:
     """ASR_PROVIDER=azure|zhipu|auto（默认 auto）；非法值回 auto，绝不静默选别的 provider。"""
     value = (_env("ASR_PROVIDER") or "auto").strip().lower()
-    return value if value in ("auto", "azure", "zhipu") else "auto"
+    return value if value in ("auto", "azure", "zhipu", "deepseek") else "auto"
 
 
 def _resolve_providers(mode: str) -> tuple[str, str, str, str]:
@@ -231,6 +231,13 @@ class Settings:
     zhipu_asr_model: str = "glm-asr-2512"
     zhipu_asr_timeout_s: float = 60.0
     zhipu_asr_chunk_seconds: float = 25.0
+    # task-112：DeepSeek ASR（官方：16-bit PCM WAV/Ogg Opus、单声道、≤8MiB、≤120s、无流式）
+    asr_fallback: bool = True
+    deepseek_asr_api_key: str | None = None
+    deepseek_asr_base_url: str = "https://api.deepseek.com"
+    deepseek_asr_timeout_s: float = 60.0
+    deepseek_asr_chunk_seconds: float = 110.0
+    deepseek_asr_max_bytes: int = 8 * 1024 * 1024
     llm_provider: str = "template"
 
     azure_speech_key: str | None = None
@@ -374,6 +381,13 @@ def get_settings() -> Settings:
         zhipu_asr_model=_env("ZHIPU_ASR_MODEL", "glm-asr-2512") or "glm-asr-2512",
         zhipu_asr_timeout_s=_env_float("ZHIPU_ASR_TIMEOUT_S", 60.0),
         zhipu_asr_chunk_seconds=_env_float("ZHIPU_ASR_CHUNK_SECONDS", 25.0),
+        asr_fallback=_env_bool("ASR_FALLBACK", True),
+        deepseek_asr_api_key=_env("DEEPSEEK_ASR_API_KEY") or _env("LLM_API_KEY"),
+        deepseek_asr_base_url=_env("DEEPSEEK_ASR_BASE_URL", "https://api.deepseek.com")
+        or "https://api.deepseek.com",
+        deepseek_asr_timeout_s=_env_float("DEEPSEEK_ASR_TIMEOUT_S", 60.0),
+        deepseek_asr_chunk_seconds=_env_float("DEEPSEEK_ASR_CHUNK_SECONDS", 110.0),
+        deepseek_asr_max_bytes=_env_int("DEEPSEEK_ASR_MAX_BYTES", 8 * 1024 * 1024),
         pa_provider=pa,
         tts_provider=tts,
         llm_provider=llm if llm_enabled else llm_name_for_report if llm_enabled else "template",

@@ -1240,3 +1240,46 @@ LLM 端点的 usage 是**本次请求内所有 LLM 调用（含 JSON 重试/截�
 `story/rewrite → 588/72/660`；`retell → 786/230/1016`；`ocr → 299/4/303`；
 `image → {"images":1,"size":"1280x1280","model":"glm-image"}`；`asr → {"asr_seconds":1.0}`；`tts → x-usage-tts-chars: 11`。
 
+## 24. ASR 接入 DeepSeek（task-112）
+
+官方能力（2026-11 核对）：`POST {base}/v1/tools/asr`（multipart `file`），支持 **16-bit PCM WAV / Ogg Opus**（WAV 8k–48k、单声道），
+**≤8 MiB、≤120 秒、不支持流式**；返回 `{text, duration_ms}`（**无时间戳/置信度/音素**）；语种自动识别；¥0.78/小时（限时 0.39）。
+
+### 24.1 provider 行为
+- 任意输入 → 先 `decode_audio` 成 **16k mono float**，再编码 **16k/16bit/mono WAV** 逐片调用
+- 超过 `DEEPSEEK_ASR_CHUNK_SECONDS`（默认 **110s**，官方上限 120s）→ **按静音切段**（`app/audio_split.py`，无静音则硬切）；
+  每片再兜底校验 **≤8MiB**（超过则继续对半切）；返回 `warnings:["segmented"]` + `provider_meta.segments`
+- 文本拼接：含英文用空格、纯中文直接拼接；`provider="deepseek"`、`duration_ms`=总时长；`usage.asr_seconds` 由 `/v1/asr` 统一给出
+- 错误映射：**429→`rate_limited`(429) / 503→`provider_unavailable`(503) / 504→`provider_timeout`(504) / 400 等→`provider_error`**；
+  400/401 等标 `no_fallback`，**不会被静默换成别的 provider**（`execution.run_chain` 立即抛错）
+
+### 24.2 选择与回退
+- `ASR_PROVIDER` 新增 **`deepseek`**（`azure|zhipu|deepseek|auto`）；`auto` **保持现状**（中文优先智谱、英文 mode 主 provider）
+- **`ASR_FALLBACK=1`（默认）**：`ASR_PROVIDER=deepseek` 时 DeepSeek 失败（429/503/504/超时）→ 回退中文 zhipu / 英文 azure（mode 链）；
+  响应加 **`fallback_from:"deepseek"`** + `warnings:["provider_fallback"]`；`ASR_FALLBACK=0` 时不再回退（直接报错）
+- 回退目标按语言：中文优先智谱（无 key 则 mode 主 provider），英文 mode 主 provider（Azure）；**非 mock 模式回落到 mock 会被 503 拦截**
+- `/v1/health`：`capabilities.asr_providers` = `["azure","zhipu","deepseek"]`；`asr_effective` 在 `ASR_PROVIDER=deepseek` 时 `{zh:"deepseek",en:"deepseek"}`；新增 `capabilities.asr_fallback`
+
+### 24.3 配置
+```
+ASR_PROVIDER=auto              # azure | zhipu | deepseek | auto
+ASR_FALLBACK=1                 # DeepSeek 失败时是否回退（默认 1）
+DEEPSEEK_ASR_API_KEY=<key>     # 不填回退 LLM_API_KEY（DeepSeek 同一个 key）
+# DEEPSEEK_ASR_BASE_URL=https://api.deepseek.com
+# DEEPSEEK_ASR_TIMEOUT_S=60
+# DEEPSEEK_ASR_CHUNK_SECONDS=110
+# DEEPSEEK_ASR_MAX_BYTES=8388608
+```
+
+### 24.4 A/B 试验（合成语音，初步结论）
+`python scripts/asr_ab.py`（Azure TTS 生成 20 英 + 20 中已知文本 → 三家识别 → CER/延迟/成本 → `docs/asr-ab-report.md`）
+实测（清晰合成语音，**不代表儿童真实口音/噪声**）：
+| 语言 | Provider | CER 均值 | 平均延迟 | 估算成本 |
+|---|---|---|---|---|
+| en | **deepseek** | **0.007** | **755ms** | ¥0.0089 |
+| en | azure | 0.043 | 1892ms | ¥0.0821 |
+| zh | **deepseek** | **0.015** | **810ms** | ¥0.0100 |
+| zh | zhipu | 未执行（本机无智谱 key，未伪造） | — | — |
+
+风险：DeepSeek 无时间戳/置信度（不能做词级反馈）、未覆盖儿童真实语音/口音/中英混说；详见 `docs/asr-ab-report.md`。
+

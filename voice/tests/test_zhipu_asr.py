@@ -296,7 +296,7 @@ def test_4xx_is_not_retried(zhipu_env, monkeypatch):
 # --------------------------------------------------------------------------------------
 def test_health_asr_matrix(client, zhipu_env, monkeypatch):
     caps = client.get("/v1/health").json()["capabilities"]
-    assert caps["asr_providers"] == ["azure", "zhipu"]
+    assert caps["asr_providers"] == ["azure", "zhipu", "deepseek"]
     assert caps["asr_effective"]["zh"] == "zhipu", "配了智谱 key 时中文生效 provider 应为 zhipu"
     assert caps["asr_effective"]["en"] == "mock"
 

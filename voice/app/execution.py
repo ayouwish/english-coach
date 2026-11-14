@@ -54,6 +54,9 @@ def run_chain(chain, fn_factory, timeout_s: float, kind: str = "provider"):
             message = f"{name}:{exc.code}:{exc.message}"
             errors.append(message)
             logger.warning("provider %s failed for %s: %s", name, kind, message)
+            if getattr(exc, "no_fallback", False):
+                # task-112：400/401 等错误回退也无意义 → 立即中止，不静默换 provider
+                raise
         except Exception as exc:  # 保险：provider 不该抛出的异常也不能把请求打成 500
             message = f"{name}:unexpected:{type(exc).__name__}:{exc}"
             errors.append(message)
