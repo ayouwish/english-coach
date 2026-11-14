@@ -107,8 +107,18 @@ async function main() {
       });
       const rawAdmin = typeof loginRes.headers.getSetCookie === "function" ? loginRes.headers.getSetCookie() : [];
       const adminCookie = (rawAdmin.find((c) => c.startsWith("ec_admin=")) ?? "").split(";")[0];
+      // 记录用前名额，结束后还原（避免影响其它守卫/用户）
+      const beforeInv = await (await fetch(`${BASE}/api/admin/family-invites`, { headers: { cookie: adminCookie } })).json().catch(() => null);
+      const quotaBefore = beforeInv?.quota_remaining;
       const invRes = await fetch(`${BASE}/api/admin/family-invites`, { method: "POST", headers: { cookie: adminCookie } });
       inv = await invRes.json().catch(() => null);
+      if (typeof quotaBefore === "number") {
+        await fetch(`${BASE}/api/admin/family-invites/quota`, {
+          method: "POST",
+          headers: { "content-type": "application/json", cookie: adminCookie },
+          body: JSON.stringify({ set: quotaBefore }),
+        }).catch(() => null);
+      }
     }
   const reg = await fetch(`${BASE}/api/auth/register`, {
     method: "POST",
