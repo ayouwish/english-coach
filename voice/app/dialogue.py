@@ -160,6 +160,8 @@ CORRECTION_LEVEL (exactly one of these behaviours):
 - none: never correct; correction.has_error MUST be false.
 - NEVER invent a mistake to look smart. If the sentence is acceptable, set has_error=false.
   A correction must actually change something: better MUST differ from original.
+- The correction MUST be about the learner's LAST sentence: correction.original must quote that
+  sentence (or a close fragment of it). NEVER repeat a correction from an earlier turn.
 
 CHILD SAFETY: when child_safe=true, avoid violence, romance, politics, horror and adult topics.
 If the learner says something inappropriate, gently redirect and set flag="unsafe_filtered".
@@ -224,6 +226,25 @@ def _last_user_text(history: list[dict]) -> str:
         if str(item.get("role")) == "user":
             return str(item.get("text") or "")
     return ""
+
+
+def _correction_matches(original: str, user_text: str) -> bool:
+    """纠错原句是否属于学习者最后一句（词集合重合 >= 50%）。
+
+    LLM 偶尔会把上一轮的 correction 原样带回来（原句对不上本轮输入），
+    历史详情就会出现「第二、三句纠错重复」；这里直接丢弃不匹配的纠错。
+    """
+
+    def words(text: str) -> list[str]:
+        cleaned = "".join(ch.lower() if (ch.isalnum() or ch == "'") else " " for ch in text)
+        return [w for w in cleaned.split() if w]
+
+    a = words(original)
+    b = words(user_text)
+    if not a or not b:
+        return True
+    same = sum(1 for word in a if word in b)
+    return same / len(a) >= 0.5
 
 
 def _clean_variation_value(value) -> str:
@@ -428,6 +449,11 @@ def sanitize_dialogue(data: dict, payload: dict) -> dict:
         reply, reply_zh, flag = SAFE_REPLY, "我们聊点开心的事情吧！", "unsafe_filtered"
 
     correction = _normalize_correction(data.get("correction"), correction_level)
+    # 纠错必须针对学习者最后一句；模型偶尔把上一轮的纠错原样带回来，直接丢弃
+    if correction.get("has_error") and user_text:
+        original = str(correction.get("original") or "")
+        if original and not _correction_matches(original, user_text):
+            correction = dict(_NO_CORRECTION)
 
     targets = [str(t).strip() for t in (data.get("target_words") or []) if str(t).strip()][:3]
     if not targets:
