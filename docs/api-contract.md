@@ -1,4 +1,4 @@
-# 接口契约 v1.21（FROZEN · 2026-11-14）
+# 接口契约 v1.22（FROZEN · 2026-11-20）
 
 > **本文件是唯一事实来源（single source of truth）。**
 
@@ -28,6 +28,7 @@
 | 2026-11-03 | v1.19 | `/v1/story/rewrite` 新增 `tense`（auto/past/present，默认 auto，叙事默认过去时）；响应回显 `tense`；新增 warning `tense_mismatch` | 向后兼容（不传按 auto）|
 | 2026-11-06 | v1.20 | 各 AI 端点新增可选 `usage`（LLM tokens / 图片张数 / TTS 字符 / ASR 秒），供 web 按家庭记账；`capabilities.usage_reporting` | 向后兼容（纯新增）|
 | 2026-11-14 | v1.21 | ASR 新增 `deepseek` provider（`ASR_PROVIDER` 枚举、`provider` 覆盖）；新增回退字段 `fallback_from` / warning `provider_fallback`、错误码 `rate_limited`、health `asr_fallback` | 向后兼容 |
+| 2026-11-20 | v1.22 | §12 新增**批量预热** `/v1/warmup/bulk`（后台任务/进度/取消/去重/缓存命中统计）、错误码 `warmup_running`、`capabilities.warmup_bulk` | 向后兼容（新增端点）|
 > `web/` 与 `voice/` 两个模块并行开发，任何一方需要改本契约，必须先通知 Lead 并同步改本文件。
 > 冻结范围：路径、请求字段名、响应字段名、枚举值、错误码。
 > 未冻结范围：各 provider 内部实现、日志格式、额外字段（允许追加 `provider_meta` 等可选字段，不得删除或改名已有字段）。
@@ -534,6 +535,45 @@ audit_log(id, ts, actor_user_id, action, detail_json)
 **v1.0 的客户端不读这个字段，所以是向后兼容的。**
 
 ---
+
+
+### 12.6 v1.22 新增：批量预热（所有音色）——后台任务
+
+> 场景：跟读示范音缓存按 `(text, voice, rate, provider, fmt)` 寻址；切换音色/语速会重新合成（慢）。
+> 管理台需要"一键缓存所有音色"：600 句 × 9 音色 × 2 语速 ≈ 10,800 条，必须后台跑。
+
+```
+POST /v1/warmup/bulk
+{ "texts": ["..."],            // 1–1000 条，每条 ≤2000 字符
+  "voices": ["en-US-JennyNeural", ...],  // 1–12，合法 Azure 音色名
+  "rates": ["normal","slow"],  // ⊆ {normal,slow}
+  "concurrency": 2 }           // 1–8，默认 WARMUP_BULK_CONCURRENCY
+→ 200 {job_id,total,state:"running",started_at,skipped_duplicates,concurrency,warnings[]}
+→ 400 参数非法 / 去重后条数 > WARMUP_BULK_MAX_ITEMS(默认 20000)
+→ 409 warmup_running  （已有任务在跑，detail.job_id 为当前任务）
+```
+- `total` = **去重后**条数（text×voice×rate）；`skipped_duplicates` 不计入 total
+- 立即返回；生成在后台线程池执行
+
+```
+GET /v1/warmup/bulk/status
+→ {job_id,state:idle|running|done|failed|cancelled,total,done,generated,cached,failed,
+   skipped_duplicates,chars_generated,concurrency,started_at,finished_at,updated_at[,error,last_error]}
+```
+- 不变量：`done == generated + cached + failed`
+- `chars_generated` 只累计**实际调用 TTS** 的字符（缓存命中不计，供成本估算）
+- sidecar `DATA_DIR/cache/warmup-bulk.json` 每 `WARMUP_BULK_PROGRESS_EVERY`(25) 条原子写；
+  进程重启后 sidecar 停在 running 且无活动任务 → `failed` + error「interrupted」
+
+```
+POST /v1/warmup/bulk/cancel → {job_id,state}   // 协作取消、幂等；运行中→cancelled，已结束保持原状态
+```
+- 新错误码 **`warmup_running`（409）**
+- `/v1/health` → `capabilities.warmup_bulk: true`
+- env：`WARMUP_BULK_MAX_ITEMS=20000` / `WARMUP_BULK_CONCURRENCY=2` / `WARMUP_BULK_PROGRESS_EVERY=25`
+- **容量注意**：全量预热远超默认 `CACHE_MAX_ENTRIES=2000` / `CACHE_MAX_BYTES=500MB`，
+  需调大（建议 `CACHE_MAX_ENTRIES=15000`、`CACHE_MAX_BYTES≈3GB`），否则 LRU 会淘汰预热结果；
+  启动响应会带 `warnings:["cache_capacity_entries"]`
 
 ## 13. v1.1 新增：盲测与自定义语料的数据库字段（web 拥有）
 

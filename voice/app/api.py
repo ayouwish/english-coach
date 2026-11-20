@@ -69,12 +69,14 @@ from .schemas import (
     StoryRetellRequest,
     StoryRewriteRequest,
     TTSRequest,
+    WarmupBulkRequest,
     WarmupRequest,
 )
 from .store import AudioStore, CACHE_CONTROL, CONTENT_TYPES
 from .warmup import tts_provider_name
 from .text import estimate_word_timings, strip_terminal_punct, tokens
 from .warmup import prepare_reference, resolve_item, run_warmup, validate_item
+from .warmup_bulk import get_bulk_manager
 
 logger = logging.getLogger("voice.api")
 
@@ -211,7 +213,8 @@ async def health() -> dict:
     # task-73：部署自查用静态标记（端点存在即 true，不做远程/耗时探测）
     capabilities["audio_concat"] = True
     capabilities["word_ipa"] = True
-    capabilities["usage_reporting"] = True  # task-100：各端点返回原始 usage（web 记账）  # task-86：cmudict 音标查询（惰性加载，不影响启动）
+    capabilities["usage_reporting"] = True
+    capabilities["warmup_bulk"] = True  # task-114：后台批量预热  # task-100：各端点返回原始 usage（web 记账）  # task-86：cmudict 音标查询（惰性加载，不影响启动）
     # task-75：ASR provider 矩阵（静态实现 + 当前生效，auto 下中英文可能不同）
     capabilities["asr_providers"] = list(ASR_PROVIDERS)
     capabilities["asr_effective"] = asr_effective(providers, settings)
@@ -815,6 +818,29 @@ async def warmup(payload: WarmupRequest) -> dict:
         cache=get_cache(),
         providers=get_providers(),
     )
+
+
+@router.post("/warmup/bulk")
+async def warmup_bulk_start(payload: WarmupBulkRequest) -> dict:
+    """启动后台批量预热（同一时刻仅一个任务；运行中 409 warmup_running）。"""
+    return await run_in_threadpool(
+        get_bulk_manager().start,
+        payload.texts,
+        payload.voices,
+        payload.rates,
+        payload.concurrency,
+    )
+
+
+@router.get("/warmup/bulk/status")
+async def warmup_bulk_status() -> dict:
+    return await run_in_threadpool(get_bulk_manager().status)
+
+
+@router.post("/warmup/bulk/cancel")
+async def warmup_bulk_cancel() -> dict:
+    """协作取消（幂等）：在条目间生效；已结束任务保持原状态。"""
+    return await run_in_threadpool(get_bulk_manager().cancel)
 
 
 # --------------------------------------------------------------------------------------

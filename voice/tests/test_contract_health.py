@@ -12,6 +12,7 @@ CAPABILITY_KEYS = {
     "audio_concat", "chat_done_turn_index", "features",
     "word_ipa",  # task-86
     "usage_reporting",  # task-100
+    "warmup_bulk",  # task-114
     # task-75：ASR provider 矩阵
     "asr_providers", "asr_effective", "asr_fallback",
 }
@@ -45,6 +46,7 @@ def test_health_shape_and_defaults(client):
     assert "audio/concat" in features
     assert body["capabilities"]["word_ipa"] is True
     assert body["capabilities"]["usage_reporting"] is True
+    assert body["capabilities"]["warmup_bulk"] is True
     assert body["capabilities"]["asr_providers"] == ["azure", "zhipu", "deepseek"]
     assert body["capabilities"]["asr_fallback"] is True
     effective = body["capabilities"]["asr_effective"]

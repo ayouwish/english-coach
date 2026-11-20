@@ -123,6 +123,15 @@ class WarmupItemRequest(_Loose):
     rate: str = "normal"
 
 
+class WarmupBulkRequest(_Loose):
+    """task-114：批量预热（后台任务）。texts × voices × rates 展开后去重。"""
+
+    texts: list[str] = Field(default_factory=list)
+    voices: list[str] = Field(default_factory=list)
+    rates: list[str] = Field(default_factory=lambda: ["normal", "slow"])
+    concurrency: int | None = None
+
+
 class WarmupRequest(_Loose):
     """契约 §12.3：items 1–500 条，concurrency 1–8（默认 2）。"""
 

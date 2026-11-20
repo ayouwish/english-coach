@@ -1283,3 +1283,42 @@ DEEPSEEK_ASR_API_KEY=<key>     # 不填回退 LLM_API_KEY（DeepSeek 同一个 k
 
 风险：DeepSeek 无时间戳/置信度（不能做词级反馈）、未覆盖儿童真实语音/口音/中英混说；详见 `docs/asr-ab-report.md`。
 
+## 25. 批量预热所有音色：后台任务（task-114）
+
+管理台一键把「语料 600 句 × 9 音色 × 2 语速 ≈ 10,800 条」预热进缓存，跟读换音色不再现场合成。
+
+### 25.1 端点
+- **`POST /v1/warmup/bulk`**（JSON `{texts, voices, rates, concurrency}`）
+  - 校验：`texts` 1–1000 条（每条 ≤2000 字符）、`voices` 1–12 个合法 Azure 音色名、`rates` ⊆ `{normal,slow}`、`concurrency` 1–8（默认 `WARMUP_BULK_CONCURRENCY=2`）
+  - 展开 text×voice×rate 并**去重**；唯一条数上限 `WARMUP_BULK_MAX_ITEMS`（默认 20000），超限 400
+  - **同一时刻只允许一个任务**：运行中再 POST → **409 `warmup_running`**（detail 带当前 job_id）
+  - 立即返回 `{job_id,total,state:"running",started_at,skipped_duplicates,concurrency,warnings[]}`
+- **`GET /v1/warmup/bulk/status`** → `{job_id,state:idle|running|done|failed|cancelled,total,done,generated,cached,failed,skipped_duplicates,chars_generated,started_at,finished_at,updated_at[,error,last_error]}`
+  - 不变量：`done == generated + cached + failed`；`total` 为去重后条数（`skipped_duplicates` 不计入 total）
+  - `chars_generated` 只累计**实际调用 TTS** 的字符（缓存命中不计，供成本估算）
+- **`POST /v1/warmup/bulk/cancel`** → `{job_id,state}`；协作式取消（worker 在条目间检查），**幂等**（已结束任务保持原状态）
+
+### 25.2 实现要点
+- 复用 `warmup.warm_one` / 缓存（命中计 `cached`，绝不重复调 TTS）；单条失败计 `failed` 不中断整体
+- 后台 daemon 线程 + 线程池（默认 2）；进度原子计数；每 `WARMUP_BULK_PROGRESS_EVERY`（默认 25）条写 sidecar
+  `DATA_DIR/cache/warmup-bulk.json`（原子写）；进程重启后读最后状态，**sidecar 停在 running 且无活动任务 → 视为 `failed`**（error 含 interrupted）
+- **容量提示**：`total > CACHE_MAX_ENTRIES` 时启动响应的 `warnings` 会带 `cache_capacity_entries`。
+  ⚠️ 全量 10,800 条远超默认 `CACHE_MAX_ENTRIES=2000` / `CACHE_MAX_BYTES=500MB`，
+  NAS 部署需调大（建议 `CACHE_MAX_ENTRIES≥15000`、`CACHE_MAX_BYTES≈3000MB`；Azure 24k WAV 约 150KB/条）。
+- `/v1/health`：`capabilities.warmup_bulk: true`
+
+### 25.3 env
+```
+WARMUP_BULK_MAX_ITEMS=20000
+WARMUP_BULK_CONCURRENCY=2
+WARMUP_BULK_PROGRESS_EVERY=25
+# 部署时还需：CACHE_MAX_ENTRIES>=15000 / CACHE_MAX_BYTES>=3145728000
+```
+
+### 25.4 实测（8110，mock provider）
+- 12 条（3 句 × 2 音色 × 2 语速）：start→done，`generated=12 done=12 chars=176`；运行中再 POST → **409 warmup_running**
+- 同参数第二次：`cached=12 generated=0 chars_generated=0`（全部命中缓存）
+- 取消 100 条任务：`state=cancelled done=3/100`；重复 cancel 幂等
+- 2400 条（> 默认缓存 2000 条）→ 启动响应 `warnings:["cache_capacity_entries"]`
+- sidecar：`{"state":"done","total":12,"done":12,"cached":12,...}`
+

@@ -303,6 +303,10 @@ class Settings:
     cache_max_entries: int = 2000
     warmup_max_items: int = 500
     warmup_default_concurrency: int = 2
+    # task-114：批量预热后台任务
+    warmup_bulk_max_items: int = 20000
+    warmup_bulk_concurrency: int = 2
+    warmup_bulk_progress_every: int = 25
 
     gpu: bool = False
 
@@ -442,6 +446,9 @@ def get_settings() -> Settings:
         cache_max_entries=_env_int("CACHE_MAX_ENTRIES", 2000),
         warmup_max_items=_env_int("WARMUP_MAX_ITEMS", 500),
         warmup_default_concurrency=_env_int("WARMUP_CONCURRENCY", 2),
+        warmup_bulk_max_items=_env_int("WARMUP_BULK_MAX_ITEMS", 20000),
+        warmup_bulk_concurrency=_env_int("WARMUP_BULK_CONCURRENCY", 2),
+        warmup_bulk_progress_every=_env_int("WARMUP_BULK_PROGRESS_EVERY", 25),
         gpu=_env_bool("VOICE_GPU", False),
     )
 

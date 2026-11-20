@@ -13,7 +13,8 @@ STATUS_BY_CODE: dict[str, int] = {
     "not_found": 404,  # task-86：单词不在 cmudict 词典里
     "provider_error": 502,
     "provider_timeout": 504,
-    "rate_limited": 429,  # task-112：DeepSeek ASR 429（限流）
+    "rate_limited": 429,
+    "warmup_running": 409,  # task-114：批量预热同一时刻只允许一个任务  # task-112：DeepSeek ASR 429（限流）
     "no_provider": 503,
     "provider_unavailable": 503,  # task-25：/v1/ocr 依赖未安装（如未装 rapidocr）
     "content_unsafe": 400,  # task-52：文生图内容被安全过滤
@@ -78,6 +79,12 @@ class ProviderError(VoiceError):
 
 class ProviderTimeout(ProviderError):
     code = "provider_timeout"
+
+
+class WarmupRunning(VoiceError):
+    """已有批量预热任务在跑（task-114，409）。"""
+
+    code = "warmup_running"
 
 
 class RateLimited(ProviderError):
