@@ -1593,6 +1593,21 @@ docker compose -f deploy/docker-compose.yml cp caddy:/data/caddy/pki/authorities
 
 ---
 
+## 管理台「一键缓存所有音色」（批量 TTS 预热）
+
+- 入口：`/admin` → 「🎧 音色缓存预热」；后台任务，可看进度、可取消
+- 全量：600 句 × 9 音色 × 2 语速 = **10,800 条**（约 52 万字符；Azure 刊例 ≈ ¥62，可只选 normal 省一半）
+- **必须先调大缓存容量**，否则 LRU 会淘汰刚预热的结果（第二次不会全命中）：
+  ```bash
+  CACHE_MAX_ENTRIES=15000
+  CACHE_MAX_BYTES=3145728000   # ≈3GB
+  COST_TTS_WARMUP_CNY_PER_1K_CHARS=0.12   # 管理台估算单价
+  ```
+- 完成后跟读页切换音色/语速示范音秒出；再次预热只补缺失缓存
+- 预热为系统级操作，**不计入家庭成本台账**（管理台显示估算成本与已生成字符数）
+
+---
+
 ## 后台管理员（独立于家庭账号）
 
 - 在 `deploy/.env` 设置 `ADMIN_PASSWORD=<强密码>` 后重启 web
