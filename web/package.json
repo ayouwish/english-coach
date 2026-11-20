@@ -40,7 +40,8 @@
     "backfill:opening-zh": "node scripts/backfill-opening-zh.mjs",
     "check:openings": "node scripts/check-openings.mjs",
     "family:quota": "node scripts/family-quota.mjs",
-    "check:admin-costs": "node scripts/check-admin-costs.mjs"
+    "check:admin-costs": "node scripts/check-admin-costs.mjs",
+    "check:tts-warmup": "node scripts/check-tts-warmup.mjs"
   },
   "dependencies": {
     "bcryptjs": "^3.0.2",

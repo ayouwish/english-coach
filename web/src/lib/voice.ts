@@ -23,6 +23,8 @@ export const TIMEOUTS = {
   health: 3_000,
   /** 预热是后台任务，契约 §12 的示例耗时 45s，给足余量；失败无副作用 */
   warmup: 120_000,
+  /** 批量预热（后台任务）：启动/状态/取消都很快，给 15s */
+  warmup_bulk: 15_000,
   asr: 30_000,
   /** OCR：首次识别要加载模型（1–2s，最坏更久），给 60s；失败由调用方给可操作提示 */
   ocr: 60_000,
@@ -496,6 +498,67 @@ export async function callWarmup(items: WarmupItem[], concurrency = 1): Promise<
       body: JSON.stringify({ items, concurrency }),
     },
     TIMEOUTS.warmup,
+  );
+}
+
+export interface BulkWarmupVoice { id: string; label_zh?: string; lang?: string }
+export interface BulkWarmupStartInput {
+  texts: string[];
+  voices?: string[];
+  rates?: ("normal" | "slow")[];
+  concurrency?: number;
+}
+export interface BulkWarmupStart {
+  job_id: string;
+  total: number;
+  state: "running";
+  started_at: string;
+  skipped_duplicates: number;
+  concurrency: number;
+  warnings: string[];
+}
+export interface BulkWarmupStatus {
+  job_id: string | null;
+  state: "idle" | "running" | "done" | "failed" | "cancelled";
+  total: number;
+  done: number;
+  generated: number;
+  cached: number;
+  failed: number;
+  skipped_duplicates: number;
+  chars_generated: number;
+  started_at?: string | null;
+  finished_at?: string | null;
+  error?: string | null;
+}
+
+/** task-115：启动 voice 批量预热（后台任务）；409 warmup_running 由调用方映射。 */
+export async function startBulkWarmup(input: BulkWarmupStartInput): Promise<BulkWarmupStart> {
+  return callVoice<BulkWarmupStart>(
+    "/v1/warmup/bulk",
+    {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        texts: input.texts,
+        voices: input.voices,
+        rates: input.rates ?? ["normal", "slow"],
+        concurrency: input.concurrency ?? 2,
+      }),
+    },
+    TIMEOUTS.warmup_bulk,
+  );
+}
+
+export async function getBulkWarmupStatus(): Promise<BulkWarmupStatus> {
+  return callVoice<BulkWarmupStatus>("/v1/warmup/bulk/status", { method: "GET" }, TIMEOUTS.warmup_bulk);
+}
+
+export async function cancelBulkWarmup(): Promise<{ job_id: string | null; state: string }> {
+  return callVoice<{ job_id: string | null; state: string }>(
+    "/v1/warmup/bulk/cancel",
+    { method: "POST" },
+    TIMEOUTS.warmup_bulk,
   );
 }
 

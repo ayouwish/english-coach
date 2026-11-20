@@ -5,6 +5,7 @@ import { adminEnabled, hasAdminSession } from "@/lib/admin-auth";
 import { buildAdminCosts } from "@/lib/admin-costs";
 import { AdminLogoutButton } from "./AdminLogoutButton";
 import { AdminFamilyInvites } from "./AdminFamilyInvites";
+import { AdminTtsWarmup } from "./AdminTtsWarmup";
 
 export const dynamic = "force-dynamic";
 
@@ -61,6 +62,8 @@ export default async function AdminPage({ searchParams }: { searchParams: Promis
       </section>
 
       <AdminFamilyInvites />
+
+      <AdminTtsWarmup />
 
       <section className="ec-card">
         <h2 className="text-base font-extrabold">按家庭</h2>
